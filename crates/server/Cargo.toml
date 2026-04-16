@@ -16,3 +16,5 @@ futures = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+rust-embed = { workspace = true }
+mime_guess = "2"

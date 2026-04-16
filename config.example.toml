@@ -1,0 +1,31 @@
+[daemon]
+pid_file = "gugu.pid"
+log_dir = "logs"
+
+[daemon.web]
+addr = "0.0.0.0"
+port = 9090
+
+# 示例进程配置
+[processes.example-web]
+command = "python"
+args = ["-m", "http.server", "8080"]
+auto_start = true
+auto_restart = true
+max_restarts = 3
+restart_delay_secs = 5
+stdout_log = "logs/example-web-stdout.log"
+stderr_log = "logs/example-web-stderr.log"
+
+[processes.example-web.health_check]
+type = "tcp"
+port = 8080
+interval_secs = 10
+timeout_secs = 3
+
+[processes.example-echo]
+command = "ping"
+args = ["127.0.0.1"]
+auto_start = false
+auto_restart = false
+stdout_log = "logs/example-echo-stdout.log"

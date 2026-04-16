@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>咕咕鸽进程守护</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+    <nav class="navbar">
+        <div class="nav-brand">
+            <svg class="logo" viewBox="0 0 32 32" fill="none"><rect x="2" y="6" width="28" height="20" rx="4" stroke="currentColor" stroke-width="2"/><circle cx="11" cy="16" r="2.5" fill="currentColor"/><circle cx="21" cy="16" r="2.5" fill="currentColor"/></svg>
+            <h1>GuguGuard</h1>
+            <span class="nav-subtitle">进程守护</span>
+        </div>
+        <div class="nav-actions">
+            <div class="search-box">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="search-icon"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"/></svg>
+                <input type="text" id="search-input" placeholder="搜索进程..." autocomplete="off">
+            </div>
+            <button class="btn btn-primary" id="btn-add">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
+                添加进程
+            </button>
+        </div>
+    </nav>
+
+    <section class="stats-bar">
+        <div class="stat-card">
+            <div class="stat-number" id="stat-total">0</div>
+            <div class="stat-label">总计</div>
+        </div>
+        <div class="stat-card stat-running">
+            <div class="stat-number" id="stat-running">0</div>
+            <div class="stat-label">运行中</div>
+        </div>
+        <div class="stat-card stat-stopped">
+            <div class="stat-number" id="stat-stopped">0</div>
+            <div class="stat-label">已停止</div>
+        </div>
+        <div class="stat-card stat-failed">
+            <div class="stat-number" id="stat-failed">0</div>
+            <div class="stat-label">失败</div>
+        </div>
+    </section>
+
+    <section class="process-grid" id="process-grid">
+        <div class="empty-state" id="empty-state">
+            <div class="empty-icon">
+                <svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="10" y="20" width="60" height="40" rx="6"/><circle cx="30" cy="40" r="6"/><circle cx="50" cy="40" r="6"/><line x1="1" y1="40" x2="10" y2="40"/><line x1="70" y1="40" x2="79" y2="40"/></svg>
+            </div>
+            <h3>暂无受管进程</h3>
+            <p>点击上方「添加进程」开始管理你的服务</p>
+        </div>
+    </section>
+
+    <div class="log-overlay" id="log-overlay">
+        <div class="log-container">
+            <div class="log-toolbar">
+                <div class="log-title"><span class="log-dot"></span><span id="log-process-name">-</span></div>
+                <div class="log-controls">
+                    <label class="log-autoscroll"><input type="checkbox" id="log-autoscroll" checked> 自动滚动</label>
+                    <button class="btn btn-sm" id="btn-refresh-logs">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"/></svg>
+                    </button>
+                    <button class="btn btn-sm btn-close-log" id="btn-close-logs">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="log-body" id="log-body"></div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal-panel modal-lg">
+            <div class="modal-head">
+                <h2 id="modal-title">添加进程</h2>
+                <button class="btn-icon" id="btn-close-modal"><svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/></svg></button>
+            </div>
+            <form id="process-form" class="modal-body">
+                <div class="section-title">基本信息</div>
+                <div class="field">
+                    <label>进程名称 <span class="required">*</span></label>
+                    <input type="text" id="f-name" placeholder="my-service" required>
+                    <div class="field-hint" id="f-name-hint"></div>
+                </div>
+                <div class="field">
+                    <label>执行命令 <span class="required">*</span></label>
+                    <div class="picker-row">
+                        <input type="text" id="f-command" placeholder="bun run dev / ./start.sh / node app.js ..." required>
+                        <button type="button" class="btn btn-sm btn-picker" id="btn-pick-cmd">选择文件</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>命令参数</label>
+                    <div id="args-list"></div>
+                    <button type="button" class="btn btn-xs btn-add-row" onclick="addArgRow()">+ 添加参数</button>
+                </div>
+
+                <div class="cmd-preview" id="cmd-preview"><span class="cmd-label">执行预览</span><code id="cmd-text">-</code></div>
+
+                <div class="section-title">运行环境</div>
+                <div class="field">
+                    <label>工作目录</label>
+                    <div class="picker-row">
+                        <input type="text" id="f-dir" placeholder="/home/app/my-project">
+                        <button type="button" class="btn btn-sm btn-picker" id="btn-pick-dir">选择</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>环境变量</label>
+                    <div id="env-list"></div>
+                    <button type="button" class="btn btn-xs btn-add-row" onclick="addEnvRow()">+ 添加变量</button>
+                </div>
+
+                <div class="section-title">日志输出</div>
+                <div class="field-row">
+                    <div class="field"><label>stdout 日志</label><input type="text" id="f-stdout" placeholder="logs/stdout.log"></div>
+                    <div class="field"><label>stderr 日志</label><input type="text" id="f-stderr" placeholder="logs/stderr.log"></div>
+                </div>
+
+                <div class="section-title">重启策略</div>
+                <div class="field-row toggles-row">
+                    <label class="toggle"><input type="checkbox" id="f-auto-start" checked><span class="toggle-mark"></span>守护进程启动时自动启动</label>
+                    <label class="toggle"><input type="checkbox" id="f-auto-restart" checked><span class="toggle-mark"></span>进程崩溃后自动重启</label>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label>最大重启次数</label><input type="number" id="f-max-restarts" value="3" min="0"></div>
+                    <div class="field"><label>重启间隔 (秒)</label><input type="number" id="f-restart-delay" value="5" min="0"></div>
+                </div>
+
+                <div class="modal-foot">
+                    <button type="button" class="btn" id="btn-cancel-form">取消</button>
+                    <button type="submit" class="btn btn-primary" id="btn-submit-form">添加</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="confirm-backdrop" id="confirm-backdrop">
+        <div class="confirm-panel">
+            <div class="confirm-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <p id="confirm-text"></p>
+            <div class="confirm-btns">
+                <button class="btn" id="btn-confirm-cancel">取消</button>
+                <button class="btn btn-danger" id="btn-confirm-ok">确认删除</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <div class="modal-backdrop" id="fs-backdrop">
+        <div class="modal-panel">
+            <div class="modal-head">
+                <h2 id="fs-title">选择文件</h2>
+                <button class="btn-icon" id="btn-close-fs"><svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/></svg></button>
+            </div>
+            <div class="fs-toolbar">
+                <input type="text" id="fs-path" class="fs-path-input" placeholder="路径">
+                <button class="btn btn-sm" id="fs-go">前往</button>
+                <button class="btn btn-sm" id="fs-up">上级</button>
+            </div>
+            <div class="fs-list" id="fs-list"></div>
+            <div class="modal-foot">
+                <button class="btn" id="fs-cancel">取消</button>
+                <button class="btn btn-primary" id="fs-confirm">选择此目录</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

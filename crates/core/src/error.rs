@@ -14,6 +14,10 @@ pub enum GuguError {
     ConfigError(String),
     #[error("IO 错误: {0}")]
     Io(#[from] std::io::Error),
+    #[error("未授权: 无效或缺失 API Key")]
+    Unauthorized,
+    #[error("循环依赖检测: {0}")]
+    CyclicDependency(String),
 }
 
 pub type Result<T> = std::result::Result<T, GuguError>;

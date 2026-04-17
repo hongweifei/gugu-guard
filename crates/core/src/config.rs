@@ -57,6 +57,8 @@ pub struct DaemonConfig {
     #[serde(default)]
     pub log_dir: Option<PathBuf>,
     #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
     pub web: WebConfig,
 }
 
@@ -65,6 +67,7 @@ impl Default for DaemonConfig {
         Self {
             pid_file: None,
             log_dir: None,
+            api_key: None,
             web: WebConfig::default(),
         }
     }
@@ -74,6 +77,8 @@ impl Default for DaemonConfig {
 pub struct WebConfig {
     pub addr: Option<String>,
     pub port: Option<u16>,
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for WebConfig {
@@ -81,6 +86,7 @@ impl Default for WebConfig {
         Self {
             addr: Some("0.0.0.0".into()),
             port: Some(9090),
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -107,21 +113,27 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub health_check: Option<HealthCheckConfig>,
     #[serde(default)]
+    pub unhealthy_restart: bool,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub max_log_size_mb: Option<u64>,
+    #[serde(default)]
     pub stdout_log: Option<PathBuf>,
     #[serde(default)]
     pub stderr_log: Option<PathBuf>,
 }
 
-fn default_true() -> bool {
+pub fn default_true() -> bool {
     true
 }
-fn default_max_restarts() -> u32 {
+pub fn default_max_restarts() -> u32 {
     3
 }
-fn default_restart_delay() -> u64 {
+pub fn default_restart_delay() -> u64 {
     5
 }
-fn default_stop_timeout() -> u64 {
+pub fn default_stop_timeout() -> u64 {
     10
 }
 
@@ -132,6 +144,13 @@ impl ProcessConfig {
         } else {
             format!("{} {}", self.command, self.args.join(" "))
         }
+    }
+
+    pub fn runtime_fields_eq(&self, other: &Self) -> bool {
+        self.command == other.command
+            && self.args == other.args
+            && self.working_dir == other.working_dir
+            && self.env == other.env
     }
 }
 

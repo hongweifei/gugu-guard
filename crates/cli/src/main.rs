@@ -18,6 +18,9 @@ struct Cli {
 
     #[arg(long, global = true)]
     server: Option<String>,
+
+    #[arg(long, global = true)]
+    api_key: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -82,6 +85,41 @@ enum Commands {
         #[arg(short, long, default_value = "50")]
         lines: usize,
     },
+
+    #[command(about = "重新加载配置文件")]
+    Reload,
+}
+
+struct ApiHelper<'a> {
+    client: &'a reqwest::Client,
+    base: &'a str,
+    key: Option<&'a str>,
+}
+
+impl<'a> ApiHelper<'a> {
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        let mut r = self.client.get(format!("{}{path}", self.base));
+        if let Some(key) = self.key {
+            r = r.header("Authorization", format!("Bearer {key}"));
+        }
+        r
+    }
+
+    fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        let mut r = self.client.post(format!("{}{path}", self.base));
+        if let Some(key) = self.key {
+            r = r.header("Authorization", format!("Bearer {key}"));
+        }
+        r
+    }
+
+    fn delete(&self, path: &str) -> reqwest::RequestBuilder {
+        let mut r = self.client.delete(format!("{}{path}", self.base));
+        if let Some(key) = self.key {
+            r = r.header("Authorization", format!("Bearer {key}"));
+        }
+        r
+    }
 }
 
 #[tokio::main]
@@ -89,12 +127,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run => run_daemon(&cli.config).await,
+        Commands::Run => run_daemon(&cli.config, cli.api_key.clone()).await,
         Commands::Install => install_service(&cli.config),
         Commands::Uninstall => uninstall_service(),
         _ => {
             let server_url = get_server_url(&cli)?;
-            run_client(&cli.command, &server_url).await
+            let api_key = get_api_key(&cli)?;
+            run_client(&cli.command, &server_url, api_key.as_deref()).await
         }
     }
 }
@@ -108,6 +147,14 @@ fn get_server_url(cli: &Cli) -> Result<String> {
     let port = config.daemon.web.port.unwrap_or(9090);
     let connect_addr = if addr == "0.0.0.0" { "127.0.0.1" } else { addr };
     Ok(format!("http://{connect_addr}:{port}"))
+}
+
+fn get_api_key(cli: &Cli) -> Result<Option<String>> {
+    if let Some(ref key) = cli.api_key {
+        return Ok(Some(key.clone()));
+    }
+    let config = AppConfig::load(&cli.config).ok();
+    Ok(config.and_then(|c| c.daemon.api_key))
 }
 
 fn pid_path(config_path: &Path) -> PathBuf {
@@ -127,7 +174,8 @@ fn is_pid_running(pid: u32) -> bool {
         match output {
             Ok(o) => {
                 let s = String::from_utf8_lossy(&o.stdout);
-                s.contains(&pid.to_string())
+                let quoted = format!("\"{pid}\"");
+                s.contains(&quoted)
             }
             Err(_) => false,
         }
@@ -161,30 +209,7 @@ fn remove_pid_file(path: &Path) {
     }
 }
 
-async fn wait_for_shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        ).expect("无法注册 SIGTERM 处理器");
-        let mut sighup = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::hangup()
-        ).expect("无法注册 SIGHUP 处理器");
-
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => tracing::info!("收到 SIGINT (Ctrl+C)"),
-            _ = sigterm.recv() => tracing::info!("收到 SIGTERM"),
-            _ = sighup.recv() => tracing::info!("收到 SIGHUP"),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c().await.expect("无法注册 Ctrl+C 处理器");
-        tracing::info!("收到 Ctrl+C 信号");
-    }
-}
-
-async fn run_daemon(config_path: &PathBuf) -> Result<()> {
+async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -197,11 +222,17 @@ async fn run_daemon(config_path: &PathBuf) -> Result<()> {
 
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
+    let api_key = cli_api_key.or(config.daemon.api_key.clone());
+
     tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
     tracing::info!("配置文件: {}", config_path.display());
     tracing::info!("进程 PID: {}", current_pid());
 
-    let manager = gugu_core::ProcessManager::new(&config, Some(config_path.clone()));
+    if api_key.is_some() {
+        tracing::info!("API Key 认证已启用");
+    }
+
+    let manager = gugu_core::ProcessManager::new(&config, Some(config_path.to_path_buf()));
     let shared = manager.shared();
 
     {
@@ -217,18 +248,67 @@ async fn run_daemon(config_path: &PathBuf) -> Result<()> {
     let addr_str = config.server_addr();
     let addr: std::net::SocketAddr = addr_str.parse()
         .context(format!("解析地址失败: {addr_str}"))?;
-    let web_dir = find_web_dir();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     let server_shared = shared.clone();
+    let server_api_key = api_key;
+    let server_cors_origins = config.daemon.web.cors_origins.clone();
     let server_handle = tokio::spawn(async move {
-        if let Err(e) = gugu_server::run_server(addr, server_shared, web_dir, shutdown_rx).await {
+        if let Err(e) = gugu_server::run_server(
+            addr,
+            server_shared,
+            server_api_key,
+            server_cors_origins,
+            shutdown_rx,
+        ).await {
             tracing::error!("Web 服务错误: {}", e);
         }
     });
 
-    wait_for_shutdown_signal().await;
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate()
+        ).expect("无法注册 SIGTERM 处理器");
+        let mut sighup = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::hangup()
+        ).expect("无法注册 SIGHUP 处理器");
+
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("收到 SIGINT (Ctrl+C)");
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    tracing::info!("收到 SIGTERM");
+                    break;
+                }
+                _ = sighup.recv() => {
+                    tracing::info!("收到 SIGHUP，重新加载配置...");
+                    let reload_config = match AppConfig::load(config_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("重载配置文件失败: {}", e);
+                            continue;
+                        }
+                    };
+                    let mut mgr = shared.write().await;
+                    match mgr.reload_config(&reload_config).await {
+                        Ok(()) => tracing::info!("配置已重新加载"),
+                        Err(e) => tracing::error!("重载配置失败: {}", e),
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.expect("无法注册 Ctrl+C 处理器");
+        tracing::info!("收到 Ctrl+C 信号");
+    }
 
     tracing::info!("正在优雅停止所有进程...");
     let _ = shutdown_tx.send(());
@@ -246,17 +326,6 @@ async fn run_daemon(config_path: &PathBuf) -> Result<()> {
     remove_pid_file(&pid);
     tracing::info!("咕咕鸽进程守护已安全停止");
     Ok(())
-}
-
-fn find_web_dir() -> Option<String> {
-    let candidates = ["web", "../web", "../../web"];
-    for dir in &candidates {
-        let path = std::path::Path::new(dir);
-        if path.exists() && path.join("index.html").exists() {
-            return Some(dir.to_string());
-        }
-    }
-    None
 }
 
 fn install_service(config_path: &Path) -> Result<()> {
@@ -366,13 +435,13 @@ fn uninstall_service() -> Result<()> {
     Ok(())
 }
 
-async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
+async fn run_client(command: &Commands, server_url: &str, api_key: Option<&str>) -> Result<()> {
     let client = reqwest::Client::new();
+    let api = ApiHelper { client: &client, base: server_url, key: api_key };
 
     match command {
         Commands::Status => {
-            let resp = client
-                .get(format!("{server_url}/api/v1/processes"))
+            let resp = api.get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程，请确认是否已启动")?;
@@ -381,8 +450,7 @@ async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
         }
 
         Commands::List => {
-            let resp = client
-                .get(format!("{server_url}/api/v1/processes"))
+            let resp = api.get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程")?;
@@ -391,26 +459,17 @@ async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
         }
 
         Commands::Start { name } => {
-            let resp = client
-                .post(format!("{server_url}/api/v1/processes/{name}/start"))
-                .send()
-                .await?;
+            let resp = api.post(&format!("/api/v1/processes/{name}/start")).send().await?;
             print_api_response(resp).await?;
         }
 
         Commands::Stop { name } => {
-            let resp = client
-                .post(format!("{server_url}/api/v1/processes/{name}/stop"))
-                .send()
-                .await?;
+            let resp = api.post(&format!("/api/v1/processes/{name}/stop")).send().await?;
             print_api_response(resp).await?;
         }
 
         Commands::Restart { name } => {
-            let resp = client
-                .post(format!("{server_url}/api/v1/processes/{name}/restart"))
-                .send()
-                .await?;
+            let resp = api.post(&format!("/api/v1/processes/{name}/restart")).send().await?;
             print_api_response(resp).await?;
         }
 
@@ -438,8 +497,7 @@ async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
                 "stderr_log": stderr_log,
                 "start_now": start,
             });
-            let resp = client
-                .post(format!("{server_url}/api/v1/processes/{name}"))
+            let resp = api.post(&format!("/api/v1/processes/{name}"))
                 .json(&body)
                 .send()
                 .await?;
@@ -447,24 +505,24 @@ async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
         }
 
         Commands::Remove { name } => {
-            let resp = client
-                .delete(format!("{server_url}/api/v1/processes/{name}"))
-                .send()
-                .await?;
+            let resp = api.delete(&format!("/api/v1/processes/{name}")).send().await?;
             print_api_response(resp).await?;
         }
 
         Commands::Logs { name, lines } => {
-            let resp = client
-                .get(format!("{server_url}/api/v1/processes/{name}/logs?lines={lines}"))
-                .send()
-                .await?;
+            let resp = api.get(&format!("/api/v1/processes/{name}/logs?lines={lines}")).send().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let text = resp.text().await.unwrap_or_default();
+                anyhow::bail!("获取日志失败: {text}");
+            }
             let logs: Vec<gugu_core::process::LogEntry> = resp.json().await?;
             for entry in &logs {
                 let time = entry.timestamp.format("%H:%M:%S");
-                let prefix = match entry.stream {
+                let prefix = match &entry.stream {
                     gugu_core::process::LogStream::Stdout => "OUT",
                     gugu_core::process::LogStream::Stderr => "ERR",
+                    _ => "???",
                 };
                 println!("[{time}] [{prefix}] {}", entry.line);
             }
@@ -473,7 +531,14 @@ async fn run_client(command: &Commands, server_url: &str) -> Result<()> {
             }
         }
 
-        Commands::Run | Commands::Install | Commands::Uninstall => unreachable!(),
+        Commands::Reload => {
+            let resp = api.post("/api/v1/reload").send().await?;
+            print_api_response(resp).await?;
+        }
+
+        Commands::Run | Commands::Install | Commands::Uninstall => {
+            unreachable!()
+        }
     }
 
     Ok(())
@@ -502,6 +567,7 @@ fn print_status_table(processes: &[gugu_core::process::ProcessInfo]) {
             gugu_core::process::ProcessStatus::Starting => Cell::new("启动中").fg(Color::Cyan),
             gugu_core::process::ProcessStatus::Failed(e) => Cell::new(format!("失败: {e}")).fg(Color::Red),
             gugu_core::process::ProcessStatus::Restarting => Cell::new("重启中").fg(Color::Magenta),
+            _ => Cell::new("未知").fg(Color::White),
         };
 
         let uptime = p.uptime_secs.map(|s| {
@@ -553,6 +619,18 @@ fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
 }
 
 async fn print_api_response(resp: reqwest::Response) -> Result<()> {
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        let msg = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+            val.get("error")
+                .map(|e| e.as_str().unwrap_or(&text).to_string())
+                .unwrap_or(text.clone())
+        } else {
+            text
+        };
+        anyhow::bail!("请求失败 ({status}): {msg}");
+    }
     let body: serde_json::Value = resp.json().await?;
     if let Some(msg) = body.get("message") {
         println!("{}", msg);

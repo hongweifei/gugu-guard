@@ -259,6 +259,27 @@ impl ProcessManager {
         Ok(proc.logs(lines).await)
     }
 
+    pub async fn clear_process_logs(&self, name: &str) -> Result<()> {
+        let proc = self
+            .processes
+            .get(name)
+            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+        proc.clear_logs().await;
+        Ok(())
+    }
+
+    pub fn subscribe_process_logs(&self, name: &str) -> Result<tokio::sync::broadcast::Receiver<LogEntry>> {
+        let proc = self
+            .processes
+            .get(name)
+            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+        Ok(proc.subscribe_logs())
+    }
+
+    pub fn all_process_names(&self) -> Vec<String> {
+        self.processes.keys().cloned().collect()
+    }
+
     pub fn find_dead_processes(&mut self) -> Vec<(String, std::time::Duration)> {
         let mut dead = Vec::new();
         for (name, proc) in &mut self.processes {

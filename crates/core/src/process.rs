@@ -6,11 +6,12 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use std::sync::Arc;
 
 const MAX_LOG_LINES: usize = 1000;
+const LOG_BROADCAST_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -57,6 +58,8 @@ pub struct LogEntry {
     pub timestamp: DateTime<Utc>,
     pub stream: LogStream,
     pub line: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,11 +81,13 @@ pub struct ManagedProcess {
     started_at: Option<DateTime<Utc>>,
     stdout_lines: Arc<Mutex<VecDeque<LogEntry>>>,
     stderr_lines: Arc<Mutex<VecDeque<LogEntry>>>,
+    log_tx: broadcast::Sender<LogEntry>,
     log_tasks: Vec<JoinHandle<()>>,
 }
 
 impl ManagedProcess {
     pub fn new(name: String, config: ProcessConfig) -> Self {
+        let (log_tx, _) = broadcast::channel(LOG_BROADCAST_CAPACITY);
         Self {
             name,
             config,
@@ -94,6 +99,7 @@ impl ManagedProcess {
             started_at: None,
             stdout_lines: Arc::new(Mutex::new(VecDeque::new())),
             stderr_lines: Arc::new(Mutex::new(VecDeque::new())),
+            log_tx,
             log_tasks: Vec::new(),
         }
     }
@@ -185,8 +191,9 @@ impl ManagedProcess {
                     let name = self.name.clone();
                     let log_file = self.config.stdout_log.clone();
                     let buffer = self.stdout_lines.clone();
+                    let log_tx = self.log_tx.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stdout, log_file, buffer, LogStream::Stdout, &name, max_log_size).await;
+                        read_stream(stdout, log_file, buffer, log_tx, LogStream::Stdout, &name, max_log_size).await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -195,8 +202,9 @@ impl ManagedProcess {
                     let name = self.name.clone();
                     let log_file = self.config.stderr_log.clone();
                     let buffer = self.stderr_lines.clone();
+                    let log_tx = self.log_tx.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stderr, log_file, buffer, LogStream::Stderr, &name, max_log_size).await;
+                        read_stream(stderr, log_file, buffer, log_tx, LogStream::Stderr, &name, max_log_size).await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -395,12 +403,22 @@ impl ManagedProcess {
     pub fn set_healthy(&mut self, healthy: Option<bool>) {
         self.healthy = healthy;
     }
+
+    pub fn subscribe_logs(&self) -> broadcast::Receiver<LogEntry> {
+        self.log_tx.subscribe()
+    }
+
+    pub async fn clear_logs(&self) {
+        self.stdout_lines.lock().await.clear();
+        self.stderr_lines.lock().await.clear();
+    }
 }
 
 async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     log_path: Option<PathBuf>,
     buffer: Arc<Mutex<VecDeque<LogEntry>>>,
+    log_tx: broadcast::Sender<LogEntry>,
     stream: LogStream,
     name: &str,
     max_log_size_mb: Option<u64>,
@@ -421,6 +439,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                     timestamp: Utc::now(),
                     stream: stream.clone(),
                     line: trimmed.to_string(),
+                    process_name: None,
                 };
 
                 if let Some(ref mut f) = file {
@@ -433,7 +452,10 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 if buf.len() >= MAX_LOG_LINES {
                     buf.pop_front();
                 }
-                buf.push_back(entry);
+                buf.push_back(entry.clone());
+                drop(buf);
+
+                let _ = log_tx.send(entry);
 
                 line_count += 1;
                 if max_bytes > 0 && line_count.is_multiple_of(256) {

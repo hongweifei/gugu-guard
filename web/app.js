@@ -22,7 +22,7 @@ async function api(method, path, body) {
     return resp.json();
 }
 
-function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function fmtTime(s) { if (s == null) return '-'; return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
 
 function statusOf(p) {
@@ -263,41 +263,60 @@ let fsCallback = null;
 let fsCurrentPath = '';
 let fsSelectedItem = null;
 
+let fsListEl = null;
+let fsActiveEl = null;
+
 async function fsBrowse(path) {
     fsSelectedItem = null;
+    fsActiveEl = null;
+    if (!fsListEl) fsListEl = document.getElementById('fs-list');
     try {
         const data = await api('GET', `/fs/browse?path=${encodeURIComponent(path)}`);
         fsCurrentPath = data.path || path;
         document.getElementById('fs-path').value = fsCurrentPath;
-        const list = document.getElementById('fs-list');
         if (!data.entries?.length) {
-            list.innerHTML = '<div class="fs-empty">空目录</div>';
+            fsListEl.innerHTML = '<div class="fs-empty">空目录</div>';
             return;
         }
-        list.innerHTML = data.entries.map(e =>
-            `<div class="fs-item${e.is_dir ? ' fs-dir' : ' fs-file'}" data-path="${esc(e.path)}" data-dir="${e.is_dir}" title="${esc(e.path)}">
-                <svg class="fs-icon" viewBox="0 0 20 20" fill="currentColor"><path d="${e.is_dir
-                    ? 'M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z'
-                    : 'M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z'}"/></svg>
-                <span>${esc(e.name)}</span>
-            </div>`
-        ).join('');
-        list.querySelectorAll('.fs-item').forEach(el => {
-            el.onclick = () => {
-                list.querySelectorAll('.fs-item.active').forEach(a => a.classList.remove('active'));
-                el.classList.add('active');
-                fsSelectedItem = { path: el.dataset.path, isDir: el.dataset.dir === 'true' };
-            };
-            el.ondblclick = () => {
-                if (el.dataset.dir === 'true') fsBrowse(el.dataset.path);
-                else { fsSelectedItem = { path: el.dataset.path, isDir: false }; closeFsBrowser(); }
-            };
-        });
+        const parts = [];
+        for (let i = 0, len = data.entries.length; i < len; i++) {
+            const e = data.entries[i];
+            parts.push('<div class="fs-item ', e.is_dir ? 'fs-dir' : 'fs-file', '" data-i="', i, '" title="', esc(e.path), '"><span>', esc(e.name), '</span></div>');
+        }
+        fsListEl.innerHTML = parts.join('');
+        fsListEl._entries = data.entries;
     } catch { toast('无法浏览目录', 'error'); }
 }
 
+document.getElementById('fs-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.fs-item');
+    if (!item) return;
+    if (fsActiveEl) fsActiveEl.classList.remove('active');
+    item.classList.add('active');
+    fsActiveEl = item;
+    const entries = item.parentElement._entries;
+    const entry = entries[item.dataset.i];
+    fsSelectedItem = { path: entry.path, isDir: entry.is_dir };
+});
+
+document.getElementById('fs-list').addEventListener('dblclick', (e) => {
+    const item = e.target.closest('.fs-item');
+    if (!item) return;
+    const entries = item.parentElement._entries;
+    const entry = entries[item.dataset.i];
+    if (entry.is_dir) {
+        fsBrowse(entry.path);
+    } else {
+        fsSelectedItem = { path: entry.path, isDir: false };
+        closeFsBrowser();
+    }
+});
+
+let fsSelectDir = false;
+
 function openFsBrowser(title, confirmText, selectDir, callback) {
     fsCallback = callback;
+    fsSelectDir = selectDir;
     fsSelectedItem = null;
     document.getElementById('fs-title').textContent = title;
     document.getElementById('fs-confirm').textContent = confirmText;
@@ -308,7 +327,10 @@ function openFsBrowser(title, confirmText, selectDir, callback) {
 
 function closeFsBrowser() {
     document.getElementById('fs-backdrop').classList.remove('open');
-    if (fsCallback && fsSelectedItem) fsCallback(fsSelectedItem.path);
+    if (fsCallback) {
+        const path = fsSelectedItem ? fsSelectedItem.path : (fsSelectDir ? fsCurrentPath : null);
+        if (path) fsCallback(path);
+    }
     fsCallback = null;
 }
 

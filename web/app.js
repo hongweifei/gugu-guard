@@ -4,11 +4,21 @@ let selectedProcess = null;
 let editingName = null;
 let allProcesses = [];
 let searchQuery = '';
+let API_KEY = localStorage.getItem('gugu_api_key') || '';
+let lastLogHash = '';
 
 async function api(method, path, body) {
     const opts = { method };
     if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+    if (API_KEY) {
+        opts.headers = opts.headers || {};
+        opts.headers['Authorization'] = `Bearer ${API_KEY}`;
+    }
     const resp = await fetch(`${API}${path}`, opts);
+    if (resp.status === 401) {
+        showLogin();
+        throw new Error('Unauthorized');
+    }
     return resp.json();
 }
 
@@ -135,9 +145,9 @@ async function doAct(action, name) {
     } catch { toast('操作失败', 'error'); }
 }
 
-/* ── Logs ── */
 async function showLogs(name) {
     selectedProcess = name;
+    lastLogHash = '';
     document.getElementById('log-process-name').textContent = name;
     document.getElementById('log-overlay').classList.add('open');
     refreshLogs();
@@ -145,8 +155,16 @@ async function showLogs(name) {
 async function refreshLogs() {
     if (!selectedProcess) return;
     const data = await api('GET', `/processes/${encodeURIComponent(selectedProcess)}/logs?lines=300`);
+    if (!data?.length) {
+        const el = document.getElementById('log-body');
+        el.innerHTML = '<div class="log-empty">暂无日志输出</div>';
+        lastLogHash = '';
+        return;
+    }
+    const newHash = data.length + ':' + (data[data.length-1]?.timestamp || '');
+    if (newHash === lastLogHash) return;
+    lastLogHash = newHash;
     const el = document.getElementById('log-body');
-    if (!data?.length) { el.innerHTML = '<div class="log-empty">暂无日志输出</div>'; return; }
     el.innerHTML = data.map(e => {
         const t = new Date(e.timestamp).toLocaleTimeString();
         const s = typeof e.stream === 'string' ? e.stream.toLowerCase() : (e.stream.Stdout ? 'stdout' : 'stderr');
@@ -154,9 +172,8 @@ async function refreshLogs() {
     }).join('');
     if (document.getElementById('log-autoscroll').checked) el.scrollTop = el.scrollHeight;
 }
-function closeLogs() { selectedProcess = null; document.getElementById('log-overlay').classList.remove('open'); }
+function closeLogs() { selectedProcess = null; lastLogHash = ''; document.getElementById('log-overlay').classList.remove('open'); }
 
-/* ── Modal ── */
 function openModal(title, submit) {
     document.getElementById('modal-title').textContent = title;
     document.getElementById('btn-submit-form').textContent = submit;
@@ -242,7 +259,6 @@ document.getElementById('btn-add').onclick = () => {
 document.getElementById('f-command').addEventListener('input', updatePreview);
 document.getElementById('f-name').addEventListener('input', checkNameDuplicate);
 
-/* ── File Browser ── */
 let fsCallback = null;
 let fsCurrentPath = '';
 let fsSelectedItem = null;
@@ -386,7 +402,6 @@ document.getElementById('process-form').onsubmit = async (e) => {
     } catch { toast('操作失败', 'error'); }
 };
 
-/* ── Confirm ── */
 let pendingRemove = null;
 window.askRemove = function(name) {
     pendingRemove = name;
@@ -409,8 +424,7 @@ document.getElementById('btn-confirm-cancel').onclick = () => {
     document.getElementById('confirm-backdrop').classList.remove('open');
 };
 
-/* ── Event bindings ── */
-document.getElementById('btn-refresh-logs').onclick = refreshLogs;
+document.getElementById('btn-refresh-logs').onclick = () => { lastLogHash = ''; refreshLogs(); };
 document.getElementById('btn-close-logs').onclick = closeLogs;
 document.getElementById('btn-close-modal').onclick = closeModal;
 document.getElementById('btn-cancel-form').onclick = closeModal;
@@ -426,13 +440,14 @@ document.addEventListener('keydown', (e) => {
         else if (document.getElementById('fs-backdrop').classList.contains('open')) { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); }
         else if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
         else if (document.getElementById('confirm-backdrop').classList.contains('open')) { pendingRemove = null; document.getElementById('confirm-backdrop').classList.remove('open'); }
+        else if (document.getElementById('login-backdrop').classList.contains('open')) { /* don't close login */ }
     }
 });
 
-/* ── WebSocket ── */
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}${API}/ws`);
+    const tokenParam = API_KEY ? `?token=${encodeURIComponent(API_KEY)}` : '';
+    ws = new WebSocket(`${proto}//${location.host}${API}/ws${tokenParam}`);
     ws.onmessage = (ev) => {
         try {
             const d = JSON.parse(ev.data);
@@ -447,9 +462,75 @@ function connectWS() {
     ws.onerror = () => ws.close();
 }
 
+function showLogin() {
+    document.getElementById('login-backdrop').classList.add('open');
+    setTimeout(() => document.getElementById('login-key').focus(), 100);
+}
+
+window.toggleLoginVis = function() {
+    const inp = document.getElementById('login-key');
+    const open = document.querySelector('.login-toggle-vis .eye-open');
+    const closed = document.querySelector('.login-toggle-vis .eye-closed');
+    if (inp.type === 'password') {
+        inp.type = 'text';
+        open.style.display = 'none';
+        closed.style.display = 'block';
+    } else {
+        inp.type = 'password';
+        open.style.display = 'block';
+        closed.style.display = 'none';
+    }
+};
+
+document.getElementById('btn-login').onclick = async () => {
+    const errEl = document.getElementById('login-error');
+    const btn = document.getElementById('btn-login');
+    errEl.textContent = '';
+    document.getElementById('login-key').classList.remove('input-error');
+    const key = document.getElementById('login-key').value.trim();
+    if (!key) { errEl.textContent = '请输入 API Key'; return; }
+    API_KEY = key;
+    btn.disabled = true;
+    btn.textContent = '验证中...';
+    try {
+        const resp = await fetch(`${API}/processes`, {
+            headers: { 'Authorization': `Bearer ${key}` }
+        });
+        if (!resp.ok) {
+            API_KEY = '';
+            errEl.textContent = 'API Key 无效，请检查后重试';
+            document.getElementById('login-key').classList.add('input-error');
+            document.getElementById('login-key').focus();
+            return;
+        }
+        allProcesses = await resp.json();
+        localStorage.setItem('gugu_api_key', key);
+        document.getElementById('login-backdrop').classList.remove('open');
+        render(true);
+        connectWS();
+    } catch {
+        API_KEY = '';
+        errEl.textContent = '无法连接到服务';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '认证并登录';
+    }
+};
+
+document.getElementById('login-key').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-login').click();
+});
+
 async function init() {
     try {
-        allProcesses = await api('GET', '/processes');
+        const opts = {};
+        if (API_KEY) opts.headers = { 'Authorization': `Bearer ${API_KEY}` };
+        const resp = await fetch(`${API}/processes`, opts);
+        if (resp.status === 401) {
+            showLogin();
+            return;
+        }
+        allProcesses = await resp.json();
         render(true);
     } catch {
         document.getElementById('process-grid').innerHTML = '<div class="empty-state"><h3>连接失败</h3><p>无法连接到守护进程</p></div>';

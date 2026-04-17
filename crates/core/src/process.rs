@@ -14,6 +14,7 @@ const MAX_LOG_LINES: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ProcessStatus {
     Stopped,
     Running,
@@ -57,6 +58,7 @@ pub struct LogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LogStream {
     Stdout,
     Stderr,
@@ -68,6 +70,7 @@ pub struct ManagedProcess {
     child: Option<Child>,
     status: ProcessStatus,
     restart_count: u32,
+    crash_restart_count: u32,
     started_at: Option<DateTime<Utc>>,
     stdout_lines: Arc<Mutex<VecDeque<LogEntry>>>,
     stderr_lines: Arc<Mutex<VecDeque<LogEntry>>>,
@@ -82,6 +85,7 @@ impl ManagedProcess {
             child: None,
             status: ProcessStatus::Stopped,
             restart_count: 0,
+            crash_restart_count: 0,
             started_at: None,
             stdout_lines: Arc::new(Mutex::new(VecDeque::new())),
             stderr_lines: Arc::new(Mutex::new(VecDeque::new())),
@@ -110,15 +114,19 @@ impl ManagedProcess {
     }
 
     pub fn should_auto_restart(&self) -> bool {
-        self.config.auto_restart && self.restart_count < self.config.max_restarts
+        self.config.auto_restart && self.crash_restart_count < self.config.max_restarts
     }
 
     pub fn restart_delay(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.config.restart_delay_secs)
     }
 
-    pub fn reset_restart_count(&mut self) {
-        self.restart_count = 0;
+    pub fn reset_crash_restart_count(&mut self) {
+        self.crash_restart_count = 0;
+    }
+
+    pub fn mark_crash_restart(&mut self) {
+        self.crash_restart_count += 1;
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -166,13 +174,14 @@ impl ManagedProcess {
                 let pid = child.id();
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
+                let max_log_size = self.config.max_log_size_mb;
 
                 if let Some(stdout) = stdout {
                     let name = self.name.clone();
                     let log_file = self.config.stdout_log.clone();
                     let buffer = self.stdout_lines.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stdout, log_file, buffer, LogStream::Stdout, &name).await;
+                        read_stream(stdout, log_file, buffer, LogStream::Stdout, &name, max_log_size).await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -182,7 +191,7 @@ impl ManagedProcess {
                     let log_file = self.config.stderr_log.clone();
                     let buffer = self.stderr_lines.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stderr, log_file, buffer, LogStream::Stderr, &name).await;
+                        read_stream(stderr, log_file, buffer, LogStream::Stderr, &name, max_log_size).await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -280,7 +289,7 @@ impl ManagedProcess {
             self.stop().await?;
             tokio::time::sleep(self.restart_delay()).await;
         }
-        self.restart_count = 0;
+        self.crash_restart_count = 0;
         self.start().await
     }
 
@@ -317,7 +326,7 @@ impl ManagedProcess {
             args: self.config.args.clone(),
             status: self.status.clone(),
             pid: self.child.as_ref().and_then(|c| c.id()),
-            restart_count: self.restart_count,
+            restart_count: self.crash_restart_count,
             auto_start: self.config.auto_start,
             auto_restart: self.config.auto_restart,
             started_at: self.started_at,
@@ -328,10 +337,47 @@ impl ManagedProcess {
     pub async fn logs(&self, lines: usize) -> Vec<LogEntry> {
         let stdout = self.stdout_lines.lock().await;
         let stderr = self.stderr_lines.lock().await;
-        let mut all: Vec<LogEntry> = stdout.iter().chain(stderr.iter()).cloned().collect();
-        all.sort_by_key(|e| e.timestamp);
-        let start = all.len().saturating_sub(lines);
-        all[start..].to_vec()
+
+        let total = stdout.len() + stderr.len();
+        if total == 0 {
+            return Vec::new();
+        }
+
+        let take = lines.min(total);
+        let skip = total.saturating_sub(take);
+
+        let mut result = Vec::with_capacity(total);
+        let mut si = 0;
+        let mut ei = 0;
+
+        while si < stdout.len() || ei < stderr.len() {
+            match (stdout.get(si), stderr.get(ei)) {
+                (Some(s), Some(e)) => {
+                    if s.timestamp <= e.timestamp {
+                        result.push(s.clone());
+                        si += 1;
+                    } else {
+                        result.push(e.clone());
+                        ei += 1;
+                    }
+                }
+                (Some(s), None) => {
+                    result.push(s.clone());
+                    si += 1;
+                }
+                (None, Some(e)) => {
+                    result.push(e.clone());
+                    ei += 1;
+                }
+                (None, None) => break,
+            }
+        }
+
+        if skip > 0 {
+            result[skip..].to_vec()
+        } else {
+            result
+        }
     }
 
     pub fn set_status(&mut self, status: ProcessStatus) {
@@ -345,10 +391,13 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     stream: LogStream,
     name: &str,
+    max_log_size_mb: Option<u64>,
 ) {
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
     let mut file = open_log_file(log_path.as_deref()).await;
+    let max_bytes = max_log_size_mb.unwrap_or(0) * 1024 * 1024;
+    let mut line_count: u32 = 0;
 
     loop {
         line.clear();
@@ -363,7 +412,9 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 };
 
                 if let Some(ref mut f) = file {
-                    let _ = f.write_all(format!("{trimmed}\n").as_bytes()).await;
+                    if let Err(e) = f.write_all(format!("{trimmed}\n").as_bytes()).await {
+                        tracing::debug!("[{}] 写入日志文件失败: {}", name, e);
+                    }
                 }
 
                 let mut buf = buffer.lock().await;
@@ -371,6 +422,17 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                     buf.pop_front();
                 }
                 buf.push_back(entry);
+
+                line_count += 1;
+                if max_bytes > 0 && line_count.is_multiple_of(256) {
+                    let should_rotate = match file.as_ref() {
+                        Some(f) => f.metadata().await.map(|m| m.len() > max_bytes).unwrap_or(false),
+                        None => false,
+                    };
+                    if should_rotate {
+                        file = rotate_log_file(log_path.as_deref()).await;
+                    }
+                }
             }
             Err(e) => {
                 tracing::debug!("[{}] 读取 {} 流错误: {}", name, stream_type(&stream), e);
@@ -384,17 +446,49 @@ async fn open_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File
     match path {
         Some(p) => {
             if let Some(parent) = p.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    tracing::debug!("创建日志目录失败 {}: {}", parent.display(), e);
+                }
             }
-            tokio::fs::OpenOptions::new()
+            match tokio::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(p)
                 .await
-                .ok()
+            {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    tracing::debug!("打开日志文件失败 {}: {}", p.display(), e);
+                    None
+                }
+            }
         }
         None => None,
     }
+}
+
+async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
+    let p = match path {
+        Some(p) => p,
+        None => return None,
+    };
+
+    for i in (1..=5).rev() {
+        let old = format!("{}.{}", p.display(), i);
+        let old_path = std::path::Path::new(&old);
+        if old_path.exists() {
+            let next = format!("{}.{}", p.display(), i + 1);
+            let _ = tokio::fs::rename(old_path, &next).await;
+        }
+    }
+    let _ = tokio::fs::rename(p, format!("{}.1", p.display())).await;
+
+    tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .await
+        .ok()
 }
 
 fn stream_type(stream: &LogStream) -> &'static str {

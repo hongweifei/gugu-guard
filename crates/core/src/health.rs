@@ -6,9 +6,10 @@ pub async fn check_health(config: &HealthCheckConfig) -> bool {
     match &config.check_type {
         crate::config::HealthCheckType::Tcp { port } => {
             let addr = format!("127.0.0.1:{port}");
-            tokio::net::TcpStream::connect(&addr)
+            tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr))
                 .await
-                .is_ok()
+                .map(|r| r.is_ok())
+                .unwrap_or(false)
         }
         crate::config::HealthCheckType::Http { url } => {
             reqwest::Client::new()

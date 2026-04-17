@@ -9,9 +9,14 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Process Management** — Start, stop, restart, auto-restart, crash recovery
 - **Web Dashboard** — Dark-themed UI, dynamic forms, real-time status updates
 - **CLI Tool** — Full-featured command line with colored table output
-- **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence
-- **Health Checks** — TCP port / HTTP request monitoring
+- **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence + auto rotation
+- **Health Checks** — TCP port / HTTP request monitoring with optional auto-restart on failure
 - **File Browser** — Server-side file browsing for quick directory and executable selection
+- **API Key Auth** — Optional API key protection with WebUI login dialog
+- **CORS Config** — Configurable allowed cross-origin origins
+- **Process Dependencies** — `depends_on` for startup ordering with topological sort
+- **Hot Config Reload** — SIGHUP (Linux) or `POST /api/v1/reload` to reload config at runtime
+- **Smart Updates** — Non-runtime config changes (log paths, restart policies, etc.) don't restart the process
 - **Auto-start on Boot** — Windows (Task Scheduler) / Linux (systemd)
 - **Single Instance** — PID file lock to prevent duplicate daemons
 - **Graceful Shutdown** — Ctrl+C / SIGTERM / SIGHUP signal handling
@@ -24,7 +29,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 **Option 1: Build from source**
 
 ```bash
-git clone https://github.com/hongweifei/gugu-guard.git
+git clone https://gitee.com/hongweifei/gugu-guard.git
 cd gugu-guard
 cargo build --release
 # Binary at target/release/gugu
@@ -33,7 +38,7 @@ cargo build --release
 **Option 2: cargo install**
 
 ```bash
-cargo install --git https://github.com/hongweifei/gugu-guard.git
+cargo install --git https://gitee.com/hongweifei/gugu-guard.git
 ```
 
 After compilation, you only need a single `gugu` binary — the WebUI is embedded at compile time, no extra files required.
@@ -47,9 +52,13 @@ cp config.example.toml gugu.toml
 Edit `gugu.toml`:
 
 ```toml
+[daemon]
+# api_key = "your-secret-key"   # Optional, enables API + WebUI authentication
+
 [daemon.web]
 addr = "0.0.0.0"
 port = 9090
+# cors_origins = ["http://localhost:3000"]  # Optional, restrict CORS origins
 
 [processes.my-app]
 command = "node app.js"
@@ -58,8 +67,17 @@ auto_start = true
 auto_restart = true
 max_restarts = 3
 restart_delay_secs = 5
+max_log_size_mb = 10             # Auto-rotate logs when exceeding 10MB
 stdout_log = "logs/my-app-stdout.log"
 stderr_log = "logs/my-app-stderr.log"
+depends_on = ["my-db"]           # Wait for my-db to start first
+
+[processes.my-app.health_check]
+type = "tcp"
+port = 8080
+interval_secs = 30
+timeout_secs = 5
+# unhealthy_restart = true       # Auto-restart on health check failure
 ```
 
 ### Start the Daemon
@@ -70,6 +88,9 @@ gugu run
 
 # Specify config file
 gugu run -c /path/to/config.toml
+
+# Set API Key via CLI (overrides config file)
+gugu --api-key "your-secret-key" run
 ```
 
 Open `http://localhost:9090` in your browser to access the web dashboard.
@@ -84,6 +105,19 @@ gugu install
 sudo gugu install
 ```
 
+### Hot Config Reload
+
+```bash
+# Linux: send SIGHUP signal
+kill -HUP $(cat gugu.pid)
+
+# Any platform: via CLI
+gugu reload
+
+# Or call the API directly
+curl -X POST http://localhost:9090/api/v1/reload
+```
+
 ## CLI Usage
 
 ```bash
@@ -96,8 +130,17 @@ gugu restart <name>               # Restart a process
 gugu logs <name> [-l 100]         # View logs
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
+gugu reload                       # Reload config file
 gugu install                      # Register auto-start
 gugu uninstall                    # Unregister auto-start
+```
+
+Global options:
+
+```bash
+-c, --config <PATH>      # Config file path (default: gugu.toml)
+    --server <URL>       # Server URL to connect to
+    --api-key <KEY>      # API Key (overrides config file)
 ```
 
 ### Add Process Examples
@@ -127,8 +170,12 @@ gugu add frontend -x "bun run dev" \
 | POST | `/api/v1/processes/:name/restart` | Restart |
 | GET | `/api/v1/processes/:name/logs` | Get logs |
 | GET | `/api/v1/processes/:name/config` | Get config |
+| GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
+| POST | `/api/v1/reload` | Reload config |
 | WS | `/api/v1/ws` | Real-time status |
+
+> When `api_key` is set, all API requests require the `Authorization: Bearer <key>` header. WebSocket connections require `?token=<key>` query parameter.
 
 ## Project Structure
 
@@ -136,7 +183,7 @@ gugu add frontend -x "bun run dev" \
 gugu-guard/
 ├── crates/
 │   ├── core/       # Core lib: config, process management, logging, health checks
-│   ├── server/     # Web server: REST API, WebSocket, static files
+│   ├── server/     # Web server: REST API, WebSocket, auth, static files
 │   └── cli/        # Command line tool
 ├── web/            # WebUI (HTML/CSS/JS)
 ├── config.example.toml
@@ -144,6 +191,17 @@ gugu-guard/
 ```
 
 ## Configuration Reference
+
+### Daemon Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `daemon.pid_file` | string | — | PID file path |
+| `daemon.log_dir` | string | — | Log directory |
+| `daemon.api_key` | string | — | API Key, enables auth when set |
+| `daemon.web.addr` | string | `0.0.0.0` | Listen address |
+| `daemon.web.port` | u16 | `9090` | Listen port |
+| `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
 
 ### Process Configuration
 
@@ -155,9 +213,12 @@ gugu-guard/
 | `env` | map | `{}` | Environment variables |
 | `auto_start` | bool | `true` | Auto-start when daemon starts |
 | `auto_restart` | bool | `true` | Auto-restart on crash |
-| `max_restarts` | u32 | `3` | Max restart attempts |
+| `max_restarts` | u32 | `3` | Max consecutive crash restart attempts |
 | `restart_delay_secs` | u64 | `5` | Restart delay in seconds |
 | `stop_timeout_secs` | u64 | `10` | Stop timeout in seconds |
+| `depends_on` | string[] | `[]` | Process dependencies, start in dependency order |
+| `max_log_size_mb` | u64 | — | Log file size limit (MB), auto-rotate when exceeded |
+| `unhealthy_restart` | bool | `false` | Auto-restart on health check failure |
 | `stdout_log` | string | — | stdout log file path |
 | `stderr_log` | string | — | stderr log file path |
 

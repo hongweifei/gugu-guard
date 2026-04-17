@@ -2,9 +2,14 @@
 pid_file = "gugu.pid"
 log_dir = "logs"
 
+# API Key 认证 (可选，设置后所有 API 和 WebSocket 请求需要携带此 Key)
+# api_key = "your-secret-key"
+
 [daemon.web]
 addr = "0.0.0.0"
 port = 9090
+# CORS 允许的来源 (可选，为空则允许所有)
+# cors_origins = ["http://localhost:3000"]
 
 # 示例进程配置
 [processes.example-web]
@@ -14,6 +19,7 @@ auto_start = true
 auto_restart = true
 max_restarts = 3
 restart_delay_secs = 5
+max_log_size_mb = 10
 stdout_log = "logs/example-web-stdout.log"
 stderr_log = "logs/example-web-stderr.log"
 
@@ -23,9 +29,13 @@ port = 8080
 interval_secs = 10
 timeout_secs = 3
 
+# unhealthy_restart = true  # 健康检查失败时自动重启
+
 [processes.example-echo]
 command = "ping"
 args = ["127.0.0.1"]
 auto_start = false
 auto_restart = false
 stdout_log = "logs/example-echo-stdout.log"
+
+# depends_on = ["example-web"]  # 在 example-web 启动后再启动

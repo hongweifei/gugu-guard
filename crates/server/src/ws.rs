@@ -23,6 +23,7 @@ async fn ws_handler(
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
     let mut status_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    let mut log_interval = tokio::time::interval(std::time::Duration::from_millis(200));
 
     let mut log_rx = {
         let mgr = state.manager.read().await;
@@ -44,7 +45,6 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 let mgr = state.manager.read().await;
                 let processes: Vec<ProcessInfo> = mgr.list_processes();
                 let current_names: Vec<String> = processes.iter().map(|p| p.name.clone()).collect();
-                drop(mgr);
 
                 let msg = json!({
                     "type": "status",
@@ -60,7 +60,6 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     Err(_) => continue,
                 }
 
-                let mgr = state.manager.read().await;
                 let mut new_rx = Vec::new();
                 for (name, rx) in log_rx.drain(..) {
                     if current_names.contains(&name) {
@@ -75,8 +74,9 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     }
                 }
                 log_rx = new_rx;
+                drop(mgr);
             }
-            _ = async {
+            _ = log_interval.tick() => {
                 for (name, rx) in &mut log_rx {
                     loop {
                         match rx.try_recv() {
@@ -94,13 +94,12 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                         }
                     }
                 }
-            } => {
                 if !log_buf.is_empty() {
+                    let entries: Vec<_> = log_buf.drain(..).collect();
                     let msg = json!({
                         "type": "logs",
-                        "entries": log_buf,
+                        "entries": entries,
                     });
-                    log_buf.clear();
                     match serde_json::to_string(&msg) {
                         Ok(text) => {
                             if socket.send(axum::extract::ws::Message::Text(text)).await.is_err() {

@@ -318,10 +318,15 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
         mgr.stop_all().await;
     }
 
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
         server_handle,
-    ).await;
+    ).await {
+        Ok(_) => {}
+        Err(_) => {
+            tracing::warn!("Web 服务关闭超时，强制终止");
+        }
+    }
 
     remove_pid_file(&pid);
     tracing::info!("咕咕鸽进程守护已安全停止");

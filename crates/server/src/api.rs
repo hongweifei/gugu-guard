@@ -67,6 +67,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/processes/:name/stop", post(stop_process))
         .route("/api/v1/processes/:name/restart", post(restart_process))
         .route("/api/v1/processes/:name/logs", get(get_logs))
+        .route("/api/v1/processes/:name/health", post(check_health))
         .route("/api/v1/stats", get(get_stats))
         .route("/api/v1/fs/browse", get(browse_fs))
         .route("/api/v1/reload", post(reload_config))
@@ -278,6 +279,20 @@ async fn get_logs(
     match mgr.get_process_logs(&name, query.lines).await {
         Ok(logs) => Json(logs).into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
+    }
+}
+
+async fn check_health(
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let mut mgr = state.manager.write().await;
+    match mgr.check_process_health(&name).await {
+        Ok(healthy) => Json(serde_json::json!({
+            "healthy": healthy,
+            "message": if healthy { "健康检查通过" } else { "健康检查失败" }
+        })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }
 

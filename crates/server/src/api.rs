@@ -302,23 +302,26 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     let dir = PathBuf::from(&raw);
 
     let dir = if dir.is_relative() {
-        std::env::current_dir().unwrap_or_default().join(&dir)
+        let joined = std::env::current_dir().unwrap_or_default().join(&dir);
+        joined.canonicalize().unwrap_or(joined)
     } else {
-        dir
+        dir.canonicalize().unwrap_or(dir)
     };
 
-    let parent = dir.parent().map(|p| p.to_string_lossy().to_string());
+    let path_str = clean_path(&dir);
+    let parent = dir.parent().map(|p| clean_path(p));
 
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
     };
 
-    let mut entries: Vec<FsEntry> = Vec::new();
+    let mut entries: Vec<FsEntry> = Vec::with_capacity(256);
+    let sep = std::path::MAIN_SEPARATOR;
     for entry in read_dir.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let path = entry.path().to_string_lossy().to_string();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = format!("{}{}{}", path_str, sep, name);
         entries.push(FsEntry { name, path, is_dir });
     }
 
@@ -327,7 +330,7 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     });
 
     Json(BrowseResponse {
-        path: dir.to_string_lossy().to_string(),
+        path: path_str,
         parent,
         entries,
     }).into_response()
@@ -339,4 +342,9 @@ async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
         Ok(()) => Json(ApiSuccess::new("配置已重新加载")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError::new(e.to_string()))).into_response(),
     }
+}
+
+fn clean_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }

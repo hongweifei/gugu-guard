@@ -89,6 +89,14 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .pcard-badge.failed    { color: var(--red);   background: var(--red-dim); }
 .pcard-badge.starting  { color: var(--sky);   background: var(--sky-dim); }
 .pcard-badge.restarting{ color: var(--purple); background: var(--purple-dim); }
+.pcard-badges { display: flex; align-items: center; gap: 6px; }
+.pcard-tag { font-size: .65rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; letter-spacing: .04em; }
+.pcard-tag.hc { color: var(--sky); background: var(--sky-dim); }
+.pcard-tag.hc.healthy { color: var(--green); background: var(--green-dim); }
+.pcard-tag.hc.unhealthy { color: var(--red); background: var(--red-dim); }
+.pcard-tag.hc.unknown { color: var(--text-3); background: var(--bg-2); }
+.pcard-tag.ur { color: var(--amber); background: var(--amber-dim); }
+.btn-hc { font-size: .72rem !important; padding: 3px 8px !important; }
 
 .pcard-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-bottom: 14px; font-size: .82rem; }
 .pcard-meta-item { display: flex; flex-direction: column; gap: 1px; }
@@ -152,6 +160,8 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .field label { display: block; font-size: .78rem; color: var(--text-2); font-weight: 500; margin-bottom: 5px; }
 .required { color: var(--red); }
 .field input[type=text], .field input[type=number] { width: 100%; background: var(--bg-0); border: 1px solid var(--border); border-radius: 8px; padding: 9px 13px; color: var(--text); font-family: var(--sans); font-size: .88rem; outline: none; transition: border-color .15s; }
+.field select { width: 100%; background: var(--bg-0); border: 1px solid var(--border); border-radius: 8px; padding: 9px 13px; color: var(--text); font-family: var(--sans); font-size: .88rem; outline: none; transition: border-color .15s; cursor: pointer; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%236b7280'%3E%3Cpath fill-rule='evenodd' d='M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; padding-right: 32px; }
+.field select:focus { border-color: var(--accent); }
 .field input:focus { border-color: var(--accent); }
 .field-hint { font-size: .75rem; margin-top: 3px; min-height: 1em; transition: color .15s; }
 .field-hint.error { color: var(--red); }

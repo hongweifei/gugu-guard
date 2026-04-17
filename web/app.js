@@ -96,10 +96,18 @@ function buildCard(p, isNew) {
     const st = statusOf(p);
     const cmd = p.args?.length ? `${p.command} ${p.args.join(' ')}` : (p.command || '');
     const run = st.key === 'running';
+    let hcHtml = '';
+    if (p.has_health_check) {
+        const cls = p.healthy === true ? 'healthy' : (p.healthy === false ? 'unhealthy' : 'unknown');
+        const label = p.healthy === true ? '健康' : (p.healthy === false ? '异常' : '待检');
+        hcHtml = `<span class="pcard-tag hc ${cls}" title="健康检查: ${label}">HC ${label}</span>`;
+    }
+    const urTag = p.unhealthy_restart ? '<span class="pcard-tag ur" title="失败自动重启">AR</span>' : '';
+    const hcBtn = p.has_health_check ? `<button class="btn btn-hc" onclick="doHealthCheck('${p.name}')" title="手动健康检查">检查</button>` : '';
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
-            <span class="pcard-badge ${st.key}">${esc(st.label)}</span>
+            <div class="pcard-badges"><span class="pcard-badge ${st.key}">${esc(st.label)}</span>${hcHtml}${urTag}</div>
         </div>
         <div class="pcard-meta">
             <div class="pcard-meta-item"><span class="pcard-meta-label">PID</span><span class="pcard-meta-val">${p.pid || '—'}</span></div>
@@ -110,6 +118,7 @@ function buildCard(p, isNew) {
             <button class="btn act-start" onclick="doAct('start','${p.name}')" ${run?'disabled':''}>启动</button>
             <button class="btn act-stop" onclick="doAct('stop','${p.name}')" ${!run?'disabled':''}>停止</button>
             <button class="btn act-restart" onclick="doAct('restart','${p.name}')">重启</button>
+            ${hcBtn}
             <button class="btn act-logs" onclick="showLogs('${p.name}')">日志</button>
             <button class="btn" onclick="editProc('${p.name}')">编辑</button>
             <button class="btn act-delete" onclick="askRemove('${p.name}')">删除</button>
@@ -143,6 +152,17 @@ async function doAct(action, name) {
         toast(r.message || '操作成功', 'success');
         if (r.error) toast(r.error, 'error');
     } catch { toast('操作失败', 'error'); }
+}
+
+async function doHealthCheck(name) {
+    try {
+        const r = await api('POST', `/processes/${encodeURIComponent(name)}/health`);
+        if (r.healthy) {
+            toast('健康检查通过', 'success');
+        } else {
+            toast('健康检查失败', 'error');
+        }
+    } catch { toast('健康检查请求失败', 'error'); }
 }
 
 async function showLogs(name) {
@@ -191,6 +211,7 @@ function closeModal() {
     document.getElementById('f-name').classList.remove('duplicate');
     document.getElementById('f-name-hint').className = 'field-hint';
     document.getElementById('f-name-hint').textContent = '';
+    resetHealthCheck();
     editingName = null;
 }
 
@@ -231,6 +252,63 @@ window.updatePreview = function() {
     document.getElementById('cmd-text').textContent = full || '-';
 };
 
+function toggleHcFields() {
+    const type = document.getElementById('f-hc-type').value;
+    document.getElementById('hc-tcp-fields').style.display = type === 'tcp' ? '' : 'none';
+    document.getElementById('hc-http-fields').style.display = type === 'http' ? '' : 'none';
+    document.getElementById('hc-common-fields').style.display = type ? '' : 'none';
+}
+
+function collectHealthCheck() {
+    const type = document.getElementById('f-hc-type').value;
+    if (!type) return { health_check: null, unhealthy_restart: false };
+    const hc = {
+        type,
+        interval_secs: parseInt(document.getElementById('f-hc-interval').value) || 30,
+        timeout_secs: parseInt(document.getElementById('f-hc-timeout').value) || 5,
+    };
+    if (type === 'tcp') {
+        const port = parseInt(document.getElementById('f-hc-port').value);
+        if (!port) return null;
+        hc.port = port;
+    } else {
+        const url = document.getElementById('f-hc-url').value.trim();
+        if (!url) return null;
+        hc.url = url;
+    }
+    return {
+        health_check: hc,
+        unhealthy_restart: document.getElementById('f-unhealthy-restart').checked,
+    };
+}
+
+function fillHealthCheck(cfg) {
+    const hc = cfg.health_check;
+    if (!hc) {
+        document.getElementById('f-hc-type').value = '';
+        toggleHcFields();
+        return;
+    }
+    const type = hc.type || '';
+    document.getElementById('f-hc-type').value = type;
+    if (type === 'tcp') document.getElementById('f-hc-port').value = hc.port || '';
+    if (type === 'http') document.getElementById('f-hc-url').value = hc.url || '';
+    document.getElementById('f-hc-interval').value = hc.interval_secs || 30;
+    document.getElementById('f-hc-timeout').value = hc.timeout_secs || 5;
+    document.getElementById('f-unhealthy-restart').checked = cfg.unhealthy_restart || false;
+    toggleHcFields();
+}
+
+function resetHealthCheck() {
+    document.getElementById('f-hc-type').value = '';
+    document.getElementById('f-hc-port').value = '';
+    document.getElementById('f-hc-url').value = '';
+    document.getElementById('f-hc-interval').value = 30;
+    document.getElementById('f-hc-timeout').value = 5;
+    document.getElementById('f-unhealthy-restart').checked = false;
+    toggleHcFields();
+}
+
 function checkNameDuplicate() {
     const input = document.getElementById('f-name');
     const hint = document.getElementById('f-name-hint');
@@ -258,6 +336,7 @@ document.getElementById('btn-add').onclick = () => {
 };
 document.getElementById('f-command').addEventListener('input', updatePreview);
 document.getElementById('f-name').addEventListener('input', checkNameDuplicate);
+document.getElementById('f-hc-type').addEventListener('change', toggleHcFields);
 
 let fsCallback = null;
 let fsCurrentPath = '';
@@ -382,12 +461,14 @@ window.editProc = async function(name) {
         if (cfg.env && typeof cfg.env === 'object') {
             Object.entries(cfg.env).forEach(([k, v]) => addEnvRow(k, v));
         }
+        fillHealthCheck(cfg);
     } catch {
         f('f-dir').value = '';
         f('f-stdout').value = '';
         f('f-stderr').value = '';
         f('f-max-restarts').value = 3;
         f('f-restart-delay').value = 5;
+        resetHealthCheck();
     }
 
     openModal('编辑 — ' + name, '保存');
@@ -398,6 +479,8 @@ document.getElementById('process-form').onsubmit = async (e) => {
     if (checkNameDuplicate()) { toast('进程名称重复，请修改', 'error'); return; }
     const newName = document.getElementById('f-name').value.trim();
     if (!newName) { toast('请输入进程名称', 'error'); return; }
+    const hcData = collectHealthCheck();
+    if (hcData === null) { toast('请完善健康检查配置', 'error'); return; }
     const body = {
         command: document.getElementById('f-command').value,
         args: collectArgs(),
@@ -407,6 +490,8 @@ document.getElementById('process-form').onsubmit = async (e) => {
         auto_restart: document.getElementById('f-auto-restart').checked,
         max_restarts: parseInt(document.getElementById('f-max-restarts').value) || 3,
         restart_delay_secs: parseInt(document.getElementById('f-restart-delay').value) || 5,
+        health_check: hcData.health_check,
+        unhealthy_restart: hcData.unhealthy_restart,
         stdout_log: document.getElementById('f-stdout').value || null,
         stderr_log: document.getElementById('f-stderr').value || null,
         start_now: document.getElementById('f-auto-start').checked,

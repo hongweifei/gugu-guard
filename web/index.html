@@ -123,6 +123,37 @@
                     <div class="field"><label>stderr 日志</label><input type="text" id="f-stderr" placeholder="logs/stderr.log"></div>
                 </div>
 
+                <div class="section-title">健康检查</div>
+                <div class="field-row">
+                    <div class="field">
+                        <label>检查方式</label>
+                        <select id="f-hc-type">
+                            <option value="">不启用</option>
+                            <option value="tcp">TCP 端口检测</option>
+                            <option value="http">HTTP 请求检测</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="hc-tcp-fields" class="hc-fields" style="display:none">
+                    <div class="field-row">
+                        <div class="field"><label>端口</label><input type="number" id="f-hc-port" placeholder="8080" min="1" max="65535"></div>
+                        <div class="field"></div>
+                    </div>
+                </div>
+                <div id="hc-http-fields" class="hc-fields" style="display:none">
+                    <div class="field-row">
+                        <div class="field"><label>URL</label><input type="text" id="f-hc-url" placeholder="http://localhost:8080/health"></div>
+                        <div class="field"></div>
+                    </div>
+                </div>
+                <div id="hc-common-fields" class="hc-fields" style="display:none">
+                    <div class="field-row">
+                        <div class="field"><label>检查间隔 (秒)</label><input type="number" id="f-hc-interval" value="30" min="1"></div>
+                        <div class="field"><label>超时时间 (秒)</label><input type="number" id="f-hc-timeout" value="5" min="1"></div>
+                    </div>
+                    <label class="toggle"><input type="checkbox" id="f-unhealthy-restart"><span class="toggle-mark"></span>检查失败时自动重启</label>
+                </div>
+
                 <div class="section-title">重启策略</div>
                 <div class="field-row toggles-row">
                     <label class="toggle"><input type="checkbox" id="f-auto-start" checked><span class="toggle-mark"></span>守护进程启动时自动启动</label>

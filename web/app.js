@@ -5,7 +5,12 @@ let editingName = null;
 let allProcesses = [];
 let searchQuery = '';
 let API_KEY = localStorage.getItem('gugu_api_key') || '';
-let lastLogHash = '';
+let logEntries = [];
+let logSearchQuery = '';
+let logStreamFilter = 'all';
+let logLineHeight = 22;
+let logVisibleCount = 0;
+let logScrollTop = 0;
 
 async function api(method, path, body) {
     const opts = { method };
@@ -167,32 +172,108 @@ async function doHealthCheck(name) {
 
 async function showLogs(name) {
     selectedProcess = name;
-    lastLogHash = '';
+    logEntries = [];
+    logSearchQuery = '';
+    logStreamFilter = 'all';
     document.getElementById('log-process-name').textContent = name;
+    document.getElementById('log-search').value = '';
+    document.getElementById('log-stream-filter').value = 'all';
     document.getElementById('log-overlay').classList.add('open');
-    refreshLogs();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'subscribe', process: name }));
+    }
+    await refreshLogs();
 }
+
 async function refreshLogs() {
     if (!selectedProcess) return;
-    const data = await api('GET', `/processes/${encodeURIComponent(selectedProcess)}/logs?lines=300`);
+    const data = await api('GET', `/processes/${encodeURIComponent(selectedProcess)}/logs?lines=1000`);
     if (!data?.length) {
-        const el = document.getElementById('log-body');
-        el.innerHTML = '<div class="log-empty">暂无日志输出</div>';
-        lastLogHash = '';
+        logEntries = [];
+        renderLogBody();
         return;
     }
-    const newHash = data.length + ':' + (data[data.length-1]?.timestamp || '');
-    if (newHash === lastLogHash) return;
-    lastLogHash = newHash;
-    const el = document.getElementById('log-body');
-    el.innerHTML = data.map(e => {
-        const t = new Date(e.timestamp).toLocaleTimeString();
-        const s = typeof e.stream === 'string' ? e.stream.toLowerCase() : (e.stream.Stdout ? 'stdout' : 'stderr');
-        return `<div class="log-line"><span class="log-ts">${t}</span><span class="log-tag ${s==='stdout'?'out':'err'}">${s==='stdout'?'OUT':'ERR'}</span><span class="log-msg">${esc(e.line)}</span></div>`;
-    }).join('');
-    if (document.getElementById('log-autoscroll').checked) el.scrollTop = el.scrollHeight;
+    logEntries = data.map(e => ({
+        timestamp: e.timestamp,
+        stream: typeof e.stream === 'string' ? e.stream.toLowerCase() : (e.stream.Stdout ? 'stdout' : 'stderr'),
+        line: e.line,
+    }));
+    renderLogBody();
+    if (document.getElementById('log-autoscroll').checked) {
+        const el = document.getElementById('log-body');
+        requestAnimationFrame(() => el.scrollTop = el.scrollHeight);
+    }
 }
-function closeLogs() { selectedProcess = null; lastLogHash = ''; document.getElementById('log-overlay').classList.remove('open'); }
+
+function getFilteredEntries() {
+    return logEntries.filter(e => {
+        if (logStreamFilter !== 'all' && e.stream !== logStreamFilter) return false;
+        if (logSearchQuery && !e.line.toLowerCase().includes(logSearchQuery)) return false;
+        return true;
+    });
+}
+
+function renderLogBody() {
+    const el = document.getElementById('log-body');
+    const filtered = getFilteredEntries();
+    if (!filtered.length) {
+        el.innerHTML = '<div class="log-empty">' + (logEntries.length ? '没有匹配的日志' : '暂无日志输出') + '</div>';
+        el.style.overflowY = 'auto';
+        return;
+    }
+    el.style.overflowY = 'auto';
+
+    const containerH = el.clientHeight;
+    logVisibleCount = Math.ceil(containerH / logLineHeight) + 2;
+    logScrollTop = el.scrollTop;
+    const startIdx = Math.max(0, Math.floor(logScrollTop / logLineHeight) - 1);
+    const endIdx = Math.min(filtered.length, startIdx + logVisibleCount + 2);
+
+    const topPad = startIdx * logLineHeight;
+    const bottomPad = (filtered.length - endIdx) * logLineHeight;
+
+    const parts = [];
+    for (let i = startIdx; i < endIdx; i++) {
+        const e = filtered[i];
+        const t = new Date(e.timestamp).toLocaleTimeString();
+        const isOut = e.stream === 'stdout';
+        const highlight = logSearchQuery && e.line.toLowerCase().includes(logSearchQuery) ? ' highlight' : '';
+        parts.push(`<div class="log-line${highlight}"><span class="log-ts">${t}</span><span class="log-tag ${isOut?'out':'err'}">${isOut?'OUT':'ERR'}</span><span class="log-msg">${esc(e.line)}</span></div>`);
+    }
+    el.innerHTML = `<div style="height:${topPad}px"></div>${parts.join('')}<div style="height:${bottomPad}px"></div>`;
+}
+
+function onLogScroll() {
+    requestAnimationFrame(renderLogBody);
+}
+
+function closeLogs() {
+    selectedProcess = null;
+    logEntries = [];
+    document.getElementById('log-overlay').classList.remove('open');
+}
+
+function appendLogEntries(entries) {
+    if (!selectedProcess) return;
+    for (const e of entries) {
+        const procName = e.process_name;
+        if (procName && procName !== selectedProcess) continue;
+        const stream = typeof e.stream === 'string' ? e.stream.toLowerCase() : (e.stream.Stdout ? 'stdout' : 'stderr');
+        logEntries.push({
+            timestamp: e.timestamp,
+            stream,
+            line: e.line,
+        });
+    }
+    if (logEntries.length > 2000) {
+        logEntries = logEntries.slice(logEntries.length - 1500);
+    }
+    renderLogBody();
+    if (document.getElementById('log-autoscroll').checked) {
+        const el = document.getElementById('log-body');
+        requestAnimationFrame(() => el.scrollTop = el.scrollHeight);
+    }
+}
 
 function openModal(title, submit) {
     document.getElementById('modal-title').textContent = title;
@@ -531,8 +612,35 @@ document.getElementById('btn-confirm-cancel').onclick = () => {
     document.getElementById('confirm-backdrop').classList.remove('open');
 };
 
-document.getElementById('btn-refresh-logs').onclick = () => { lastLogHash = ''; refreshLogs(); };
+document.getElementById('btn-refresh-logs').onclick = () => refreshLogs();
 document.getElementById('btn-close-logs').onclick = closeLogs;
+document.getElementById('log-body').addEventListener('scroll', onLogScroll);
+document.getElementById('log-search').addEventListener('input', (e) => {
+    logSearchQuery = e.target.value.toLowerCase().trim();
+    renderLogBody();
+});
+document.getElementById('log-stream-filter').addEventListener('change', (e) => {
+    logStreamFilter = e.target.value;
+    renderLogBody();
+});
+document.getElementById('btn-clear-logs').onclick = async () => {
+    if (!selectedProcess) return;
+    try {
+        await api('DELETE', `/processes/${encodeURIComponent(selectedProcess)}/logs`);
+        logEntries = [];
+        renderLogBody();
+        toast('日志已清空', 'success');
+    } catch { toast('清空日志失败', 'error'); }
+};
+document.getElementById('btn-download-logs').onclick = () => {
+    if (!selectedProcess) return;
+    const tokenParam = API_KEY ? `&token=${encodeURIComponent(API_KEY)}` : '';
+    const url = `${API}/processes/${encodeURIComponent(selectedProcess)}/logs/download?lines=1000${tokenParam}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedProcess}.log`;
+    a.click();
+};
 document.getElementById('btn-close-modal').onclick = closeModal;
 document.getElementById('btn-cancel-form').onclick = closeModal;
 
@@ -561,7 +669,10 @@ function connectWS() {
             if (d.type === 'status') {
                 allProcesses = d.processes || [];
                 render();
-                if (selectedProcess) refreshLogs();
+            } else if (d.type === 'logs') {
+                if (d.entries?.length) {
+                    appendLogEntries(d.entries);
+                }
             }
         } catch {}
     };

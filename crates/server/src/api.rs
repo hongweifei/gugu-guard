@@ -66,7 +66,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/processes/:name/start", post(start_process))
         .route("/api/v1/processes/:name/stop", post(stop_process))
         .route("/api/v1/processes/:name/restart", post(restart_process))
-        .route("/api/v1/processes/:name/logs", get(get_logs))
+        .route("/api/v1/processes/:name/logs", get(get_logs).delete(clear_logs))
+        .route("/api/v1/processes/:name/logs/download", get(download_logs))
         .route("/api/v1/processes/:name/health", post(check_health))
         .route("/api/v1/stats", get(get_stats))
         .route("/api/v1/fs/browse", get(browse_fs))
@@ -278,6 +279,49 @@ async fn get_logs(
     let mgr = state.manager.read().await;
     match mgr.get_process_logs(&name, query.lines).await {
         Ok(logs) => Json(logs).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
+    }
+}
+
+async fn clear_logs(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let mgr = state.manager.read().await;
+    match mgr.clear_process_logs(&name).await {
+        Ok(()) => Json(ApiSuccess::new("日志已清空")).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
+    }
+}
+
+async fn download_logs(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<LogQuery>,
+) -> impl IntoResponse {
+    let mgr = state.manager.read().await;
+    match mgr.get_process_logs(&name, query.lines).await {
+        Ok(logs) => {
+            let mut content = String::new();
+            for entry in &logs {
+                let time = entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
+                let prefix = match &entry.stream {
+                    gugu_core::process::LogStream::Stdout => "OUT",
+                    gugu_core::process::LogStream::Stderr => "ERR",
+                    _ => "???",
+                };
+                content.push_str(&format!("[{time}] [{prefix}] {}\n", entry.line));
+            }
+            let filename = format!("{name}.log");
+            (
+                StatusCode::OK,
+                [
+                    ("content-type", "text/plain; charset=utf-8".to_string()),
+                    ("content-disposition", format!("attachment; filename=\"{filename}\"")),
+                ],
+                content,
+            ).into_response()
+        }
         Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }

@@ -5,9 +5,10 @@ pub mod ws;
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Router;
+use axum::middleware;
 use gugu_core::manager::SharedManager;
 use state::AppState;
 use std::net::SocketAddr;
@@ -35,20 +36,40 @@ async fn embedded_static_handler(req: Request) -> Response {
 pub async fn run_server(
     addr: SocketAddr,
     manager: SharedManager,
-    _web_dir: Option<String>,
+    api_key: Option<String>,
+    cors_origins: Vec<String>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let state = AppState::new(manager);
+    let state = AppState::new(manager, api_key, cors_origins);
+
+    let cors_layer = if state.cors_origins.is_empty() {
+        CorsLayer::permissive()
+    } else {
+        let origins: Vec<HeaderValue> = state
+            .cors_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    };
 
     let app = Router::new()
         .merge(api::routes())
         .merge(ws::routes())
-        .with_state(state)
-        .layer(CorsLayer::permissive())
-        .fallback(|req| async move { embedded_static_handler(req).await });
+        .layer(middleware::from_fn_with_state(state.clone(), api::auth_middleware))
+        .layer(cors_layer)
+        .fallback(|req| async move { embedded_static_handler(req).await })
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Web 服务已启动: http://{addr}");
+
+    if std::env::var("GUGU_API_KEY").is_ok() || listener.local_addr().is_ok() {
+        // ready
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

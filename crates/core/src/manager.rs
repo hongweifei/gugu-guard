@@ -155,6 +155,24 @@ impl ProcessManager {
         proc.restart().await
     }
 
+    pub async fn check_process_health(&mut self, name: &str) -> Result<bool> {
+        let hc = {
+            let proc = self
+                .processes
+                .get(name)
+                .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+            proc.config()
+                .health_check
+                .clone()
+                .ok_or_else(|| GuguError::ConfigError("该进程未配置健康检查".into()))?
+        };
+        let healthy = health::check_health(&hc).await;
+        if let Some(proc) = self.processes.get_mut(name) {
+            proc.set_healthy(Some(healthy));
+        }
+        Ok(healthy)
+    }
+
     pub async fn add_process(&mut self, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
         if self.processes.contains_key(&name) {
             return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
@@ -255,18 +273,26 @@ impl ProcessManager {
 
     pub async fn run_health_checks(&mut self) {
         let mut to_restart: Vec<String> = Vec::new();
+        let mut results: Vec<(String, bool)> = Vec::new();
         for (name, proc) in &self.processes {
             if !proc.is_running() {
                 continue;
             }
             if let Some(ref hc) = proc.config().health_check {
                 let healthy = health::check_health(hc).await;
+                results.push((name.clone(), healthy));
                 if !healthy {
                     tracing::warn!("[{}] 健康检查失败", name);
                     if proc.config().unhealthy_restart && proc.should_auto_restart() {
                         to_restart.push(name.clone());
                     }
                 }
+            }
+        }
+
+        for (name, healthy) in results {
+            if let Some(proc) = self.processes.get_mut(&name) {
+                proc.set_healthy(Some(healthy));
             }
         }
 

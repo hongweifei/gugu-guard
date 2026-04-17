@@ -45,6 +45,9 @@ pub struct ProcessInfo {
     pub restart_count: u32,
     pub auto_start: bool,
     pub auto_restart: bool,
+    pub has_health_check: bool,
+    pub unhealthy_restart: bool,
+    pub healthy: Option<bool>,
     pub started_at: Option<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
 }
@@ -71,6 +74,7 @@ pub struct ManagedProcess {
     status: ProcessStatus,
     restart_count: u32,
     crash_restart_count: u32,
+    healthy: Option<bool>,
     started_at: Option<DateTime<Utc>>,
     stdout_lines: Arc<Mutex<VecDeque<LogEntry>>>,
     stderr_lines: Arc<Mutex<VecDeque<LogEntry>>>,
@@ -86,6 +90,7 @@ impl ManagedProcess {
             status: ProcessStatus::Stopped,
             restart_count: 0,
             crash_restart_count: 0,
+            healthy: None,
             started_at: None,
             stdout_lines: Arc::new(Mutex::new(VecDeque::new())),
             stderr_lines: Arc::new(Mutex::new(VecDeque::new())),
@@ -329,6 +334,9 @@ impl ManagedProcess {
             restart_count: self.crash_restart_count,
             auto_start: self.config.auto_start,
             auto_restart: self.config.auto_restart,
+            has_health_check: self.config.health_check.is_some(),
+            unhealthy_restart: self.config.unhealthy_restart,
+            healthy: self.healthy,
             started_at: self.started_at,
             uptime_secs,
         }
@@ -382,6 +390,10 @@ impl ManagedProcess {
 
     pub fn set_status(&mut self, status: ProcessStatus) {
         self.status = status;
+    }
+
+    pub fn set_healthy(&mut self, healthy: Option<bool>) {
+        self.healthy = healthy;
     }
 }
 

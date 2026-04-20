@@ -75,7 +75,6 @@ pub struct ManagedProcess {
     config: ProcessConfig,
     child: Option<Child>,
     status: ProcessStatus,
-    restart_count: u32,
     crash_restart_count: u32,
     healthy: Option<bool>,
     started_at: Option<DateTime<Utc>>,
@@ -83,6 +82,7 @@ pub struct ManagedProcess {
     stderr_lines: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
     log_tasks: Vec<JoinHandle<()>>,
+    last_health_check: Option<std::time::Instant>,
 }
 
 impl ManagedProcess {
@@ -93,7 +93,6 @@ impl ManagedProcess {
             config,
             child: None,
             status: ProcessStatus::Stopped,
-            restart_count: 0,
             crash_restart_count: 0,
             healthy: None,
             started_at: None,
@@ -101,6 +100,7 @@ impl ManagedProcess {
             stderr_lines: Arc::new(Mutex::new(VecDeque::new())),
             log_tx,
             log_tasks: Vec::new(),
+            last_health_check: None,
         }
     }
 
@@ -212,7 +212,7 @@ impl ManagedProcess {
                 self.child = Some(child);
                 self.started_at = Some(Utc::now());
                 self.status = ProcessStatus::Running;
-                self.restart_count += 1;
+                self.last_health_check = None;
 
                 tracing::info!("[{}] 进程已启动 (PID: {:?})", self.name, pid);
                 Ok(())
@@ -404,6 +404,14 @@ impl ManagedProcess {
         self.healthy = healthy;
     }
 
+    pub fn last_health_check(&self) -> Option<std::time::Instant> {
+        self.last_health_check
+    }
+
+    pub fn set_last_health_check(&mut self, instant: Option<std::time::Instant>) {
+        self.last_health_check = instant;
+    }
+
     pub fn subscribe_logs(&self) -> broadcast::Receiver<LogEntry> {
         self.log_tx.subscribe()
     }
@@ -510,10 +518,8 @@ async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::Fi
     for i in (1..=5).rev() {
         let old = format!("{}.{}", p.display(), i);
         let old_path = std::path::Path::new(&old);
-        if old_path.exists() {
-            let next = format!("{}.{}", p.display(), i + 1);
-            let _ = tokio::fs::rename(old_path, &next).await;
-        }
+        let next = format!("{}.{}", p.display(), i + 1);
+        let _ = tokio::fs::rename(old_path, &next).await;
     }
     let _ = tokio::fs::rename(p, format!("{}.1", p.display())).await;
 

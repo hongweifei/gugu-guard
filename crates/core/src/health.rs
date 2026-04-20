@@ -1,5 +1,12 @@
 use crate::config::HealthCheckConfig;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 pub async fn check_health(config: &HealthCheckConfig) -> bool {
     let timeout = Duration::from_secs(config.timeout_secs);
@@ -12,7 +19,7 @@ pub async fn check_health(config: &HealthCheckConfig) -> bool {
                 .unwrap_or(false)
         }
         crate::config::HealthCheckType::Http { url } => {
-            reqwest::Client::new()
+            get_http_client()
                 .get(url)
                 .timeout(timeout)
                 .send()

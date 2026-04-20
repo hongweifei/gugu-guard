@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub daemon: DaemonConfig,
@@ -41,16 +41,7 @@ impl AppConfig {
     }
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-            processes: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     #[serde(default)]
     pub pid_file: Option<PathBuf>,
@@ -60,17 +51,6 @@ pub struct DaemonConfig {
     pub api_key: Option<String>,
     #[serde(default)]
     pub web: WebConfig,
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            pid_file: None,
-            log_dir: None,
-            api_key: None,
-            web: WebConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +132,18 @@ impl ProcessConfig {
             && self.working_dir == other.working_dir
             && self.env == other.env
     }
+
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.command.trim().is_empty() {
+            return Err(crate::error::GuguError::ConfigError(
+                "command 不能为空".into(),
+            ));
+        }
+        if let Some(ref hc) = self.health_check {
+            hc.validate()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +154,38 @@ pub struct HealthCheckConfig {
     pub interval_secs: u64,
     #[serde(default = "default_health_timeout")]
     pub timeout_secs: u64,
+}
+
+impl HealthCheckConfig {
+    pub fn validate(&self) -> crate::error::Result<()> {
+        match &self.check_type {
+            HealthCheckType::Tcp { port } => {
+                if *port == 0 {
+                    return Err(crate::error::GuguError::ConfigError(
+                        "健康检查端口不能为 0".into(),
+                    ));
+                }
+            }
+            HealthCheckType::Http { url } => {
+                if url.trim().is_empty() {
+                    return Err(crate::error::GuguError::ConfigError(
+                        "HTTP 健康检查 URL 不能为空".into(),
+                    ));
+                }
+            }
+        }
+        if self.interval_secs == 0 {
+            return Err(crate::error::GuguError::ConfigError(
+                "健康检查间隔不能为 0 秒".into(),
+            ));
+        }
+        if self.timeout_secs == 0 {
+            return Err(crate::error::GuguError::ConfigError(
+                "健康检查超时不能为 0 秒".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn default_health_interval() -> u64 {

@@ -1,4 +1,4 @@
-use crate::config::{AppConfig, DaemonConfig, ProcessConfig};
+use crate::config::{AppConfig, DaemonConfig, HealthCheckConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
 use crate::health;
 use crate::process::{ManagedProcess, ProcessInfo, LogEntry, ProcessStatus};
@@ -177,6 +177,7 @@ impl ProcessManager {
         if self.processes.contains_key(&name) {
             return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
         }
+        config.validate()?;
         let mut proc = ManagedProcess::new(name.clone(), config.clone());
         if start_now {
             proc.start().await?;
@@ -191,6 +192,8 @@ impl ProcessManager {
         if !self.processes.contains_key(name) {
             return Err(GuguError::ProcessNotFound(name.to_string()));
         }
+
+        config.validate()?;
 
         let was_running = self.processes.get(name).unwrap().is_running();
         let needs_restart = force_restart || !self.processes.get(name).unwrap().config().runtime_fields_eq(&config);
@@ -286,34 +289,56 @@ impl ProcessManager {
             if proc.is_running() && !proc.check_alive()
                 && proc.should_auto_restart()
             {
+                proc.set_status(ProcessStatus::Restarting);
+                proc.mark_crash_restart();
                 dead.push((name.clone(), proc.restart_delay()));
             }
         }
         dead
     }
 
-    pub async fn run_health_checks(&mut self) {
-        let mut to_restart: Vec<String> = Vec::new();
-        let mut results: Vec<(String, bool)> = Vec::new();
-        for (name, proc) in &self.processes {
-            if !proc.is_running() {
-                continue;
-            }
-            if let Some(ref hc) = proc.config().health_check {
-                let healthy = health::check_health(hc).await;
-                results.push((name.clone(), healthy));
-                if !healthy {
-                    tracing::warn!("[{}] 健康检查失败", name);
-                    if proc.config().unhealthy_restart && proc.should_auto_restart() {
-                        to_restart.push(name.clone());
+    pub async fn run_due_health_checks(&mut self) {
+        let now = std::time::Instant::now();
+
+        let to_check: Vec<(String, HealthCheckConfig, bool)> = {
+            let mut checks = Vec::new();
+            for (name, proc) in &mut self.processes {
+                if !proc.is_running() {
+                    continue;
+                }
+                let (hc, should_check, ur) = {
+                    let cfg = proc.config();
+                    match &cfg.health_check {
+                        Some(hc) => {
+                            let interval =
+                                std::time::Duration::from_secs(hc.interval_secs);
+                            let should = proc
+                                .last_health_check()
+                                .is_none_or(|last| now.duration_since(last) >= interval);
+                            (hc.clone(), should, cfg.unhealthy_restart)
+                        }
+                        None => continue,
                     }
+                };
+                if should_check {
+                    proc.set_last_health_check(Some(now));
+                    checks.push((name.clone(), hc, ur));
                 }
             }
-        }
+            checks
+        };
 
-        for (name, healthy) in results {
+        let mut to_restart: Vec<String> = Vec::new();
+        for (name, hc, unhealthy_restart) in to_check {
+            let healthy = health::check_health(&hc).await;
             if let Some(proc) = self.processes.get_mut(&name) {
                 proc.set_healthy(Some(healthy));
+            }
+            if !healthy {
+                tracing::warn!("[{}] 健康检查失败", name);
+                if unhealthy_restart {
+                    to_restart.push(name);
+                }
             }
         }
 
@@ -323,10 +348,12 @@ impl ProcessManager {
                 if proc.is_running() {
                     let _ = proc.stop().await;
                 }
-                proc.set_status(ProcessStatus::Restarting);
-                proc.mark_crash_restart();
-                if let Err(e) = proc.start().await {
-                    tracing::error!("[{}] 健康检查重启失败: {}", name, e);
+                if proc.should_auto_restart() {
+                    proc.set_status(ProcessStatus::Restarting);
+                    proc.mark_crash_restart();
+                    if let Err(e) = proc.start().await {
+                        tracing::error!("[{}] 健康检查重启失败: {}", name, e);
+                    }
                 }
             }
         }
@@ -352,6 +379,10 @@ impl ProcessManager {
         }
 
         for (name, config) in &new_config.processes {
+            if let Err(e) = config.validate() {
+                tracing::warn!("[{}] 配置验证失败，跳过: {}", name, e);
+                continue;
+            }
             if let Some(proc) = self.processes.get_mut(name) {
                 let was_running = proc.is_running();
                 let needs_restart = was_running && !proc.config().runtime_fields_eq(config);
@@ -420,8 +451,6 @@ pub async fn start_monitor(manager: SharedManager) {
                 let mut mgr = mgr_clone.write().await;
                 if let Some(proc) = mgr.processes.get_mut(&name) {
                     if !proc.is_running() {
-                        proc.set_status(ProcessStatus::Restarting);
-                        proc.mark_crash_restart();
                         if let Err(e) = proc.start().await {
                             tracing::error!("[{}] 自动重启失败: {}", name, e);
                         }
@@ -432,7 +461,7 @@ pub async fn start_monitor(manager: SharedManager) {
 
         {
             let mut mgr = manager.write().await;
-            mgr.run_health_checks().await;
+            mgr.run_due_health_checks().await;
         }
     }
 }

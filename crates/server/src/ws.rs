@@ -95,7 +95,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     }
                 }
                 if !log_buf.is_empty() {
-                    let entries: Vec<_> = log_buf.drain(..).collect();
+                    let entries: Vec<_> = std::mem::take(&mut log_buf);
                     let msg = json!({
                         "type": "logs",
                         "entries": entries,

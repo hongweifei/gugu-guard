@@ -87,14 +87,16 @@ pub async fn auth_middleware(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "));
 
-            if auth_header == Some(expected_key.as_str()) {
-                return next.run(req).await;
+            if let Some(key) = auth_header {
+                if constant_time_eq(key, expected_key) {
+                    return next.run(req).await;
+                }
             }
 
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(token) = pair.strip_prefix("token=") {
-                        if token == expected_key {
+                        if constant_time_eq(token, expected_key) {
                             return next.run(req).await;
                         }
                     }
@@ -105,6 +107,19 @@ pub async fn auth_middleware(
         }
     }
     next.run(req).await
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut result: u8 = 0;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 #[derive(Deserialize)]
@@ -368,7 +383,7 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     };
 
     let path_str = clean_path(&dir);
-    let parent = dir.parent().map(|p| clean_path(p));
+    let parent = dir.parent().map(clean_path);
 
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,

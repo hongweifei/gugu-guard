@@ -67,10 +67,6 @@ pub async fn run_server(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Web 服务已启动: http://{addr}");
 
-    if std::env::var("GUGU_API_KEY").is_ok() || listener.local_addr().is_ok() {
-        // ready
-    }
-
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = (&mut shutdown_rx).await;

@@ -11,9 +11,6 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
-tower = { workspace = true }
-futures = { workspace = true }
-tokio-stream = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 rust-embed = { workspace = true }

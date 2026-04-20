@@ -5,6 +5,9 @@ use gugu_core::config::AppConfig;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+mod windows_service;
+
 const SERVICE_NAME: &str = "GuguGuard";
 
 #[derive(Parser)]
@@ -21,6 +24,9 @@ struct Cli {
 
     #[arg(long, global = true)]
     api_key: Option<String>,
+
+    #[arg(long, global = true, hide = true)]
+    mode: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -29,10 +35,16 @@ enum Commands {
     Run,
 
     #[command(about = "注册为系统服务 (开机自启)")]
-    Install,
+    Install {
+        #[arg(short, long, default_value = "task")]
+        mode: String,
+    },
 
     #[command(about = "卸载系统服务")]
-    Uninstall,
+    Uninstall {
+        #[arg(short, long, default_value = "task")]
+        mode: String,
+    },
 
     #[command(about = "显示所有进程状态")]
     Status,
@@ -68,6 +80,8 @@ enum Commands {
         max_restarts: u32,
         #[arg(long, default_value_t = 5)]
         restart_delay: u64,
+        #[arg(long, default_value_t = 10)]
+        stop_timeout: u64,
         #[arg(long)]
         stdout_log: Option<String>,
         #[arg(long)]
@@ -127,9 +141,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run => run_daemon(&cli.config, cli.api_key.clone()).await,
-        Commands::Install => install_service(&cli.config),
-        Commands::Uninstall => uninstall_service(),
+        Commands::Run => {
+            if cli.mode.as_deref() == Some("service") {
+                #[cfg(windows)]
+                {
+                    return windows_service::start();
+                }
+                #[cfg(not(windows))]
+                {
+                    anyhow::bail!("Service 模式仅在 Windows 上可用");
+                }
+            }
+            run_daemon(&cli.config, cli.api_key.clone()).await
+        }
+        Commands::Install { mode } => install_service(&cli.config, mode),
+        Commands::Uninstall { mode } => uninstall_service(mode),
         _ => {
             let server_url = get_server_url(&cli)?;
             let api_key = get_api_key(&cli)?;
@@ -222,7 +248,7 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
 
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
-    let api_key = cli_api_key.or(config.daemon.api_key.clone());
+    let api_key = cli_api_key.or(config.daemon.api_key.clone()).or_else(|| std::env::var("GUGU_API_KEY").ok());
 
     tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
     tracing::info!("配置文件: {}", config_path.display());
@@ -333,7 +359,41 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
     Ok(())
 }
 
-fn install_service(config_path: &Path) -> Result<()> {
+fn install_service(config_path: &Path, mode: &str) -> Result<()> {
+    match mode {
+        "service" => {
+            #[cfg(windows)]
+            {
+                crate::windows_service::install(config_path)
+            }
+            #[cfg(not(windows))]
+            {
+                anyhow::bail!("Windows Service 仅在 Windows 上可用");
+            }
+        }
+        "task" => install_schtasks(config_path),
+        _ => anyhow::bail!("不支持的安装模式: {mode} (可选: task, service)"),
+    }
+}
+
+fn uninstall_service(mode: &str) -> Result<()> {
+    match mode {
+        "service" => {
+            #[cfg(windows)]
+            {
+                crate::windows_service::uninstall()
+            }
+            #[cfg(not(windows))]
+            {
+                anyhow::bail!("Windows Service 仅在 Windows 上可用");
+            }
+        }
+        "task" => uninstall_schtasks(),
+        _ => anyhow::bail!("不支持的卸载模式: {mode} (可选: task, service)"),
+    }
+}
+
+fn install_schtasks(config_path: &Path) -> Result<()> {
     let exe = std::env::current_exe()
         .context("无法获取当前可执行文件路径")?;
     let config_abs = std::fs::canonicalize(config_path)
@@ -406,7 +466,7 @@ fn install_service(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn uninstall_service() -> Result<()> {
+fn uninstall_schtasks() -> Result<()> {
     #[cfg(windows)]
     {
         let status = std::process::Command::new("schtasks")
@@ -481,7 +541,7 @@ async fn run_client(command: &Commands, server_url: &str, api_key: Option<&str>)
         Commands::Add {
             name, command, args, dir, env,
             no_auto_start, no_auto_restart, max_restarts,
-            restart_delay, stdout_log, stderr_log, start,
+            restart_delay, stop_timeout, stdout_log, stderr_log, start,
         } => {
             let mut env_map = HashMap::new();
             for e in env {
@@ -498,6 +558,7 @@ async fn run_client(command: &Commands, server_url: &str, api_key: Option<&str>)
                 "auto_restart": !no_auto_restart,
                 "max_restarts": max_restarts,
                 "restart_delay_secs": restart_delay,
+                "stop_timeout_secs": stop_timeout,
                 "stdout_log": stdout_log,
                 "stderr_log": stderr_log,
                 "start_now": start,
@@ -541,7 +602,7 @@ async fn run_client(command: &Commands, server_url: &str, api_key: Option<&str>)
             print_api_response(resp).await?;
         }
 
-        Commands::Run | Commands::Install | Commands::Uninstall => {
+        Commands::Run | Commands::Install { .. } | Commands::Uninstall { .. } => {
             unreachable!()
         }
     }

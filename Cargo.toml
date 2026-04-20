@@ -32,3 +32,4 @@ reqwest = { version = "0.12", features = ["json"] }
 comfy-table = "7"
 dirs = "6"
 rust-embed = "8"
+windows-service = "0.8"

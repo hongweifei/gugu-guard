@@ -22,7 +22,7 @@ fn my_service_main(arguments: Vec<OsString>) {
         .iter()
         .position(|a| a == "-c")
         .and_then(|i| arguments.get(i + 1))
-        .map(|s| std::path::PathBuf::from(s))
+        .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("gugu.toml"));
 
     if let Err(e) = run_service_inner(&config_path) {

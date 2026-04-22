@@ -124,6 +124,13 @@ impl ManagedProcess {
         matches!(self.status, ProcessStatus::Running | ProcessStatus::Starting)
     }
 
+    pub fn abort_log_tasks(&mut self) {
+        for handle in &self.log_tasks {
+            handle.abort();
+        }
+        self.log_tasks.clear();
+    }
+
     pub fn should_auto_restart(&self) -> bool {
         self.config.auto_restart && self.crash_restart_count < self.config.max_restarts
     }
@@ -146,7 +153,7 @@ impl ManagedProcess {
         }
 
         self.status = ProcessStatus::Starting;
-        self.log_tasks.clear();
+        self.abort_log_tasks();
 
         let full_cmd = if self.config.args.is_empty() {
             self.config.command.clone()
@@ -236,8 +243,9 @@ impl ManagedProcess {
                 {
                     #[allow(unused_imports)]
                     use std::os::windows::process::CommandExt;
+
                     let _ = tokio::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .args(["/PID", &pid.to_string(), "/T"])
                         .creation_flags(0x08000000)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -287,10 +295,7 @@ impl ManagedProcess {
             }
         }
 
-        for handle in &self.log_tasks {
-            handle.abort();
-        }
-        self.log_tasks.clear();
+        self.abort_log_tasks();
 
         self.child = None;
         self.status = ProcessStatus::Stopped;
@@ -315,12 +320,14 @@ impl ManagedProcess {
                         self.name,
                         status.code()
                     );
+                    self.abort_log_tasks();
                     self.child = None;
                     self.status = ProcessStatus::Stopped;
                     false
                 }
                 Ok(None) => true,
                 Err(_) => {
+                    self.abort_log_tasks();
                     self.child = None;
                     self.status = ProcessStatus::Failed("检查进程状态失败".into());
                     false
@@ -362,38 +369,43 @@ impl ManagedProcess {
         let take = lines.min(total);
         let skip = total.saturating_sub(take);
 
-        let mut result = Vec::with_capacity(total);
+        let mut result = Vec::with_capacity(take);
         let mut si = 0;
         let mut ei = 0;
 
+        let mut skipped = 0;
         while si < stdout.len() || ei < stderr.len() {
-            match (stdout.get(si), stderr.get(ei)) {
+            let entry = match (stdout.get(si), stderr.get(ei)) {
                 (Some(s), Some(e)) => {
                     if s.timestamp <= e.timestamp {
-                        result.push(s.clone());
                         si += 1;
+                        s.clone()
                     } else {
-                        result.push(e.clone());
                         ei += 1;
+                        e.clone()
                     }
                 }
                 (Some(s), None) => {
-                    result.push(s.clone());
                     si += 1;
+                    s.clone()
                 }
                 (None, Some(e)) => {
-                    result.push(e.clone());
                     ei += 1;
+                    e.clone()
                 }
                 (None, None) => break,
+            };
+
+            skipped += 1;
+            if skipped > skip {
+                result.push(entry);
+            }
+            if result.len() >= take {
+                break;
             }
         }
 
-        if skip > 0 {
-            result[skip..].to_vec()
-        } else {
-            result
-        }
+        result
     }
 
     pub fn set_status(&mut self, status: ProcessStatus) {

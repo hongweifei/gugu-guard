@@ -159,7 +159,7 @@ pub struct HealthCheckConfig {
 impl HealthCheckConfig {
     pub fn validate(&self) -> crate::error::Result<()> {
         match &self.check_type {
-            HealthCheckType::Tcp { port } => {
+            HealthCheckType::Tcp { host: _, port } => {
                 if *port == 0 {
                     return Err(crate::error::GuguError::ConfigError(
                         "健康检查端口不能为 0".into(),
@@ -198,6 +198,6 @@ fn default_health_timeout() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum HealthCheckType {
-    Tcp { port: u16 },
+    Tcp { host: Option<String>, port: u16 },
     Http { url: String },
 }

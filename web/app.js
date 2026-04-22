@@ -351,6 +351,8 @@ function collectHealthCheck() {
     if (type === 'tcp') {
         const port = parseInt(document.getElementById('f-hc-port').value);
         if (!port) return null;
+        const host = document.getElementById('f-hc-host').value.trim();
+        if (host) hc.host = host;
         hc.port = port;
     } else {
         const url = document.getElementById('f-hc-url').value.trim();
@@ -372,7 +374,10 @@ function fillHealthCheck(cfg) {
     }
     const type = hc.type || '';
     document.getElementById('f-hc-type').value = type;
-    if (type === 'tcp') document.getElementById('f-hc-port').value = hc.port || '';
+    if (type === 'tcp') {
+        document.getElementById('f-hc-host').value = hc.host || '';
+        document.getElementById('f-hc-port').value = hc.port || '';
+    }
     if (type === 'http') document.getElementById('f-hc-url').value = hc.url || '';
     document.getElementById('f-hc-interval').value = hc.interval_secs || 30;
     document.getElementById('f-hc-timeout').value = hc.timeout_secs || 5;
@@ -382,6 +387,7 @@ function fillHealthCheck(cfg) {
 
 function resetHealthCheck() {
     document.getElementById('f-hc-type').value = '';
+    document.getElementById('f-hc-host').value = '';
     document.getElementById('f-hc-port').value = '';
     document.getElementById('f-hc-url').value = '';
     document.getElementById('f-hc-interval').value = 30;

@@ -25,6 +25,7 @@ stderr_log = "logs/example-web-stderr.log"
 
 [processes.example-web.health_check]
 type = "tcp"
+host = "127.0.0.1"  # 可选，默认 127.0.0.1
 port = 8080
 interval_secs = 10
 timeout_secs = 3

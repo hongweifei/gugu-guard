@@ -11,8 +11,9 @@ fn get_http_client() -> &'static reqwest::Client {
 pub async fn check_health(config: &HealthCheckConfig) -> bool {
     let timeout = Duration::from_secs(config.timeout_secs);
     match &config.check_type {
-        crate::config::HealthCheckType::Tcp { port } => {
-            let addr = format!("127.0.0.1:{port}");
+        crate::config::HealthCheckType::Tcp { host, port } => {
+            let host = host.as_deref().unwrap_or("127.0.0.1");
+            let addr = format!("{host}:{port}");
             tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr))
                 .await
                 .map(|r| r.is_ok())

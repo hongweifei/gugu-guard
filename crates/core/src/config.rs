@@ -11,6 +11,10 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// 加载配置文件，文件不存在时返回默认配置。
+    ///
+    /// # Errors
+    /// 文件存在但读取失败或解析失败时返回 `GuguError::ConfigError`。
     pub fn load(path: &std::path::Path) -> crate::error::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -24,6 +28,10 @@ impl AppConfig {
         Ok(config)
     }
 
+    /// 将配置保存到文件。
+    ///
+    /// # Errors
+    /// 创建目录、序列化或写入失败时返回 `GuguError::ConfigError`。
     pub fn save(&self, path: &std::path::Path) -> crate::error::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -44,6 +52,7 @@ impl AppConfig {
         }
     }
 
+    #[must_use]
     pub fn server_addr(&self) -> String {
         let addr = self.daemon.web.addr.as_deref().unwrap_or("127.0.0.1");
         let port = self.daemon.web.port.unwrap_or(9090);
@@ -130,6 +139,7 @@ pub fn default_stop_timeout() -> u64 {
 }
 
 impl ProcessConfig {
+    #[must_use]
     pub fn full_command(&self) -> String {
         if self.args.is_empty() {
             self.command.clone()
@@ -138,6 +148,7 @@ impl ProcessConfig {
         }
     }
 
+    #[must_use]
     pub fn runtime_fields_eq(&self, other: &Self) -> bool {
         self.command == other.command
             && self.args == other.args
@@ -146,6 +157,10 @@ impl ProcessConfig {
             && self.stop_command == other.stop_command
     }
 
+    /// 校验进程配置合法性。
+    ///
+    /// # Errors
+    /// command 为空或健康检查配置不合法时返回 `GuguError::ConfigError`。
     pub fn validate(&self) -> crate::error::Result<()> {
         if self.command.trim().is_empty() {
             return Err(crate::error::GuguError::ConfigError(
@@ -182,6 +197,10 @@ pub struct HealthCheckConfig {
 }
 
 impl HealthCheckConfig {
+    /// 校验健康检查配置合法性。
+    ///
+    /// # Errors
+    /// 端口为 0、URL 为空、间隔或超时为 0 时返回 `GuguError::ConfigError`。
     pub fn validate(&self) -> crate::error::Result<()> {
         match &self.check_type {
             HealthCheckType::Tcp { host: _, port } => {
@@ -227,12 +246,14 @@ pub enum HealthCheckType {
     Http { url: String },
 }
 
+#[must_use]
 pub fn canonicalize_clean(path: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(path)
         .map(|p| strip_unc_prefix(&p))
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+#[must_use]
 pub fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     let s = path.to_string_lossy();
     match s.strip_prefix(r"\\?\UNC\") {
@@ -244,6 +265,7 @@ pub fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     }
 }
 
+#[must_use]
 pub fn resolve_relative_path(path: &std::path::Path, base: &std::path::Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -252,6 +274,7 @@ pub fn resolve_relative_path(path: &std::path::Path, base: &std::path::Path) -> 
     }
 }
 
+#[must_use]
 pub fn path_to_forward_slashes(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }

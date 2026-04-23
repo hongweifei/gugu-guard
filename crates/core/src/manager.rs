@@ -57,10 +57,12 @@ pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Re
     }
 
     if result.len() != processes.len() {
+        let result_set: std::collections::HashSet<&str> =
+            result.iter().map(String::as_str).collect();
         let remaining: Vec<&str> = processes
             .keys()
-            .filter(|k| !result.contains(&k.to_string()))
-            .map(|k| k.as_str())
+            .filter(|k| !result_set.contains(k.as_str()))
+            .map(String::as_str)
             .collect();
         return Err(GuguError::CyclicDependency(
             format!("检测到循环依赖: {}", remaining.join(", "))
@@ -114,6 +116,7 @@ impl ProcessManager {
         c
     }
 
+    #[must_use]
     pub fn shared(self) -> SharedManager {
         Arc::new(RwLock::new(self))
     }
@@ -225,23 +228,23 @@ impl ProcessManager {
 
         config.validate()?;
 
-        // 先读取需要的信息，避免多次查找
-        let was_running = self.processes.get(name).expect("checked above").is_running();
+        let was_running = self.processes[name].is_running();
         let needs_restart =
-            force_restart || !self.processes.get(name).expect("checked above").config().runtime_fields_eq(&config);
+            force_restart || !self.processes[name].config().runtime_fields_eq(&config);
 
         if needs_restart && was_running {
-            self.processes.get_mut(name).expect("checked above").stop().await?;
+            self.processes.get_mut(name).unwrap().stop().await?;
         }
 
-        *self.processes.get_mut(name).expect("checked above").config_mut() = config;
+        self.processes.get_mut(name).unwrap().config_mut();
+        *self.processes.get_mut(name).unwrap().config_mut() = config;
 
         if let Some(ref new) = new_name {
             if new != name {
                 if self.processes.contains_key(new) {
                     return Err(GuguError::ConfigError(format!("进程 '{new}' 已存在")));
                 }
-                let mut proc = self.processes.remove(name).expect("checked above");
+                let mut proc = self.processes.remove(name).unwrap();
                 proc.rename(new.clone());
                 self.processes.insert(new.clone(), proc);
                 tracing::info!("[{}] 进程已改名为 [{}]", name, new);
@@ -274,16 +277,17 @@ impl ProcessManager {
         Ok(())
     }
 
+    #[must_use]
     pub fn list_processes(&self) -> Vec<ProcessInfo> {
-        self.processes.values().map(|p| p.info()).collect()
+        self.processes.values().map(ManagedProcess::info).collect()
     }
 
     pub fn get_process_info(&self, name: &str) -> Option<ProcessInfo> {
-        self.processes.get(name).map(|p| p.info())
+        self.processes.get(name).map(ManagedProcess::info)
     }
 
     pub fn get_process_config(&self, name: &str) -> Option<&ProcessConfig> {
-        self.processes.get(name).map(|p| p.config())
+        self.processes.get(name).map(ManagedProcess::config)
     }
 
     pub async fn get_process_logs(&self, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
@@ -311,6 +315,7 @@ impl ProcessManager {
         Ok(proc.subscribe_logs())
     }
 
+    #[must_use]
     pub fn all_process_names(&self) -> Vec<String> {
         self.processes.keys().cloned().collect()
     }

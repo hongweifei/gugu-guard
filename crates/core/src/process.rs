@@ -1,17 +1,22 @@
-use crate::config::ProcessConfig;
-use crate::error::{GuguError, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
-use std::sync::Arc;
+
+use crate::config::ProcessConfig;
+use crate::error::{GuguError, Result};
 
 const MAX_LOG_LINES: usize = 1000;
 const LOG_BROADCAST_CAPACITY: usize = 256;
+// CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -104,10 +109,12 @@ impl ManagedProcess {
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn config(&self) -> &ProcessConfig {
         &self.config
     }
@@ -120,6 +127,7 @@ impl ManagedProcess {
         self.name = new_name;
     }
 
+    #[must_use]
     pub fn is_running(&self) -> bool {
         matches!(self.status, ProcessStatus::Running | ProcessStatus::Starting)
     }
@@ -131,10 +139,12 @@ impl ManagedProcess {
         self.log_tasks.clear();
     }
 
+    #[must_use]
     pub fn should_auto_restart(&self) -> bool {
         self.config.auto_restart && self.crash_restart_count < self.config.max_restarts
     }
 
+    #[must_use]
     pub fn restart_delay(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.config.restart_delay_secs)
     }
@@ -167,18 +177,12 @@ impl ManagedProcess {
         {
             cmd = Command::new("cmd");
             cmd.arg("/C").arg(&full_cmd);
-            #[allow(unused_imports)]
-            use std::os::windows::process::CommandExt;
-            // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-            // CREATE_NEW_PROCESS_GROUP 使子进程形成独立进程组，
-            // 便于 taskkill /T 终止整个进程树
-            cmd.creation_flags(0x08000000 | 0x00000200);
+            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
         }
         #[cfg(unix)]
         {
             cmd = Command::new("sh");
             cmd.arg("-c").arg(&full_cmd);
-            use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
 
@@ -255,19 +259,16 @@ impl ManagedProcess {
             }
 
             let timeout = std::time::Duration::from_secs(timeout_secs);
-            match tokio::time::timeout(timeout, child.wait()).await {
-                Ok(Ok(status)) => {
-                    tracing::info!(
-                        "[{}] 进程已停止 (退出码: {:?})",
-                        name,
-                        status.code()
-                    );
-                }
-                _ => {
-                    force_kill(child).await;
-                    let _ = child.wait().await;
-                    tracing::warn!("[{}] 进程等待超时，已强制终止", name);
-                }
+            if let Ok(Ok(status)) = tokio::time::timeout(timeout, child.wait()).await {
+                tracing::info!(
+                    "[{}] 进程已停止 (退出码: {:?})",
+                    name,
+                    status.code()
+                );
+            } else {
+                force_kill(child).await;
+                let _ = child.wait().await;
+                tracing::warn!("[{}] 进程等待超时，已强制终止", name);
             }
         }
 
@@ -314,6 +315,7 @@ impl ManagedProcess {
         }
     }
 
+    #[must_use]
     pub fn info(&self) -> ProcessInfo {
         let uptime_secs = self.started_at.map(|t| (Utc::now() - t).num_seconds());
         ProcessInfo {
@@ -321,7 +323,7 @@ impl ManagedProcess {
             command: self.config.command.clone(),
             args: self.config.args.clone(),
             status: self.status.clone(),
-            pid: self.child.as_ref().and_then(|c| c.id()),
+            pid: self.child.as_ref().and_then(Child::id),
             restart_count: self.crash_restart_count,
             auto_start: self.config.auto_start,
             auto_restart: self.config.auto_restart,
@@ -416,9 +418,7 @@ async fn run_stop_command(name: &str, stop_cmd: &str, working_dir: Option<&std::
     {
         cmd = tokio::process::Command::new("cmd");
         cmd.arg("/C").arg(stop_cmd);
-        #[allow(unused_imports)]
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     #[cfg(unix)]
     {
@@ -445,12 +445,9 @@ async fn send_default_stop_signal(pid: Option<u32>) {
     if let Some(pid) = pid {
         #[cfg(windows)]
         {
-            #[allow(unused_imports)]
-            use std::os::windows::process::CommandExt;
-            // 先尝试温和终止进程树（向进程树发送 CTRL_BREAK_EVENT 等效）
             let _ = tokio::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T"])
-                .creation_flags(0x08000000)
+                .creation_flags(CREATE_NO_WINDOW)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -475,11 +472,9 @@ async fn force_kill(child: &mut Child) {
     }
     #[cfg(windows)]
     {
-        #[allow(unused_imports)]
-        use std::os::windows::process::CommandExt;
         let _ = tokio::process::Command::new("taskkill")
             .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
-            .creation_flags(0x08000000)
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -550,35 +545,29 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
 }
 
 async fn open_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
-    match path {
-        Some(p) => {
-            if let Some(parent) = p.parent() {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                    tracing::debug!("创建日志目录失败 {}: {}", parent.display(), e);
-                }
-            }
-            match tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(p)
-                .await
-            {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    tracing::debug!("打开日志文件失败 {}: {}", p.display(), e);
-                    None
-                }
-            }
+    let p = path?;
+
+    if let Some(parent) = p.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            tracing::debug!("创建日志目录失败 {}: {}", parent.display(), e);
         }
-        None => None,
+    }
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .await
+    {
+        Ok(f) => Some(f),
+        Err(e) => {
+            tracing::debug!("打开日志文件失败 {}: {}", p.display(), e);
+            None
+        }
     }
 }
 
 async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
-    let p = match path {
-        Some(p) => p,
-        None => return None,
-    };
+    let p = path?;
 
     for i in (1..=5).rev() {
         let old = append_suffix(p, i);

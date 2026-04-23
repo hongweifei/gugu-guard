@@ -112,11 +112,12 @@ pub async fn auth_middleware(
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
-    if a_bytes.len() != b_bytes.len() {
-        return false;
-    }
-    let mut result: u8 = 0;
-    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+    let len_eq = a_bytes.len() == b_bytes.len();
+    let mut result: u8 = if len_eq { 0 } else { 0xff };
+    let max_len = a_bytes.len().max(b_bytes.len());
+    for i in 0..max_len {
+        let x = a_bytes.get(i).copied().unwrap_or(0);
+        let y = b_bytes.get(i).copied().unwrap_or(0);
         result |= x ^ y;
     }
     result == 0
@@ -378,12 +379,23 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     let raw = query.path.unwrap_or_else(|| ".".into());
     let dir = PathBuf::from(&raw);
 
-    let dir = if dir.is_relative() {
-        let joined = std::env::current_dir().unwrap_or_default().join(&dir);
-        gugu_core::config::canonicalize_clean(&joined)
-    } else {
-        gugu_core::config::canonicalize_clean(&dir)
+    // 规范化路径，拒绝空路径
+    let dir = {
+        let resolved = if dir.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(&dir)
+        } else {
+            dir
+        };
+        match std::fs::canonicalize(&resolved) {
+            Ok(p) => gugu_core::config::strip_unc_prefix(&p),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiError::new(format!("路径不存在: {e}")))).into_response(),
+        }
     };
+
+    // 只允许目录
+    if !dir.is_dir() {
+        return (StatusCode::BAD_REQUEST, Json(ApiError::new("路径不是目录"))).into_response();
+    }
 
     let path_str = clean_path(&dir);
     let parent = dir.parent().map(clean_path);

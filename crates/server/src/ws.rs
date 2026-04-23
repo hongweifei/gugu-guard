@@ -88,7 +88,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                             Err(broadcast::error::TryRecvError::Empty) => break,
                             Err(broadcast::error::TryRecvError::Lagged(n)) => {
                                 tracing::debug!("[{}] 日志广播落后 {} 条，已跳过", name, n);
-                                break;
+                                continue;
                             }
                             Err(broadcast::error::TryRecvError::Closed) => break,
                         }

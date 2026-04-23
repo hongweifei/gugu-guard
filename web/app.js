@@ -27,12 +27,12 @@ async function api(method, path, body) {
     return resp.json();
 }
 
-function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function fmtTime(s) { if (s == null) return '-'; return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor((s%3600)/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }
 
 function statusOf(p) {
     const isObj = typeof p.status === 'object' && p.status !== null;
-    const raw = isObj ? Object.keys(p.status)[0] : p.status;
+    const raw = isObj ? Object.keys(p.status)[0] : (typeof p.status === 'string' ? p.status : 'stopped');
     const map = { running:['running','运行中'], stopped:['stopped','已停止'], starting:['starting','启动中'], failed:['failed','失败'], restarting:['restarting','重启中'] };
     const m = map[raw] || ['stopped', raw];
     const detail = isObj && raw === 'failed' ? ': ' + (p.status.failed || Object.values(p.status)[0] || '') : '';
@@ -108,7 +108,7 @@ function buildCard(p, isNew) {
         hcHtml = `<span class="pcard-tag hc ${cls}" title="健康检查: ${label}">HC ${label}</span>`;
     }
     const urTag = p.unhealthy_restart ? '<span class="pcard-tag ur" title="失败自动重启">AR</span>' : '';
-    const hcBtn = p.has_health_check ? `<button class="btn btn-hc" onclick="doHealthCheck('${p.name}')" title="手动健康检查">检查</button>` : '';
+    const hcBtn = p.has_health_check ? `<button class="btn btn-hc" data-action="health" data-name="${esc(p.name)}" title="手动健康检查">检查</button>` : '';
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
@@ -120,13 +120,13 @@ function buildCard(p, isNew) {
             <div class="pcard-meta-item pcard-cmd"><span class="pcard-meta-label">命令</span><span class="pcard-meta-val" title="${esc(cmd)}">${esc(cmd)}</span></div>
         </div>
         <div class="pcard-actions">
-            <button class="btn act-start" onclick="doAct('start','${p.name}')" ${run?'disabled':''}>启动</button>
-            <button class="btn act-stop" onclick="doAct('stop','${p.name}')" ${!run?'disabled':''}>停止</button>
-            <button class="btn act-restart" onclick="doAct('restart','${p.name}')">重启</button>
+            <button class="btn act-start" data-action="start" data-name="${esc(p.name)}" ${run?'disabled':''}>启动</button>
+            <button class="btn act-stop" data-action="stop" data-name="${esc(p.name)}" ${!run?'disabled':''}>停止</button>
+            <button class="btn act-restart" data-action="restart" data-name="${esc(p.name)}">重启</button>
             ${hcBtn}
-            <button class="btn act-logs" onclick="showLogs('${p.name}')">日志</button>
-            <button class="btn" onclick="editProc('${p.name}')">编辑</button>
-            <button class="btn act-delete" onclick="askRemove('${p.name}')">删除</button>
+            <button class="btn act-logs" data-action="logs" data-name="${esc(p.name)}">日志</button>
+            <button class="btn" data-action="edit" data-name="${esc(p.name)}">编辑</button>
+            <button class="btn act-delete" data-action="remove" data-name="${esc(p.name)}">删除</button>
         </div>
     </div>`;
 }
@@ -660,6 +660,22 @@ document.getElementById('search-input').oninput = (e) => {
     searchQuery = e.target.value.toLowerCase().trim();
     render(true);
 };
+
+// 事件委托：进程卡片上的按钮
+document.getElementById('process-grid').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const name = btn.dataset.name;
+    if (!action || !name) return;
+    switch (action) {
+        case 'start': case 'stop': case 'restart': doAct(action, name); break;
+        case 'health': doHealthCheck(name); break;
+        case 'logs': showLogs(name); break;
+        case 'edit': editProc(name); break;
+        case 'remove': askRemove(name); break;
+    }
+});
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

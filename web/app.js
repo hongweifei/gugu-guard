@@ -427,6 +427,7 @@ document.getElementById('f-hc-type').addEventListener('change', toggleHcFields);
 
 let fsCallback = null;
 let fsCurrentPath = '';
+let fsCurrentParent = null;
 let fsSelectedItem = null;
 
 let fsListEl = null;
@@ -439,6 +440,7 @@ async function fsBrowse(path) {
     try {
         const data = await api('GET', `/fs/browse?path=${encodeURIComponent(path)}`);
         fsCurrentPath = data.path || path;
+        fsCurrentParent = data.parent || null;
         document.getElementById('fs-path').value = fsCurrentPath;
         if (!data.entries?.length) {
             fsListEl.innerHTML = '<div class="fs-empty">空目录</div>';
@@ -512,8 +514,7 @@ document.getElementById('fs-cancel').onclick = () => { fsCallback = null; docume
 document.getElementById('fs-confirm').onclick = closeFsBrowser;
 document.getElementById('fs-go').onclick = () => fsBrowse(document.getElementById('fs-path').value.trim());
 document.getElementById('fs-up').onclick = () => {
-    const parent = fsCurrentPath.replace(/[\\\/][^\\\/]+[\\\/]?$/, '');
-    if (parent) fsBrowse(parent);
+    if (fsCurrentParent) fsBrowse(fsCurrentParent);
 };
 document.getElementById('fs-path').onkeydown = (e) => { if (e.key === 'Enter') fsBrowse(e.target.value.trim()); };
 

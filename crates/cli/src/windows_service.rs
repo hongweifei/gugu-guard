@@ -10,8 +10,6 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::{define_windows_service, service_dispatcher};
 
-use gugu_core::config::AppConfig;
-
 const SERVICE_NAME: &str = "GuguGuard";
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
@@ -35,6 +33,24 @@ pub fn start() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("启动 Service Dispatcher 失败: {}", e))
 }
 
+fn set_status(
+    status_handle: &windows_service::service_control_handler::ServiceStatusHandle,
+    state: ServiceState,
+    controls_accepted: ServiceControlAccept,
+    exit_code: u32,
+    wait_hint: Duration,
+) {
+    let _ = status_handle.set_service_status(ServiceStatus {
+        service_type: SERVICE_TYPE,
+        current_state: state,
+        controls_accepted,
+        exit_code: ServiceExitCode::Win32(exit_code),
+        checkpoint: 0,
+        wait_hint,
+        process_id: None,
+    });
+}
+
 fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<()> {
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
@@ -51,15 +67,7 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
 
     let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
 
-    status_handle.set_service_status(ServiceStatus {
-        service_type: SERVICE_TYPE,
-        current_state: ServiceState::StartPending,
-        controls_accepted: ServiceControlAccept::empty(),
-        exit_code: ServiceExitCode::Win32(0),
-        checkpoint: 0,
-        wait_hint: Duration::from_secs(5),
-        process_id: None,
-    })?;
+    set_status(&status_handle, ServiceState::StartPending, ServiceControlAccept::empty(), 0, Duration::from_secs(5));
 
     let rt = tokio::runtime::Runtime::new().expect("无法创建 tokio runtime");
     rt.block_on(async {
@@ -70,85 +78,16 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
             )
             .init();
 
-        let config = match AppConfig::load(config_path) {
-            Ok(c) => c,
+        let handles = match crate::daemon::run_core(config_path, None).await {
+            Ok(h) => h,
             Err(e) => {
-                tracing::error!("加载配置文件失败: {}", e);
-                let _ = status_handle.set_service_status(ServiceStatus {
-                    service_type: SERVICE_TYPE,
-                    current_state: ServiceState::Stopped,
-                    controls_accepted: ServiceControlAccept::empty(),
-                    exit_code: ServiceExitCode::Win32(1),
-                    checkpoint: 0,
-                    wait_hint: Duration::default(),
-                    process_id: None,
-                });
+                tracing::error!("启动核心失败: {}", e);
+                set_status(&status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 1, Duration::default());
                 return;
             }
         };
 
-        let effective_api_key = config.daemon.api_key.clone().or_else(|| std::env::var("GUGU_API_KEY").ok());
-
-        tracing::info!("咕咕鸽进程守护 v{} (Service 模式) 启动中...", env!("CARGO_PKG_VERSION"));
-        tracing::info!("配置文件: {}", config_path.display());
-
-        let manager = gugu_core::ProcessManager::new(&config, Some(config_path.to_path_buf()));
-        let shared = manager.shared();
-
-        {
-            let mut mgr = shared.write().await;
-            mgr.start_all().await;
-        }
-
-        let monitor_manager = shared.clone();
-        tokio::spawn(async move {
-            gugu_core::manager::start_monitor(monitor_manager).await;
-        });
-
-        let addr_str = config.server_addr();
-        let addr: std::net::SocketAddr = match addr_str.parse() {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::error!("解析地址失败 {}: {}", addr_str, e);
-                let _ = status_handle.set_service_status(ServiceStatus {
-                    service_type: SERVICE_TYPE,
-                    current_state: ServiceState::Stopped,
-                    controls_accepted: ServiceControlAccept::empty(),
-                    exit_code: ServiceExitCode::Win32(1),
-                    checkpoint: 0,
-                    wait_hint: Duration::default(),
-                    process_id: None,
-                });
-                return;
-            }
-        };
-
-        let (web_shutdown_tx, web_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-        let server_shared = shared.clone();
-        let server_api_key = effective_api_key;
-        let server_cors_origins = config.daemon.web.cors_origins.clone();
-        let server_handle = tokio::spawn(async move {
-            if let Err(e) = gugu_server::run_server(
-                addr,
-                server_shared,
-                server_api_key,
-                server_cors_origins,
-                web_shutdown_rx,
-            ).await {
-                tracing::error!("Web 服务错误: {}", e);
-            }
-        });
-
-        let _ = status_handle.set_service_status(ServiceStatus {
-            service_type: SERVICE_TYPE,
-            current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        });
+        set_status(&status_handle, ServiceState::Running, ServiceControlAccept::STOP, 0, Duration::default());
 
         loop {
             match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
@@ -157,41 +96,11 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
             }
         }
 
-        tracing::info!("正在优雅停止所有进程...");
-        let _ = status_handle.set_service_status(ServiceStatus {
-            service_type: SERVICE_TYPE,
-            current_state: ServiceState::StopPending,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::from_secs(10),
-            process_id: None,
-        });
+        set_status(&status_handle, ServiceState::StopPending, ServiceControlAccept::empty(), 0, Duration::from_secs(10));
 
-        let _ = web_shutdown_tx.send(());
-        {
-            let mut mgr = shared.write().await;
-            mgr.stop_all().await;
-        }
+        crate::daemon::graceful_shutdown(handles).await;
 
-        match tokio::time::timeout(Duration::from_secs(5), server_handle).await {
-            Ok(_) => {}
-            Err(_) => {
-                tracing::warn!("Web 服务关闭超时，强制终止");
-            }
-        }
-
-        let _ = status_handle.set_service_status(ServiceStatus {
-            service_type: SERVICE_TYPE,
-            current_state: ServiceState::Stopped,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        });
-
-        tracing::info!("咕咕鸽进程守护已安全停止");
+        set_status(&status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 0, Duration::default());
     });
 
     Ok(())

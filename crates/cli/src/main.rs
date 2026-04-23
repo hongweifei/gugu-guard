@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 mod windows_service;
+mod daemon;
 
 const SERVICE_NAME: &str = "GuguGuard";
 
@@ -183,62 +184,6 @@ fn get_api_key(cli: &Cli) -> Result<Option<String>> {
     Ok(config.and_then(|c| c.daemon.api_key))
 }
 
-fn pid_path(config: &AppConfig, config_path: &Path) -> PathBuf {
-    let config_dir = config_path.parent().unwrap_or(Path::new("."));
-    match config.daemon.pid_file {
-        Some(ref pid_file) => gugu_core::config::resolve_relative_path(pid_file, config_dir),
-        None => config_dir.join("gugu.pid"),
-    }
-}
-
-fn current_pid() -> u32 {
-    std::process::id()
-}
-
-fn is_pid_running(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        let output = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-            .output();
-        match output {
-            Ok(o) => {
-                let s = String::from_utf8_lossy(&o.stdout);
-                let quoted = format!("\"{pid}\"");
-                s.contains(&quoted)
-            }
-            Err(_) => false,
-        }
-    }
-    #[cfg(unix)]
-    {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
-}
-
-fn write_pid_file(path: &Path) -> Result<()> {
-    if path.exists() {
-        let content = std::fs::read_to_string(path).unwrap_or_default();
-        if let Ok(old_pid) = content.trim().parse::<u32>() {
-            if old_pid != current_pid() && is_pid_running(old_pid) {
-                anyhow::bail!(
-                    "另一个守护进程正在运行 (PID: {old_pid})，请先停止它或删除 {}",
-                    path.display()
-                );
-            }
-        }
-    }
-    std::fs::write(path, current_pid().to_string())?;
-    tracing::debug!("PID 文件已写入: {} (PID: {})", path.display(), current_pid());
-    Ok(())
-}
-
-fn remove_pid_file(path: &Path) {
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
-}
-
 async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -247,54 +192,11 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
         )
         .init();
 
-    let config = AppConfig::load(config_path).context("加载配置文件失败")?;
-
-    let pid = pid_path(&config, config_path);
-    write_pid_file(&pid)?;
-
-    let api_key = cli_api_key.or(config.daemon.api_key.clone()).or_else(|| std::env::var("GUGU_API_KEY").ok());
-
-    tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
-    tracing::info!("配置文件: {}", config_path.display());
-    tracing::info!("进程 PID: {}", current_pid());
-
-    if api_key.is_some() {
-        tracing::info!("API Key 认证已启用");
-    }
-
-    let manager = gugu_core::ProcessManager::new(&config, Some(config_path.to_path_buf()));
-    let shared = manager.shared();
-
-    {
-        let mut mgr = shared.write().await;
-        mgr.start_all().await;
-    }
-
-    let monitor_manager = shared.clone();
-    tokio::spawn(async move {
-        gugu_core::manager::start_monitor(monitor_manager).await;
-    });
-
-    let addr_str = config.server_addr();
-    let addr: std::net::SocketAddr = addr_str.parse()
-        .context(format!("解析地址失败: {addr_str}"))?;
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    let server_shared = shared.clone();
-    let server_api_key = api_key;
-    let server_cors_origins = config.daemon.web.cors_origins.clone();
-    let server_handle = tokio::spawn(async move {
-        if let Err(e) = gugu_server::run_server(
-            addr,
-            server_shared,
-            server_api_key,
-            server_cors_origins,
-            shutdown_rx,
-        ).await {
-            tracing::error!("Web 服务错误: {}", e);
-        }
-    });
+    let handles = daemon::run_core(config_path, cli_api_key).await?;
+    #[cfg(unix)]
+    let shared = handles.shared.clone();
+    #[cfg(unix)]
+    let config_path_owned = config_path.to_path_buf();
 
     #[cfg(unix)]
     {
@@ -317,7 +219,7 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                 }
                 _ = sighup.recv() => {
                     tracing::info!("收到 SIGHUP，重新加载配置...");
-                    let reload_config = match AppConfig::load(config_path) {
+                    let reload_config = match AppConfig::load(&config_path_owned) {
                         Ok(c) => c,
                         Err(e) => {
                             tracing::error!("重载配置文件失败: {}", e);
@@ -340,26 +242,7 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
         tracing::info!("收到 Ctrl+C 信号");
     }
 
-    tracing::info!("正在优雅停止所有进程...");
-    let _ = shutdown_tx.send(());
-
-    {
-        let mut mgr = shared.write().await;
-        mgr.stop_all().await;
-    }
-
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        server_handle,
-    ).await {
-        Ok(_) => {}
-        Err(_) => {
-            tracing::warn!("Web 服务关闭超时，强制终止");
-        }
-    }
-
-    remove_pid_file(&pid);
-    tracing::info!("咕咕鸽进程守护已安全停止");
+    daemon::graceful_shutdown(handles).await;
     Ok(())
 }
 

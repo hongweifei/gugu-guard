@@ -85,12 +85,10 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                                 e.process_name = Some(name.clone());
                                 log_buf.push(e);
                             }
-                            Err(broadcast::error::TryRecvError::Empty) => break,
                             Err(broadcast::error::TryRecvError::Lagged(n)) => {
                                 tracing::debug!("[{}] 日志广播落后 {} 条，已跳过", name, n);
-                                continue;
                             }
-                            Err(broadcast::error::TryRecvError::Closed) => break,
+                            Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
                         }
                     }
                 }
@@ -100,19 +98,16 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                         "type": "logs",
                         "entries": entries,
                     });
-                    match serde_json::to_string(&msg) {
-                        Ok(text) => {
-                            if socket.send(axum::extract::ws::Message::Text(text)).await.is_err() {
-                                break;
-                            }
+                    if let Ok(text) = serde_json::to_string(&msg) {
+                        if socket.send(axum::extract::ws::Message::Text(text)).await.is_err() {
+                            break;
                         }
-                        Err(_) => continue,
                     }
                 }
             }
             result = socket.recv() => {
                 match result {
-                    Some(Ok(axum::extract::ws::Message::Close(_))) => break,
+                    Some(Ok(axum::extract::ws::Message::Close(_))) | Some(Err(_)) | None => break,
                     Some(Ok(axum::extract::ws::Message::Text(text))) => {
                         if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
                             if cmd.get("type").and_then(|v| v.as_str()) == Some("subscribe") {
@@ -127,8 +122,6 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                         }
                     }
                     Some(Ok(_)) => {}
-                    Some(Err(_)) => break,
-                    None => break,
                 }
             }
         }

@@ -14,7 +14,7 @@ use state::AppState;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 
-async fn embedded_static_handler(req: Request) -> Response {
+fn embedded_static_handler(req: Request) -> Response {
     let path = req.uri().path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
@@ -33,6 +33,10 @@ async fn embedded_static_handler(req: Request) -> Response {
     }
 }
 
+/// 启动 HTTP/WebSocket 服务器。
+///
+/// # Errors
+/// 端口绑定失败或服务器运行异常时返回错误。
 pub async fn run_server(
     addr: SocketAddr,
     manager: SharedManager,
@@ -61,7 +65,7 @@ pub async fn run_server(
         .merge(ws::routes())
         .layer(middleware::from_fn_with_state(state.clone(), api::auth_middleware))
         .layer(cors_layer)
-        .fallback(|req| async move { embedded_static_handler(req).await })
+        .fallback(|req| std::future::ready(embedded_static_handler(req)))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

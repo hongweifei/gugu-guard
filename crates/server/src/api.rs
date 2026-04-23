@@ -148,6 +148,8 @@ struct CreateProcessRequest {
     max_restarts: u32,
     #[serde(default = "gugu_core::config::default_restart_delay")]
     restart_delay_secs: u64,
+    #[serde(default)]
+    stop_command: Option<String>,
     #[serde(default = "gugu_core::config::default_stop_timeout")]
     stop_timeout_secs: u64,
     #[serde(default)]
@@ -176,6 +178,7 @@ impl From<CreateProcessRequest> for ProcessConfig {
             auto_restart: req.auto_restart,
             max_restarts: req.max_restarts,
             restart_delay_secs: req.restart_delay_secs,
+            stop_command: req.stop_command,
             stop_timeout_secs: req.stop_timeout_secs,
             health_check: req.health_check,
             unhealthy_restart: req.unhealthy_restart,

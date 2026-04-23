@@ -238,59 +238,32 @@ impl ManagedProcess {
         }
 
         if let Some(ref mut child) = self.child {
-            if let Some(pid) = child.id() {
-                #[cfg(windows)]
-                {
-                    #[allow(unused_imports)]
-                    use std::os::windows::process::CommandExt;
+            let pid = child.id();
+            let stop_cmd = self.config.stop_command.clone();
+            let working_dir = self.config.working_dir.clone();
+            let env = self.config.env.clone();
+            let name = self.name.clone();
+            let timeout_secs = self.config.stop_timeout_secs;
 
-                    let _ = tokio::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T"])
-                        .creation_flags(0x08000000)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .await;
-                }
-
-                #[cfg(unix)]
-                {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGTERM);
-                    }
-                }
+            if let Some(ref cmd) = stop_cmd {
+                run_stop_command(&name, cmd, working_dir.as_deref(), &env).await;
+            } else {
+                send_default_stop_signal(pid).await;
             }
 
-            let timeout = std::time::Duration::from_secs(self.config.stop_timeout_secs);
+            let timeout = std::time::Duration::from_secs(timeout_secs);
             match tokio::time::timeout(timeout, child.wait()).await {
                 Ok(Ok(status)) => {
                     tracing::info!(
                         "[{}] 进程已停止 (退出码: {:?})",
-                        self.name,
+                        name,
                         status.code()
                     );
                 }
                 _ => {
-                    #[cfg(unix)]
-                    if let Some(pid) = child.id() {
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
-                        }
-                    }
-                    #[cfg(windows)]
-                    {
-                        #[allow(unused_imports)]
-                        use std::os::windows::process::CommandExt;
-                        let _ = tokio::process::Command::new("taskkill")
-                            .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
-                            .creation_flags(0x08000000)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .await;
-                    }
+                    force_kill(child).await;
                     let _ = child.wait().await;
-                    tracing::warn!("[{}] 进程等待超时，已强制终止", self.name);
+                    tracing::warn!("[{}] 进程等待超时，已强制终止", name);
                 }
             }
         }
@@ -431,6 +404,82 @@ impl ManagedProcess {
     pub async fn clear_logs(&self) {
         self.stdout_lines.lock().await.clear();
         self.stderr_lines.lock().await.clear();
+    }
+}
+
+async fn run_stop_command(name: &str, stop_cmd: &str, working_dir: Option<&std::path::Path>, env: &std::collections::HashMap<String, String>) {
+    let mut cmd;
+    #[cfg(windows)]
+    {
+        cmd = tokio::process::Command::new("cmd");
+        cmd.arg("/C").arg(stop_cmd);
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    #[cfg(unix)]
+    {
+        cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(stop_cmd);
+    }
+
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+
+    cmd.envs(env)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    tracing::info!("[{}] 执行自定义停止命令: {}", name, stop_cmd);
+    match cmd.status().await {
+        Ok(s) => tracing::debug!("[{}] 停止命令退出码: {:?}", name, s.code()),
+        Err(e) => tracing::warn!("[{}] 停止命令执行失败: {}", name, e),
+    }
+}
+
+async fn send_default_stop_signal(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        #[cfg(windows)]
+        {
+            #[allow(unused_imports)]
+            use std::os::windows::process::CommandExt;
+            let _ = tokio::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+        }
+
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+        }
+    }
+}
+
+async fn force_kill(child: &mut Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
+            .creation_flags(0x08000000)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
     }
 }
 

@@ -88,6 +88,8 @@ pub struct ProcessConfig {
     pub max_restarts: u32,
     #[serde(default = "default_restart_delay")]
     pub restart_delay_secs: u64,
+    #[serde(default)]
+    pub stop_command: Option<String>,
     #[serde(default = "default_stop_timeout")]
     pub stop_timeout_secs: u64,
     #[serde(default)]
@@ -131,6 +133,7 @@ impl ProcessConfig {
             && self.args == other.args
             && self.working_dir == other.working_dir
             && self.env == other.env
+            && self.stop_command == other.stop_command
     }
 
     pub fn validate(&self) -> crate::error::Result<()> {

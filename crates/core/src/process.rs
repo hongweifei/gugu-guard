@@ -62,7 +62,7 @@ pub struct LogEntry {
     pub process_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum LogStream {

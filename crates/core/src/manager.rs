@@ -15,7 +15,7 @@ pub struct ProcessManager {
     config_path: Option<PathBuf>,
 }
 
-fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<String>> {
+pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<String>> {
     let mut in_degree: HashMap<&str, u32> = HashMap::new();
     let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
 

@@ -545,6 +545,7 @@ window.editProc = async function(name) {
         f('f-stderr').value = cfg.stderr_log || '';
         f('f-max-restarts').value = cfg.max_restarts ?? 3;
         f('f-restart-delay').value = cfg.restart_delay_secs ?? 5;
+        f('f-stop-command').value = cfg.stop_command || '';
         f('f-stop-timeout').value = cfg.stop_timeout_secs ?? 10;
         if (cfg.env && typeof cfg.env === 'object') {
             Object.entries(cfg.env).forEach(([k, v]) => addEnvRow(k, v));
@@ -579,6 +580,7 @@ document.getElementById('process-form').onsubmit = async (e) => {
         auto_restart: document.getElementById('f-auto-restart').checked,
         max_restarts: parseInt(document.getElementById('f-max-restarts').value) || 3,
         restart_delay_secs: parseInt(document.getElementById('f-restart-delay').value) || 5,
+        stop_command: document.getElementById('f-stop-command').value.trim() || null,
         stop_timeout_secs: parseInt(document.getElementById('f-stop-timeout').value) || 10,
         health_check: hcData.health_check,
         unhealthy_restart: hcData.unhealthy_restart,

@@ -79,6 +79,8 @@ pub struct ManagedProcess {
     name: String,
     config: ProcessConfig,
     child: Option<Child>,
+    #[cfg(windows)]
+    job: Option<windows_sys_job::Job>,
     status: ProcessStatus,
     crash_restart_count: u32,
     healthy: Option<bool>,
@@ -97,6 +99,8 @@ impl ManagedProcess {
             name,
             config,
             child: None,
+            #[cfg(windows)]
+            job: None,
             status: ProcessStatus::Stopped,
             crash_restart_count: 0,
             healthy: None,
@@ -197,6 +201,28 @@ impl ManagedProcess {
         match cmd.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
+
+                // Windows: 将子进程分配到 Job Object，确保进程树可控终止
+                #[cfg(windows)]
+                {
+                    match windows_sys_job::create_kill_on_close_job() {
+                        Ok(job) => {
+                            if let Some(pid) = pid {
+                                if let Err(e) = job.assign_process(pid) {
+                                    tracing::warn!(
+                                        "[{}] 无法将进程 {} 分配到 Job Object: {}",
+                                        self.name, pid, e
+                                    );
+                                }
+                            }
+                            self.job = Some(job);
+                        }
+                        Err(e) => {
+                            tracing::warn!("[{}] 创建 Job Object 失败: {}", self.name, e);
+                        }
+                    }
+                }
+
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
                 let max_log_size = self.config.max_log_size_mb;
@@ -255,7 +281,20 @@ impl ManagedProcess {
             if let Some(ref cmd) = stop_cmd {
                 run_stop_command(&name, cmd, working_dir.as_deref(), &env).await;
             } else {
-                send_default_stop_signal(pid).await;
+                // Windows: 优先通过 Job Object 终止整棵进程树
+                #[cfg(windows)]
+                {
+                    let terminated_via_job = self.job.as_ref().is_some_and(windows_sys_job::Job::terminate);
+                    if terminated_via_job {
+                        tracing::debug!("[{}] 已通过 Job Object 终止进程树", name);
+                    } else {
+                        send_default_stop_signal(pid).await;
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    send_default_stop_signal(pid).await;
+                }
             }
 
             let timeout = std::time::Duration::from_secs(timeout_secs);
@@ -266,6 +305,7 @@ impl ManagedProcess {
                     status.code()
                 );
             } else {
+                // Windows: Job Object 已经终止了进程树，force_kill 作为兜底
                 force_kill(child).await;
                 let _ = child.wait().await;
                 tracing::warn!("[{}] 进程等待超时，已强制终止", name);
@@ -273,6 +313,10 @@ impl ManagedProcess {
         }
 
         self.abort_log_tasks();
+        #[cfg(windows)]
+        {
+            self.job = None;
+        }
 
         self.child = None;
         self.status = ProcessStatus::Stopped;
@@ -299,6 +343,10 @@ impl ManagedProcess {
                     );
                     self.abort_log_tasks();
                     self.child = None;
+                    #[cfg(windows)]
+                    {
+                        self.job = None;
+                    }
                     self.status = ProcessStatus::Stopped;
                     false
                 }
@@ -306,6 +354,10 @@ impl ManagedProcess {
                 Err(_) => {
                     self.abort_log_tasks();
                     self.child = None;
+                    #[cfg(windows)]
+                    {
+                        self.job = None;
+                    }
                     self.status = ProcessStatus::Failed("检查进程状态失败".into());
                     false
                 }
@@ -472,6 +524,7 @@ async fn force_kill(child: &mut Child) {
     }
     #[cfg(windows)]
     {
+        // force_kill 是兜底，直接用 taskkill /F 确保进程终止
         let _ = tokio::process::Command::new("taskkill")
             .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
@@ -598,5 +651,107 @@ fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
     match ext {
         Some(ext) => parent.join(format!("{stem}.{n}{ext}")),
         None => parent.join(format!("{stem}.{n}")),
+    }
+}
+
+/// Windows Job Object 封装，用于可靠管理进程树生命周期。
+///
+/// 核心机制：
+/// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: 当 Job 句柄关闭（守护进程退出/崩溃）时
+///   自动终止所有关联进程，防止孤儿进程
+/// - `TerminateJobObject`: 主动终止整棵进程树，比 `taskkill /T` 更可靠
+///   因为 Job Object 跟踪所有后代进程，包括 cmd /C 产生的脱离进程树的子进程
+#[cfg(windows)]
+mod windows_sys_job {
+    use std::io;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation,
+    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+    /// 以 usize 存储 HANDLE 原始值，使 Job 满足 Send（*mut c_void 不满足 Send）。
+    /// SAFE: HANDLE 本质上是内核对象的整数标识符，可在线程间安全传递。
+    pub struct Job {
+        handle: usize,
+    }
+
+    // SAFETY: Windows HANDLE 是内核对象标识符，可安全跨线程使用。
+    unsafe impl Send for Job {}
+
+    extern "system" {
+        fn CreateJobObjectW(lpjobattributes: *const std::ffi::c_void, lpname: *const u16) -> *mut std::ffi::c_void;
+    }
+
+    impl Job {
+        /// 将进程分配到此 Job Object。
+        pub fn assign_process(&self, pid: u32) -> io::Result<()> {
+            let proc_handle = unsafe {
+                OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid)
+            };
+            if proc_handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let result = unsafe {
+                AssignProcessToJobObject(self.as_handle(), proc_handle)
+            };
+            unsafe { CloseHandle(proc_handle) };
+            if result == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+
+        /// 终止 Job 中所有进程。成功返回 true。
+        pub fn terminate(&self) -> bool {
+            unsafe { TerminateJobObject(self.as_handle(), 1) != 0 }
+        }
+
+        fn as_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
+            self.handle as *mut _
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            if self.handle != 0 {
+                unsafe { CloseHandle(self.as_handle()) };
+            }
+        }
+    }
+
+    /// 创建匿名 Job Object，设置 KILL_ON_JOB_CLOSE 以确保进程树在句柄关闭时被清理。
+    pub fn create_kill_on_close_job() -> io::Result<Job> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                ..unsafe { std::mem::zeroed() }
+            },
+            ..unsafe { std::mem::zeroed() }
+        };
+
+        let h: windows_sys::Win32::Foundation::HANDLE = handle;
+        let result = unsafe {
+            SetInformationJobObject(
+                h,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if result == 0 {
+            unsafe { CloseHandle(h) };
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Job { handle: handle as usize })
     }
 }

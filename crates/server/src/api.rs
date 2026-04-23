@@ -380,9 +380,9 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
 
     let dir = if dir.is_relative() {
         let joined = std::env::current_dir().unwrap_or_default().join(&dir);
-        joined.canonicalize().unwrap_or(joined)
+        gugu_core::config::canonicalize_clean(&joined)
     } else {
-        dir.canonicalize().unwrap_or(dir)
+        gugu_core::config::canonicalize_clean(&dir)
     };
 
     let path_str = clean_path(&dir);
@@ -394,11 +394,10 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     };
 
     let mut entries: Vec<FsEntry> = Vec::with_capacity(256);
-    let sep = std::path::MAIN_SEPARATOR;
     for entry in read_dir.flatten() {
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let name = entry.file_name().to_string_lossy().to_string();
-        let path = format!("{}{}{}", path_str, sep, name);
+        let path = clean_path(&dir.join(&name));
         entries.push(FsEntry { name, path, is_dir });
     }
 
@@ -422,6 +421,5 @@ async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 fn clean_path(path: &std::path::Path) -> String {
-    let s = path.to_string_lossy();
-    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+    gugu_core::config::path_to_forward_slashes(&gugu_core::config::strip_unc_prefix(path))
 }

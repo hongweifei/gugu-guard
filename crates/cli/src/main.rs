@@ -183,8 +183,12 @@ fn get_api_key(cli: &Cli) -> Result<Option<String>> {
     Ok(config.and_then(|c| c.daemon.api_key))
 }
 
-fn pid_path(config_path: &Path) -> PathBuf {
-    config_path.parent().unwrap_or(Path::new(".")).join("gugu.pid")
+fn pid_path(config: &AppConfig, config_path: &Path) -> PathBuf {
+    let config_dir = config_path.parent().unwrap_or(Path::new("."));
+    match config.daemon.pid_file {
+        Some(ref pid_file) => gugu_core::config::resolve_relative_path(pid_file, config_dir),
+        None => config_dir.join("gugu.pid"),
+    }
 }
 
 fn current_pid() -> u32 {
@@ -243,10 +247,10 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
         )
         .init();
 
-    let pid = pid_path(config_path);
-    write_pid_file(&pid)?;
-
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
+
+    let pid = pid_path(&config, config_path);
+    write_pid_file(&pid)?;
 
     let api_key = cli_api_key.or(config.daemon.api_key.clone()).or_else(|| std::env::var("GUGU_API_KEY").ok());
 
@@ -396,8 +400,7 @@ fn uninstall_service(mode: &str) -> Result<()> {
 fn install_schtasks(config_path: &Path) -> Result<()> {
     let exe = std::env::current_exe()
         .context("无法获取当前可执行文件路径")?;
-    let config_abs = std::fs::canonicalize(config_path)
-        .unwrap_or_else(|_| config_path.to_path_buf());
+    let config_abs = gugu_core::config::canonicalize_clean(config_path);
 
     #[cfg(windows)]
     {

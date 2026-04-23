@@ -72,11 +72,20 @@ fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<St
 
 impl ProcessManager {
     pub fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
+        let config_dir = config_path.as_deref()
+            .and_then(|p| p.parent())
+            .unwrap_or(std::path::Path::new("."));
+
+        let log_base = config.daemon.log_dir.as_ref()
+            .map(|d| crate::config::resolve_relative_path(d, config_dir))
+            .unwrap_or_else(|| config_dir.to_path_buf());
+
         let processes = config
             .processes
             .iter()
             .map(|(name, proc_config)| {
-                (name.clone(), ManagedProcess::new(name.clone(), proc_config.clone()))
+                let resolved = Self::resolve_process_paths(proc_config, config_dir, &log_base);
+                (name.clone(), ManagedProcess::new(name.clone(), resolved))
             })
             .collect();
 
@@ -85,6 +94,24 @@ impl ProcessManager {
             daemon_config: config.daemon.clone(),
             config_path,
         }
+    }
+
+    fn resolve_process_paths(
+        config: &crate::config::ProcessConfig,
+        config_dir: &std::path::Path,
+        log_base: &std::path::Path,
+    ) -> crate::config::ProcessConfig {
+        let mut c = config.clone();
+        if let Some(ref dir) = c.working_dir {
+            c.working_dir = Some(crate::config::resolve_relative_path(dir, config_dir));
+        }
+        if let Some(ref p) = c.stdout_log {
+            c.stdout_log = Some(crate::config::resolve_relative_path(p, log_base));
+        }
+        if let Some(ref p) = c.stderr_log {
+            c.stderr_log = Some(crate::config::resolve_relative_path(p, log_base));
+        }
+        c
     }
 
     pub fn shared(self) -> SharedManager {

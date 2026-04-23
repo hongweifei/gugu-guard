@@ -27,11 +27,19 @@ impl AppConfig {
             std::fs::create_dir_all(parent)
                 .map_err(|e| crate::error::GuguError::ConfigError(format!("创建目录失败: {e}")))?;
         }
-        let content = toml::to_string_pretty(self)
+        let mut normalized = self.clone();
+        normalized.normalize_paths();
+        let content = toml::to_string_pretty(&normalized)
             .map_err(|e| crate::error::GuguError::ConfigError(format!("序列化配置失败: {e}")))?;
         std::fs::write(path, content)
             .map_err(|e| crate::error::GuguError::ConfigError(format!("写入配置文件失败: {e}")))?;
         Ok(())
+    }
+
+    pub fn normalize_paths(&mut self) {
+        for proc in self.processes.values_mut() {
+            proc.normalize_paths();
+        }
     }
 
     pub fn server_addr(&self) -> String {
@@ -147,6 +155,18 @@ impl ProcessConfig {
         }
         Ok(())
     }
+
+    pub fn normalize_paths(&mut self) {
+        if let Some(ref p) = self.working_dir {
+            self.working_dir = Some(PathBuf::from(path_to_forward_slashes(p)));
+        }
+        if let Some(ref p) = self.stdout_log {
+            self.stdout_log = Some(PathBuf::from(path_to_forward_slashes(p)));
+        }
+        if let Some(ref p) = self.stderr_log {
+            self.stderr_log = Some(PathBuf::from(path_to_forward_slashes(p)));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,4 +223,33 @@ fn default_health_timeout() -> u64 {
 pub enum HealthCheckType {
     Tcp { host: Option<String>, port: u16 },
     Http { url: String },
+}
+
+pub fn canonicalize_clean(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .map(|p| strip_unc_prefix(&p))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+pub fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => PathBuf::from(format!("\\\\{rest}")),
+        None => match s.strip_prefix(r"\\?\") {
+            Some(rest) => PathBuf::from(rest),
+            None => path.to_path_buf(),
+        },
+    }
+}
+
+pub fn resolve_relative_path(path: &std::path::Path, base: &std::path::Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+pub fn path_to_forward_slashes(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

@@ -203,8 +203,7 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
 
     let exe = std::env::current_exe()
         .context("无法获取当前可执行文件路径")?;
-    let config_abs = std::fs::canonicalize(config_path)
-        .unwrap_or_else(|_| config_path.to_path_buf());
+    let config_abs = gugu_core::config::canonicalize_clean(config_path);
 
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)

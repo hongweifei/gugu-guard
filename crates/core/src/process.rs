@@ -577,12 +577,11 @@ async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::Fi
     };
 
     for i in (1..=5).rev() {
-        let old = format!("{}.{}", p.display(), i);
-        let old_path = std::path::Path::new(&old);
-        let next = format!("{}.{}", p.display(), i + 1);
-        let _ = tokio::fs::rename(old_path, &next).await;
+        let old = append_suffix(p, i);
+        let next = append_suffix(p, i + 1);
+        let _ = tokio::fs::rename(&old, &next).await;
     }
-    let _ = tokio::fs::rename(p, format!("{}.1", p.display())).await;
+    let _ = tokio::fs::rename(p, append_suffix(p, 1)).await;
 
     tokio::fs::OpenOptions::new()
         .create(true)
@@ -597,4 +596,9 @@ fn stream_type(stream: &LogStream) -> &'static str {
         LogStream::Stdout => "stdout",
         LogStream::Stderr => "stderr",
     }
+}
+
+fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
+    let stem = path.to_string_lossy();
+    PathBuf::from(format!("{stem}.{n}"))
 }

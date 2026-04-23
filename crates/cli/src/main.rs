@@ -585,9 +585,9 @@ async fn print_api_response(resp: reqwest::Response) -> Result<()> {
     }
     let body: serde_json::Value = resp.json().await?;
     if let Some(msg) = body.get("message") {
-        println!("{}", msg);
+        println!("{msg}");
     } else if let Some(err) = body.get("error") {
-        eprintln!("错误: {}", err);
+        eprintln!("错误: {err}");
     }
     Ok(())
 }

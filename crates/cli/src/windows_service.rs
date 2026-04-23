@@ -30,11 +30,11 @@ fn my_service_main(arguments: Vec<OsString>) {
 
 pub fn start() -> anyhow::Result<()> {
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)
-        .map_err(|e| anyhow::anyhow!("启动 Service Dispatcher 失败: {}", e))
+        .map_err(|e| anyhow::anyhow!("启动 Service Dispatcher 失败: {e}"))
 }
 
 fn set_status(
-    status_handle: &windows_service::service_control_handler::ServiceStatusHandle,
+    status_handle: windows_service::service_control_handler::ServiceStatusHandle,
     state: ServiceState,
     controls_accepted: ServiceControlAccept,
     exit_code: u32,
@@ -67,7 +67,7 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
 
     let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
 
-    set_status(&status_handle, ServiceState::StartPending, ServiceControlAccept::empty(), 0, Duration::from_secs(5));
+    set_status(status_handle, ServiceState::StartPending, ServiceControlAccept::empty(), 0, Duration::from_secs(5));
 
     let rt = tokio::runtime::Runtime::new().expect("无法创建 tokio runtime");
     rt.block_on(async {
@@ -82,25 +82,25 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
             Ok(h) => h,
             Err(e) => {
                 tracing::error!("启动核心失败: {}", e);
-                set_status(&status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 1, Duration::default());
+                set_status(status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 1, Duration::default());
                 return;
             }
         };
 
-        set_status(&status_handle, ServiceState::Running, ServiceControlAccept::STOP, 0, Duration::default());
+        set_status(status_handle, ServiceState::Running, ServiceControlAccept::STOP, 0, Duration::default());
 
         loop {
             match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
 
-        set_status(&status_handle, ServiceState::StopPending, ServiceControlAccept::empty(), 0, Duration::from_secs(10));
+        set_status(status_handle, ServiceState::StopPending, ServiceControlAccept::empty(), 0, Duration::from_secs(10));
 
         crate::daemon::graceful_shutdown(handles).await;
 
-        set_status(&status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 0, Duration::default());
+        set_status(status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 0, Duration::default());
     });
 
     Ok(())
@@ -116,7 +116,7 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
 
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)
-        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {e}"))?;
 
     let launch_args = vec![
         OsString::from("run"),
@@ -141,11 +141,11 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
 
     let service = service_manager
         .create_service(&service_info, ServiceAccess::CHANGE_CONFIG)
-        .map_err(|e| anyhow::anyhow!("创建服务失败 (可能已存在，请先卸载): {}", e))?;
+        .map_err(|e| anyhow::anyhow!("创建服务失败 (可能已存在，请先卸载): {e}"))?;
 
     service
         .set_description("咕咕鸽进程守护 - 跨平台进程管理工具，自动监控和重启子进程")
-        .map_err(|e| anyhow::anyhow!("设置服务描述失败: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("设置服务描述失败: {e}"))?;
 
     println!("成功: 已安装为 Windows 服务 ({SERVICE_NAME})");
     println!("  程序: {}", exe.display());
@@ -162,19 +162,19 @@ pub fn uninstall() -> anyhow::Result<()> {
 
     let manager_access = ServiceManagerAccess::CONNECT;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)
-        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {e}"))?;
 
     let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE;
     let service = service_manager
         .open_service(SERVICE_NAME, service_access)
-        .map_err(|e| anyhow::anyhow!("打开服务失败 (可能未安装): {}", e))?;
+        .map_err(|e| anyhow::anyhow!("打开服务失败 (可能未安装): {e}"))?;
 
     service
         .delete()
-        .map_err(|e| anyhow::anyhow!("删除服务失败: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("删除服务失败: {e}"))?;
 
     let status = service.query_status()
-        .map_err(|e| anyhow::anyhow!("查询服务状态失败: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("查询服务状态失败: {e}"))?;
 
     if status.current_state != ServiceState::Stopped {
         match service.stop() {

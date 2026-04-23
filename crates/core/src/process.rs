@@ -169,7 +169,10 @@ impl ManagedProcess {
             cmd.arg("/C").arg(&full_cmd);
             #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
+            // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+            // CREATE_NEW_PROCESS_GROUP 使子进程形成独立进程组，
+            // 便于 taskkill /T 终止整个进程树
+            cmd.creation_flags(0x08000000 | 0x00000200);
         }
         #[cfg(unix)]
         {
@@ -444,6 +447,7 @@ async fn send_default_stop_signal(pid: Option<u32>) {
         {
             #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
+            // 先尝试温和终止进程树（向进程树发送 CTRL_BREAK_EVENT 等效）
             let _ = tokio::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T"])
                 .creation_flags(0x08000000)
@@ -599,6 +603,11 @@ fn stream_type(stream: &LogStream) -> &'static str {
 }
 
 fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
-    let stem = path.to_string_lossy();
-    PathBuf::from(format!("{stem}.{n}"))
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy()));
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    match ext {
+        Some(ext) => parent.join(format!("{stem}.{n}{ext}")),
+        None => parent.join(format!("{stem}.{n}")),
+    }
 }

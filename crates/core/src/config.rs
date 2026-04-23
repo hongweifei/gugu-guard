@@ -17,8 +17,10 @@ impl AppConfig {
         }
         let content = std::fs::read_to_string(path)
             .map_err(|e| crate::error::GuguError::ConfigError(format!("读取配置文件失败: {e}")))?;
-        let config: Self = toml::from_str(&content)
+        let mut config: Self = toml::from_str(&content)
             .map_err(|e| crate::error::GuguError::ConfigError(format!("解析配置文件失败: {e}")))?;
+        // 统一路径分隔符，确保 Windows 上 \ 和 / 混用时不影响匹配
+        config.normalize_paths();
         Ok(config)
     }
 

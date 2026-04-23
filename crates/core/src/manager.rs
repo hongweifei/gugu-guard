@@ -146,11 +146,14 @@ impl ProcessManager {
 
     pub async fn stop_all(&mut self) {
         let names: Vec<String> = self.processes.keys().cloned().collect();
+        let timeout = std::time::Duration::from_secs(30);
         for name in names {
             if let Some(proc) = self.processes.get_mut(&name) {
                 if proc.is_running() {
-                    if let Err(e) = proc.stop().await {
-                        tracing::error!("停止进程 '{}' 失败: {}", name, e);
+                    match tokio::time::timeout(timeout, proc.stop()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => tracing::error!("停止进程 '{}' 失败: {}", name, e),
+                        Err(_) => tracing::error!("停止进程 '{}' 超时 ({:?})", name, timeout),
                     }
                 }
             }
@@ -222,21 +225,23 @@ impl ProcessManager {
 
         config.validate()?;
 
-        let was_running = self.processes.get(name).unwrap().is_running();
-        let needs_restart = force_restart || !self.processes.get(name).unwrap().config().runtime_fields_eq(&config);
+        // 先读取需要的信息，避免多次查找
+        let was_running = self.processes.get(name).expect("checked above").is_running();
+        let needs_restart =
+            force_restart || !self.processes.get(name).expect("checked above").config().runtime_fields_eq(&config);
 
         if needs_restart && was_running {
-            self.processes.get_mut(name).unwrap().stop().await?;
+            self.processes.get_mut(name).expect("checked above").stop().await?;
         }
 
-        *self.processes.get_mut(name).unwrap().config_mut() = config;
+        *self.processes.get_mut(name).expect("checked above").config_mut() = config;
 
         if let Some(ref new) = new_name {
             if new != name {
                 if self.processes.contains_key(new) {
                     return Err(GuguError::ConfigError(format!("进程 '{new}' 已存在")));
                 }
-                let mut proc = self.processes.remove(name).unwrap();
+                let mut proc = self.processes.remove(name).expect("checked above");
                 proc.rename(new.clone());
                 self.processes.insert(new.clone(), proc);
                 tracing::info!("[{}] 进程已改名为 [{}]", name, new);
@@ -356,15 +361,21 @@ impl ProcessManager {
         };
 
         let mut to_restart: Vec<String> = Vec::new();
-        for (name, hc, unhealthy_restart) in to_check {
-            let healthy = health::check_health(&hc).await;
-            if let Some(proc) = self.processes.get_mut(&name) {
+        // 并发执行所有健康检查
+        let check_futures: Vec<_> = to_check
+            .iter()
+            .map(|(_, hc, _)| health::check_health(hc))
+            .collect();
+        let health_results = futures::future::join_all(check_futures).await;
+
+        for ((name, _, unhealthy_restart), healthy) in to_check.iter().zip(health_results) {
+            if let Some(proc) = self.processes.get_mut(name) {
                 proc.set_healthy(Some(healthy));
             }
             if !healthy {
                 tracing::warn!("[{}] 健康检查失败", name);
-                if unhealthy_restart {
-                    to_restart.push(name);
+                if *unhealthy_restart {
+                    to_restart.push(name.clone());
                 }
             }
         }
@@ -465,11 +476,13 @@ pub async fn start_monitor(manager: SharedManager) {
     loop {
         interval.tick().await;
 
+        // 检测已退出进程 — 持锁时间短，只修改状态
         let dead = {
             let mut mgr = manager.write().await;
             mgr.find_dead_processes()
         };
 
+        // 每个进程独立获取写锁来重启，不阻塞其他操作
         for (name, delay) in dead {
             let mgr_clone = manager.clone();
             tokio::spawn(async move {
@@ -486,6 +499,7 @@ pub async fn start_monitor(manager: SharedManager) {
             });
         }
 
+        // 健康检查 — 尽量缩短持锁时间
         {
             let mut mgr = manager.write().await;
             mgr.run_due_health_checks().await;

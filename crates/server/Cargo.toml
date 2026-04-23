@@ -19,3 +19,6 @@ mime_guess = "2"
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
 tempfile = "3"
+
+[lints]
+workspace = true

@@ -293,7 +293,15 @@ impl State {
     }
 
     async fn stop_all(&mut self) {
-        let names: Vec<String> = self.processes.keys().cloned().collect();
+        let configs: HashMap<String, ProcessConfig> = self.processes.iter()
+            .map(|(n, p)| (n.clone(), p.config().clone())).collect();
+
+        // 按启动拓扑排序的逆序停止，确保依赖方先于被依赖方停止
+        let names: Vec<String> = match topological_sort(&configs) {
+            Ok(order) => order.into_iter().rev().collect(),
+            Err(_) => self.processes.keys().cloned().collect(),
+        };
+
         let timeout = std::time::Duration::from_secs(30);
         for name in names {
             if let Some(proc) = self.processes.get_mut(&name) {
@@ -535,6 +543,13 @@ fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntr
 async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
     state.daemon_config = new_config.daemon.clone();
 
+    let config_dir = state.config_path.as_deref()
+        .and_then(|p| p.parent())
+        .unwrap_or(std::path::Path::new("."));
+    let log_base = state.daemon_config.log_dir.as_ref()
+        .map(|d| crate::config::resolve_relative_path(d, config_dir))
+        .unwrap_or_else(|| config_dir.to_path_buf());
+
     let to_remove: Vec<String> = state.processes.keys()
         .filter(|k| !new_config.processes.contains_key(*k)).cloned().collect();
     for name in &to_remove {
@@ -552,10 +567,11 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
             tracing::warn!("[{}] 配置验证失败，跳过: {}", name, e);
             continue;
         }
+        let resolved = State::resolve_paths(config, config_dir, &log_base);
         if let Some(proc) = state.processes.get_mut(name) {
             let was_running = proc.is_running();
-            let needs_restart = was_running && !proc.config().runtime_fields_eq(config);
-            *proc.config_mut() = config.clone();
+            let needs_restart = was_running && !proc.config().runtime_fields_eq(&resolved);
+            *proc.config_mut() = resolved;
             if needs_restart {
                 let _ = proc.stop().await;
                 let _ = proc.start().await;
@@ -564,7 +580,7 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
                 tracing::info!("[{}] 配置已更新 (配置重载)", name);
             }
         } else {
-            let mut proc = ManagedProcess::new(name.clone(), config.clone());
+            let mut proc = ManagedProcess::new(name.clone(), resolved);
             if config.auto_start {
                 let _ = proc.start().await;
             }
@@ -586,13 +602,24 @@ async fn do_reload_from_file(state: &mut State) -> Result<()> {
 
 async fn run_monitor_cycle(state: &mut State) {
     let dead = find_dead(state);
-    for (name, delay) in dead {
-        tracing::info!("[{}] 准备自动重启，等待 {:?}", name, delay);
-        tokio::time::sleep(delay).await;
-        if let Some(proc) = state.processes.get_mut(&name) {
-            if !proc.is_running() {
-                if let Err(e) = proc.start().await {
-                    tracing::error!("[{}] 自动重启失败: {}", name, e);
+    if !dead.is_empty() {
+        // 并行等待各进程的重启延迟，然后依次启动
+        let delays: Vec<(String, tokio::time::Sleep)> = dead.into_iter()
+            .map(|(name, delay)| {
+                tracing::info!("[{}] 准备自动重启，等待 {:?}", name, delay);
+                (name, tokio::time::sleep(delay))
+            })
+            .collect();
+        // 使用 join_all 并行等待所有延迟
+        let names: Vec<String> = delays.iter().map(|(n, _)| n.clone()).collect();
+        futures::future::join_all(delays.into_iter().map(|(_, sl)| sl)).await;
+        // 延迟结束后依次启动（需要 &mut state，无法并行）
+        for name in names {
+            if let Some(proc) = state.processes.get_mut(&name) {
+                if !proc.is_running() {
+                    if let Err(e) = proc.start().await {
+                        tracing::error!("[{}] 自动重启失败: {}", name, e);
+                    }
                 }
             }
         }

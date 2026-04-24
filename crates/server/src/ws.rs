@@ -21,8 +21,12 @@ async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
+    const MAX_MISSED_HEARTBEATS: u32 = 3;
+
     let mut status_interval = tokio::time::interval(std::time::Duration::from_secs(2));
     let mut log_interval = tokio::time::interval(std::time::Duration::from_millis(200));
+    let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    let mut missed_heartbeats: u32 = 0;
 
     let mut log_rx = subscribe_all(&state).await;
 
@@ -59,9 +63,23 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     }
                 }
             }
+            _ = heartbeat_interval.tick() => {
+                // 发送 Ping，如果发送失败则断开
+                if socket.send(axum::extract::ws::Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+                missed_heartbeats += 1;
+                if missed_heartbeats > MAX_MISSED_HEARTBEATS {
+                    tracing::debug!("WebSocket 连接心跳超时，断开连接");
+                    break;
+                }
+            }
             result = socket.recv() => {
                 match result {
                     Some(Ok(axum::extract::ws::Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(axum::extract::ws::Message::Pong(_))) => {
+                        missed_heartbeats = 0;
+                    }
                     Some(Ok(axum::extract::ws::Message::Text(text))) => {
                         if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
                             if cmd.get("type").and_then(|v| v.as_str()) == Some("subscribe") {

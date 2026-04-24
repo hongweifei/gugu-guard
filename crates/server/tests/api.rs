@@ -56,11 +56,19 @@ fn build_router(shared: SharedManager, api_key: Option<String>) -> axum::Router 
 }
 
 fn create_process_body(command: &str, start_now: bool) -> serde_json::Value {
-    serde_json::json!({
+    create_process_body_with_group(command, start_now, None)
+}
+
+fn create_process_body_with_group(command: &str, start_now: bool, group: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({
         "command": command,
         "auto_start": false,
         "start_now": start_now,
-    })
+    });
+    if let Some(g) = group {
+        body["group"] = serde_json::Value::String(g.to_string());
+    }
+    body
 }
 
 async fn send_get(app: axum::Router, uri: &str) -> axum::http::Response<Body> {
@@ -428,5 +436,112 @@ mod metrics_endpoint {
             text.contains("gugu_process_status") || text.contains("gugu_processes 0"),
             "/metrics 应包含 gugu_process_status 或显示 0 个进程"
         );
+    }
+}
+
+// ── GET /api/v1/groups ──────────────────────────────────────
+
+mod list_groups {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_empty_when_no_groups() {
+        let resp = send_get(make_app(), "/api/v1/groups").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let groups: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(groups.is_empty(), "无进程时应返回空组列表");
+    }
+
+    #[tokio::test]
+    async fn returns_groups_with_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = make_app_with_dir(dir.path());
+        let body = create_process_body_with_group("echo a", false, Some("web"));
+        app.clone().oneshot(
+            Request::builder().method("POST").uri("/api/v1/processes/svc-a")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
+        ).await.unwrap();
+        let body = create_process_body_with_group("echo b", false, Some("web"));
+        app.clone().oneshot(
+            Request::builder().method("POST").uri("/api/v1/processes/svc-b")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
+        ).await.unwrap();
+
+        let resp = send_get(app, "/api/v1/groups").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let groups: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(groups.len(), 1, "应有一个组");
+        assert_eq!(groups[0]["name"], "web");
+    }
+}
+
+// ── GET /api/v1/groups/:group ───────────────────────────────
+
+mod get_group {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_not_found_for_unknown() {
+        let resp = send_get(make_app(), "/api/v1/groups/nonexistent").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的组应返回 404");
+    }
+
+    #[tokio::test]
+    async fn returns_group_with_member_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = make_app_with_dir(dir.path());
+        let body = create_process_body_with_group("echo x", false, Some("api"));
+        app.clone().oneshot(
+            Request::builder().method("POST").uri("/api/v1/processes/my-api")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
+        ).await.unwrap();
+
+        let resp = send_get(app, "/api/v1/groups/api").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let group: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(group["name"], "api");
+        assert!(group["processes"].as_array().unwrap().iter().any(|p| p == "my-api"));
+    }
+}
+
+// ── POST /api/v1/groups/:group/start ────────────────────────
+
+mod start_group {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_not_found_for_unknown() {
+        let resp = send_post(make_app(), "/api/v1/groups/nonexistent/start").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的组应返回 404");
+    }
+}
+
+// ── POST /api/v1/groups/:group/stop ─────────────────────────
+
+mod stop_group {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_not_found_for_unknown() {
+        let resp = send_post(make_app(), "/api/v1/groups/nonexistent/stop").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的组应返回 404");
+    }
+}
+
+// ── POST /api/v1/groups/:group/restart ──────────────────────
+
+mod restart_group {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_not_found_for_unknown() {
+        let resp = send_post(make_app(), "/api/v1/groups/nonexistent/restart").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的组应返回 404");
     }
 }

@@ -55,6 +55,28 @@ struct FsEntry {
     is_dir: bool,
 }
 
+#[derive(Serialize)]
+struct GroupInfo {
+    name: String,
+    processes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BatchResponse {
+    message: String,
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+    results: Vec<BatchResult>,
+}
+
+#[derive(Serialize)]
+struct BatchResult {
+    process: String,
+    success: bool,
+    error: Option<String>,
+}
+
 // ── 路由注册 ──────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
@@ -78,6 +100,11 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/processes/:name/logs/download", get(download_logs))
         .route("/api/v1/processes/:name/health", post(check_health))
         .route("/api/v1/stats", get(get_stats))
+        .route("/api/v1/groups", get(list_groups))
+        .route("/api/v1/groups/:group", get(get_group))
+        .route("/api/v1/groups/:group/start", post(start_group))
+        .route("/api/v1/groups/:group/stop", post(stop_group))
+        .route("/api/v1/groups/:group/restart", post(restart_group))
         .route("/api/v1/fs/browse", get(browse_fs))
         .route("/api/v1/reload", post(reload_config))
 }
@@ -175,6 +202,8 @@ struct CreateProcessRequest {
     #[serde(default)]
     depends_on: Vec<String>,
     #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
     max_log_size_mb: Option<u64>,
     stdout_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
@@ -199,6 +228,7 @@ impl From<CreateProcessRequest> for ProcessConfig {
             health_check: req.health_check,
             unhealthy_restart: req.unhealthy_restart,
             depends_on: req.depends_on,
+            group: req.group,
             max_log_size_mb: req.max_log_size_mb,
             stdout_log: req.stdout_log,
             stderr_log: req.stderr_log,
@@ -512,4 +542,148 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
 async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
     let result = state.manager.reload_from_file().await;
     api_res(result, "配置已重新加载", StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+// ── 进程组 ──────────────────────────────────────────────────
+
+fn group_members<'a>(processes: &'a [gugu_core::process::ProcessInfo], group: &str) -> Vec<&'a gugu_core::process::ProcessInfo> {
+    processes.iter().filter(|p| p.group.as_deref() == Some(group)).collect()
+}
+
+async fn list_groups(State(state): State<AppState>) -> impl IntoResponse {
+    let processes = state.manager.list_processes();
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for p in &processes {
+        if let Some(ref g) = p.group {
+            groups.entry(g.clone()).or_default().push(p.name.clone());
+        }
+    }
+    let result: Vec<GroupInfo> = groups
+        .into_iter()
+        .map(|(name, processes)| GroupInfo { name, processes })
+        .collect();
+    Json(result)
+}
+
+async fn get_group(
+    State(state): State<AppState>,
+    Path(group): Path<String>,
+) -> impl IntoResponse {
+    let processes = state.manager.list_processes();
+    let members = group_members(&processes, &group);
+    if members.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程组未找到")),
+        )
+            .into_response();
+    }
+    let names: Vec<String> = members.iter().map(|p| p.name.clone()).collect();
+    Json(GroupInfo {
+        name: group,
+        processes: names,
+    })
+    .into_response()
+}
+
+async fn start_group(
+    State(state): State<AppState>,
+    Path(group): Path<String>,
+) -> impl IntoResponse {
+    let processes = state.manager.list_processes();
+    let members = group_members(&processes, &group);
+    if members.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程组未找到")),
+        )
+            .into_response();
+    }
+    let mut results = Vec::with_capacity(members.len());
+    for p in &members {
+        let result = state.manager.start_process(&p.name).await;
+        results.push(BatchResult {
+            process: p.name.clone(),
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - succeeded;
+    Json(BatchResponse {
+        message: format!("进程组 '{}' 启动完成", group),
+        total: results.len(),
+        succeeded,
+        failed,
+        results,
+    })
+    .into_response()
+}
+
+async fn stop_group(
+    State(state): State<AppState>,
+    Path(group): Path<String>,
+) -> impl IntoResponse {
+    let processes = state.manager.list_processes();
+    let members = group_members(&processes, &group);
+    if members.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程组未找到")),
+        )
+            .into_response();
+    }
+    let mut results = Vec::with_capacity(members.len());
+    for p in members.iter().rev() {
+        let result = state.manager.stop_process(&p.name).await;
+        results.push(BatchResult {
+            process: p.name.clone(),
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - succeeded;
+    Json(BatchResponse {
+        message: format!("进程组 '{}' 停止完成", group),
+        total: results.len(),
+        succeeded,
+        failed,
+        results,
+    })
+    .into_response()
+}
+
+async fn restart_group(
+    State(state): State<AppState>,
+    Path(group): Path<String>,
+) -> impl IntoResponse {
+    let processes = state.manager.list_processes();
+    let members = group_members(&processes, &group);
+    if members.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程组未找到")),
+        )
+            .into_response();
+    }
+    let mut results = Vec::with_capacity(members.len());
+    for p in &members {
+        let result = state.manager.restart_process(&p.name).await;
+        results.push(BatchResult {
+            process: p.name.clone(),
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - succeeded;
+    Json(BatchResponse {
+        message: format!("进程组 '{}' 重启完成", group),
+        total: results.len(),
+        succeeded,
+        failed,
+        results,
+    })
+    .into_response()
 }

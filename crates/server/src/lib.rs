@@ -1,5 +1,6 @@
 pub mod api;
 pub mod assets;
+pub mod metrics;
 pub mod state;
 pub mod ws;
 
@@ -21,8 +22,6 @@ fn embedded_static_handler(req: Request) -> Response {
     match assets::WebAssets::get(path) {
         Some(file) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            // SAFETY: Response::builder 仅在 method/header 非法时失败，
-            // 此处只设 CONTENT_TYPE，不可能 panic。
             Response::builder()
                 .header(header::CONTENT_TYPE, mime.as_ref())
                 .body(Body::from(file.data.to_vec()))
@@ -62,13 +61,16 @@ pub async fn run_server(
             .allow_headers(tower_http::cors::Any)
     };
 
-    let app = Router::new()
-        .merge(api::routes())
+    let protected = api::routes()
         .merge(ws::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth_middleware,
-        ))
+        ));
+
+    let app = Router::new()
+        .merge(metrics::routes())
+        .merge(protected)
         .layer(cors_layer)
         .fallback(|req| std::future::ready(embedded_static_handler(req)))
         .with_state(state);

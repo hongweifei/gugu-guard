@@ -33,6 +33,7 @@ comfy-table = "7"
 dirs = "6"
 rust-embed = "8"
 windows-service = "0.8"
+prometheus = "0.14"
 
 [workspace.lints.clippy]
 redundant_clone = "warn"

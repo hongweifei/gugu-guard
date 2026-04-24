@@ -41,12 +41,16 @@ fn build_router(shared: SharedManager, api_key: Option<String>) -> axum::Router 
     let state = AppState::new(shared, api_key, Vec::new());
     let cors_layer = tower_http::cors::CorsLayer::permissive();
 
-    axum::Router::new()
-        .merge(gugu_server::api::routes())
+    let protected = gugu_server::api::routes()
+        .merge(gugu_server::ws::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             gugu_server::api::auth_middleware,
-        ))
+        ));
+
+    axum::Router::new()
+        .merge(gugu_server::metrics::routes())
+        .merge(protected)
         .layer(cors_layer)
         .with_state(state)
 }
@@ -396,5 +400,33 @@ mod fs_browse {
     async fn returns_bad_request_for_nonexistent_path() {
         let resp = send_get(make_app(), "/api/v1/fs/browse?path=/nonexistent/path/that/does/not/exist").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "不存在的路径应返回 400");
+    }
+}
+
+// ── GET /metrics ────────────────────────────────────────────
+
+mod metrics_endpoint {
+    use super::*;
+
+    #[tokio::test]
+    async fn returns_ok_without_auth() {
+        let app = make_app_with_key(Some("secret-key".to_string()));
+        let resp = send_get(app, "/metrics").await;
+        assert_eq!(resp.status(), StatusCode::OK, "/metrics 不需要认证");
+    }
+
+    #[tokio::test]
+    async fn contains_gugu_processes_metric() {
+        let resp = send_get(make_app(), "/metrics").await;
+        let body = axum::body::to_bytes(resp.into_body(), 4096)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("gugu_processes "), "/metrics 应包含 gugu_processes 聚合指标");
+        assert!(text.contains("gugu_processes_running"), "/metrics 应包含 gugu_processes_running");
+        assert!(
+            text.contains("gugu_process_status") || text.contains("gugu_processes 0"),
+            "/metrics 应包含 gugu_process_status 或显示 0 个进程"
+        );
     }
 }

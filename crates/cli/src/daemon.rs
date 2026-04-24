@@ -30,16 +30,13 @@ fn is_pid_running(pid: u32) -> bool {
         match output {
             Ok(o) => {
                 let s = String::from_utf8_lossy(&o.stdout);
-                let quoted = format!("\"{pid}\"");
-                s.contains(&quoted)
+                s.contains(&format!("\"{pid}\""))
             }
             Err(_) => false,
         }
     }
     #[cfg(unix)]
-    {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
+    { std::path::Path::new(&format!("/proc/{pid}")).exists() }
 }
 
 fn write_pid_file(path: &Path) -> Result<()> {
@@ -60,9 +57,7 @@ fn write_pid_file(path: &Path) -> Result<()> {
 }
 
 fn remove_pid_file(path: &Path) {
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
+    if path.exists() { let _ = std::fs::remove_file(path); }
 }
 
 pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result<CoreHandles> {
@@ -83,18 +78,8 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         tracing::info!("API Key 认证已启用");
     }
 
-    let manager = gugu_core::ProcessManager::new(&config, Some(config_path.to_path_buf()));
-    let shared = manager.shared();
-
-    {
-        let mut mgr = shared.write().await;
-        mgr.start_all().await;
-    }
-
-    let monitor_manager = shared.clone();
-    tokio::spawn(async move {
-        gugu_core::manager::start_monitor(monitor_manager).await;
-    });
+    // 启动 manager actor（内部会自动启动所有 auto_start 进程和监控循环）
+    let shared = gugu_core::manager::start(&config, Some(config_path.to_path_buf()));
 
     let addr_str = config.server_addr();
     let addr: std::net::SocketAddr = addr_str
@@ -105,7 +90,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
 
     let server_shared = shared.clone();
     let server_api_key = api_key;
-    let server_cors_origins = config.daemon.web.cors_origins.clone();
+    let server_cors_origins = config.daemon.web.cors_origins;
     let server_handle = tokio::spawn(async move {
         if let Err(e) = gugu_server::run_server(
             addr,
@@ -113,10 +98,8 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
             server_api_key,
             server_cors_origins,
             shutdown_rx,
-        )
-        .await
-        {
-            tracing::error!("Web 服务错误: {}", e);
+        ).await {
+            tracing::error!("Web 服务错误: {e}");
         }
     });
 
@@ -132,10 +115,8 @@ pub async fn graceful_shutdown(handles: CoreHandles) {
     tracing::info!("正在优雅停止所有进程...");
     let _ = handles.shutdown_tx.send(());
 
-    {
-        let mut mgr = handles.shared.write().await;
-        mgr.stop_all().await;
-    }
+    // 请求 actor 关闭（会 stop_all）
+    handles.shared.shutdown();
 
     match tokio::time::timeout(std::time::Duration::from_secs(5), handles.server_handle).await {
         Ok(_) => {}

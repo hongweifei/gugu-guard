@@ -222,14 +222,13 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                     let reload_config = match AppConfig::load(&config_path_owned) {
                         Ok(c) => c,
                         Err(e) => {
-                            tracing::error!("重载配置文件失败: {}", e);
+                            tracing::error!("重载配置文件失败: {e}");
                             continue;
                         }
                     };
-                    let mut mgr = shared.write().await;
-                    match mgr.reload_config(&reload_config).await {
+                    match shared.reload_config(&reload_config).await {
                         Ok(()) => tracing::info!("配置已重新加载"),
-                        Err(e) => tracing::error!("重载配置失败: {}", e),
+                        Err(e) => tracing::error!("重载配置失败: {e}"),
                     }
                 }
             }

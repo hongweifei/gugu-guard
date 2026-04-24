@@ -6,7 +6,7 @@ pub mod process;
 
 pub use config::AppConfig;
 pub use error::{GuguError, Result};
-pub use manager::ProcessManager;
+pub use manager::SharedManager;
 
 #[cfg(test)]
 mod tests {

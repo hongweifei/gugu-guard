@@ -1,23 +1,163 @@
 use crate::config::{AppConfig, DaemonConfig, HealthCheckConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
-use crate::health;
-use crate::process::{ManagedProcess, ProcessInfo, LogEntry, ProcessStatus};
-use std::collections::{HashMap, VecDeque};
+use crate::process::{LogEntry, ManagedProcess, ProcessInfo, ProcessStatus};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, mpsc, watch};
 
-pub type SharedManager = Arc<RwLock<ProcessManager>>;
+// ── Actor 命令 ──────────────────────────────────────────────
 
-pub struct ProcessManager {
-    processes: HashMap<String, ManagedProcess>,
-    daemon_config: DaemonConfig,
-    config_path: Option<PathBuf>,
+enum Command {
+    StartProcess { name: String, reply: ReplyTx<()> },
+    StopProcess { name: String, reply: ReplyTx<()> },
+    RestartProcess { name: String, reply: ReplyTx<()> },
+    CheckHealth { name: String, reply: ReplyTx<bool> },
+    AddProcess { name: String, config: ProcessConfig, start_now: bool, reply: ReplyTx<()> },
+    UpdateProcess { name: String, config: ProcessConfig, new_name: Option<String>, force_restart: bool, reply: ReplyTx<()> },
+    RemoveProcess { name: String, reply: ReplyTx<()> },
+    ClearLogs { name: String, reply: ReplyTx<()> },
+    ReloadConfig { config: AppConfig, reply: ReplyTx<()> },
+    ReloadFromFile { reply: ReplyTx<()> },
+    GetProcessConfig { name: String, reply: ReplyTx<Option<ProcessConfig>> },
+    GetProcessLogs { name: String, lines: usize, reply: ReplyTx<Vec<LogEntry>> },
+    SubscribeLogs { name: String, reply: ReplyTx<broadcast::Receiver<LogEntry>> },
+    Shutdown,
 }
 
+type ReplyTx<T> = tokio::sync::oneshot::Sender<Result<T>>;
+
+// ── 状态快照 ────────────────────────────────────────────────
+
+/// 进程状态快照，通过 watch 通道无锁读取。
+#[derive(Debug, Clone, Default)]
+pub struct ProcessSnapshot {
+    pub processes: Vec<ProcessInfo>,
+}
+
+impl ProcessSnapshot {
+    pub fn find(&self, name: &str) -> Option<&ProcessInfo> {
+        self.processes.iter().find(|p| p.name == name)
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.processes.iter().map(|p| p.name.clone()).collect()
+    }
+}
+
+// ── SharedManager（公开句柄） ────────────────────────────────
+
+/// 进程管理器的共享句柄。
+///
+/// 读操作通过 watch 通道无锁获取快照；
+/// 写操作通过 mpsc 命令通道序列化到单一 actor 任务执行。
+#[derive(Clone)]
+pub struct SharedManager {
+    cmd_tx: mpsc::Sender<Command>,
+    snapshot: watch::Receiver<ProcessSnapshot>,
+}
+
+impl SharedManager {
+    // ── 读操作（无锁） ──
+
+    pub fn list_processes(&self) -> Vec<ProcessInfo> {
+        self.snapshot.borrow().processes.clone()
+    }
+
+    pub fn get_process_info(&self, name: &str) -> Option<ProcessInfo> {
+        self.snapshot.borrow().find(name).cloned()
+    }
+
+    pub fn all_process_names(&self) -> Vec<String> {
+        self.snapshot.borrow().names()
+    }
+
+    // ── 写操作（命令通道） ──
+
+    pub async fn start_process(&self, name: &str) -> Result<()> {
+        self.call(|r| Command::StartProcess { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn stop_process(&self, name: &str) -> Result<()> {
+        self.call(|r| Command::StopProcess { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn restart_process(&self, name: &str) -> Result<()> {
+        self.call(|r| Command::RestartProcess { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn check_process_health(&self, name: &str) -> Result<bool> {
+        self.call_val(|r| Command::CheckHealth { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn add_process(&self, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
+        self.call(|r| Command::AddProcess { name, config, start_now, reply: r }).await
+    }
+
+    pub async fn update_process(&self, name: &str, config: ProcessConfig, new_name: Option<String>, force_restart: bool) -> Result<()> {
+        self.call(|r| Command::UpdateProcess { name: name.to_string(), config, new_name, force_restart, reply: r }).await
+    }
+
+    pub async fn remove_process(&self, name: &str) -> Result<()> {
+        self.call(|r| Command::RemoveProcess { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn get_process_config(&self, name: &str) -> Result<Option<ProcessConfig>> {
+        self.call_val(|r| Command::GetProcessConfig { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn get_process_logs(&self, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
+        self.call_val(|r| Command::GetProcessLogs { name: name.to_string(), lines, reply: r }).await
+    }
+
+    pub async fn clear_process_logs(&self, name: &str) -> Result<()> {
+        self.call(|r| Command::ClearLogs { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn subscribe_process_logs(&self, name: &str) -> Result<broadcast::Receiver<LogEntry>> {
+        self.call_val(|r| Command::SubscribeLogs { name: name.to_string(), reply: r }).await
+    }
+
+    pub async fn reload_config(&self, new_config: &AppConfig) -> Result<()> {
+        self.call(|r| Command::ReloadConfig { config: new_config.clone(), reply: r }).await
+    }
+
+    pub async fn reload_from_file(&self) -> Result<()> {
+        self.call(|r| Command::ReloadFromFile { reply: r }).await
+    }
+
+    /// 请求 actor 关闭，停止所有进程后退出循环。
+    pub fn shutdown(&self) {
+        // Shutdown 不需要回复，fire-and-forget。
+        // 用 try_send 避免在 channel 满时阻塞。
+        let _ = self.cmd_tx.try_send(Command::Shutdown);
+    }
+
+    // ── 内部 ──
+
+    async fn call<F>(&self, f: F) -> Result<()>
+    where F: FnOnce(ReplyTx<()>) -> Command {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_tx.send(f(tx)).await
+            .map_err(|_| GuguError::ConfigError("进程管理器已关闭".into()))?;
+        rx.await
+            .map_err(|_| GuguError::ConfigError("进程管理器未响应".into()))?
+    }
+
+    async fn call_val<T, F>(&self, f: F) -> Result<T>
+    where F: FnOnce(ReplyTx<T>) -> Command {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_tx.send(f(tx)).await
+            .map_err(|_| GuguError::ConfigError("进程管理器已关闭".into()))?;
+        rx.await
+            .map_err(|_| GuguError::ConfigError("进程管理器未响应".into()))?
+    }
+}
+
+// ── 拓扑排序（公共工具） ─────────────────────────────────────
+
 pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<String>> {
-    let mut in_degree: HashMap<&str, u32> = HashMap::new();
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut in_degree: HashMap<&str, u32> = HashMap::with_capacity(processes.len());
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::with_capacity(processes.len());
 
     for name in processes.keys() {
         in_degree.insert(name.as_str(), 0);
@@ -31,7 +171,8 @@ pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Re
                 continue;
             }
             dependents.entry(dep.as_str()).or_default().push(name.as_str());
-            *in_degree.entry(name.as_str()).or_insert(0) += 1;
+            // SAFETY: 所有 processes 的 key 已在上方初始化到 in_degree
+            *in_degree.get_mut(name.as_str()).unwrap() += 1;
         }
     }
 
@@ -57,10 +198,8 @@ pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Re
     }
 
     if result.len() != processes.len() {
-        let result_set: std::collections::HashSet<&str> =
-            result.iter().map(String::as_str).collect();
-        let remaining: Vec<&str> = processes
-            .keys()
+        let result_set: HashSet<&str> = result.iter().map(String::as_str).collect();
+        let remaining: Vec<&str> = processes.keys()
             .filter(|k| !result_set.contains(k.as_str()))
             .map(String::as_str)
             .collect();
@@ -72,8 +211,16 @@ pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Re
     Ok(result)
 }
 
-impl ProcessManager {
-    pub fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
+// ── Actor 内部状态 ──────────────────────────────────────────
+
+struct State {
+    processes: HashMap<String, ManagedProcess>,
+    daemon_config: DaemonConfig,
+    config_path: Option<PathBuf>,
+}
+
+impl State {
+    fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
         let config_dir = config_path.as_deref()
             .and_then(|p| p.parent())
             .unwrap_or(std::path::Path::new("."));
@@ -82,51 +229,49 @@ impl ProcessManager {
             .map(|d| crate::config::resolve_relative_path(d, config_dir))
             .unwrap_or_else(|| config_dir.to_path_buf());
 
-        let processes = config
-            .processes
-            .iter()
-            .map(|(name, proc_config)| {
-                let resolved = Self::resolve_process_paths(proc_config, config_dir, &log_base);
+        let processes = config.processes.iter()
+            .map(|(name, pc)| {
+                let resolved = Self::resolve_paths(pc, config_dir, &log_base);
                 (name.clone(), ManagedProcess::new(name.clone(), resolved))
             })
             .collect();
 
-        Self {
-            processes,
-            daemon_config: config.daemon.clone(),
-            config_path,
-        }
+        Self { processes, daemon_config: config.daemon.clone(), config_path }
     }
 
-    fn resolve_process_paths(
-        config: &crate::config::ProcessConfig,
-        config_dir: &std::path::Path,
-        log_base: &std::path::Path,
-    ) -> crate::config::ProcessConfig {
-        let mut c = config.clone();
-        if let Some(ref dir) = c.working_dir {
-            c.working_dir = Some(crate::config::resolve_relative_path(dir, config_dir));
+    fn resolve_paths(c: &ProcessConfig, config_dir: &std::path::Path, log_base: &std::path::Path) -> ProcessConfig {
+        let mut r = c.clone();
+        if let Some(ref d) = r.working_dir {
+            r.working_dir = Some(crate::config::resolve_relative_path(d, config_dir));
         }
-        if let Some(ref p) = c.stdout_log {
-            c.stdout_log = Some(crate::config::resolve_relative_path(p, log_base));
+        if let Some(ref p) = r.stdout_log {
+            r.stdout_log = Some(crate::config::resolve_relative_path(p, log_base));
         }
-        if let Some(ref p) = c.stderr_log {
-            c.stderr_log = Some(crate::config::resolve_relative_path(p, log_base));
+        if let Some(ref p) = r.stderr_log {
+            r.stderr_log = Some(crate::config::resolve_relative_path(p, log_base));
         }
-        c
+        r
     }
 
-    #[must_use]
-    pub fn shared(self) -> SharedManager {
-        Arc::new(RwLock::new(self))
+    fn snapshot(&self) -> ProcessSnapshot {
+        ProcessSnapshot { processes: self.processes.values().map(ManagedProcess::info).collect() }
     }
 
-    pub async fn start_all(&mut self) {
-        let configs: HashMap<String, ProcessConfig> = self
-            .processes
-            .iter()
-            .map(|(n, p)| (n.clone(), p.config().clone()))
-            .collect();
+    fn save_config(&self) -> Result<()> {
+        let Some(ref path) = self.config_path else { return Ok(()) };
+        let config = AppConfig {
+            daemon: self.daemon_config.clone(),
+            processes: self.processes.iter()
+                .map(|(n, p)| (n.clone(), p.config().clone())).collect(),
+        };
+        config.save(path)?;
+        tracing::debug!("配置已保存到 {}", path.display());
+        Ok(())
+    }
+
+    async fn start_all(&mut self) {
+        let configs: HashMap<String, ProcessConfig> = self.processes.iter()
+            .map(|(n, p)| (n.clone(), p.config().clone())).collect();
 
         let order = match topological_sort(&configs) {
             Ok(o) => o,
@@ -147,7 +292,7 @@ impl ProcessManager {
         }
     }
 
-    pub async fn stop_all(&mut self) {
+    async fn stop_all(&mut self) {
         let names: Vec<String> = self.processes.keys().cloned().collect();
         let timeout = std::time::Duration::from_secs(30);
         for name in names {
@@ -162,352 +307,368 @@ impl ProcessManager {
             }
         }
     }
+}
 
-    pub async fn start_process(&mut self, name: &str) -> Result<()> {
-        let proc = self
-            .processes
-            .get_mut(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        proc.reset_crash_restart_count();
-        proc.start().await
-    }
+// ── 启动入口 ─────────────────────────────────────────────────
 
-    pub async fn stop_process(&mut self, name: &str) -> Result<()> {
-        let proc = self
-            .processes
-            .get_mut(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        proc.stop().await
-    }
+/// 创建并启动进程管理器 actor，返回共享句柄。
+///
+/// 内部会自动启动所有 `auto_start` 进程和监控循环。
+pub fn start(config: &AppConfig, config_path: Option<PathBuf>) -> SharedManager {
+    let (cmd_tx, cmd_rx) = mpsc::channel(256);
+    let mut state = State::new(config, config_path);
+    let snapshot = state.snapshot();
+    let (snap_tx, snap_rx) = watch::channel(snapshot);
 
-    pub async fn restart_process(&mut self, name: &str) -> Result<()> {
-        let proc = self
-            .processes
-            .get_mut(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        proc.restart().await
-    }
+    tokio::spawn(async move {
+        state.start_all().await;
+        actor_loop(state, cmd_rx, snap_tx).await;
+    });
 
-    pub async fn check_process_health(&mut self, name: &str) -> Result<bool> {
-        let hc = {
-            let proc = self
-                .processes
-                .get(name)
-                .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-            proc.config()
-                .health_check
-                .clone()
-                .ok_or_else(|| GuguError::ConfigError("该进程未配置健康检查".into()))?
-        };
-        let healthy = health::check_health(&hc).await;
-        if let Some(proc) = self.processes.get_mut(name) {
-            proc.set_healthy(Some(healthy));
-        }
-        Ok(healthy)
-    }
+    SharedManager { cmd_tx, snapshot: snap_rx }
+}
 
-    pub async fn add_process(&mut self, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
-        if self.processes.contains_key(&name) {
-            return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
-        }
-        config.validate()?;
-        let mut proc = ManagedProcess::new(name.clone(), config.clone());
-        if start_now {
-            proc.start().await?;
-        }
-        self.processes.insert(name.clone(), proc);
-        tracing::info!("[{}] 进程配置已添加", name);
-        self.save_config()?;
-        Ok(())
-    }
+async fn actor_loop(mut state: State, mut cmd_rx: mpsc::Receiver<Command>, snap_tx: watch::Sender<ProcessSnapshot>) {
+    let mut monitor_interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
-    pub async fn update_process(&mut self, name: &str, config: ProcessConfig, new_name: Option<String>, force_restart: bool) -> Result<()> {
-        if !self.processes.contains_key(name) {
-            return Err(GuguError::ProcessNotFound(name.to_string()));
-        }
+    loop {
+        tokio::select! {
+            biased;
 
-        config.validate()?;
-
-        let was_running = self.processes[name].is_running();
-        let needs_restart =
-            force_restart || !self.processes[name].config().runtime_fields_eq(&config);
-
-        if needs_restart && was_running {
-            self.processes.get_mut(name).unwrap().stop().await?;
-        }
-
-        self.processes.get_mut(name).unwrap().config_mut();
-        *self.processes.get_mut(name).unwrap().config_mut() = config;
-
-        if let Some(ref new) = new_name {
-            if new != name {
-                if self.processes.contains_key(new) {
-                    return Err(GuguError::ConfigError(format!("进程 '{new}' 已存在")));
-                }
-                let mut proc = self.processes.remove(name).unwrap();
-                proc.rename(new.clone());
-                self.processes.insert(new.clone(), proc);
-                tracing::info!("[{}] 进程已改名为 [{}]", name, new);
-            }
-        }
-
-        let target = new_name.as_deref().unwrap_or(name);
-        if needs_restart && was_running {
-            if let Some(proc) = self.processes.get_mut(target) {
-                let _ = proc.start().await;
-            }
-        }
-
-        tracing::info!("[{}] 进程配置已更新", target);
-        self.save_config()?;
-        Ok(())
-    }
-
-    pub async fn remove_process(&mut self, name: &str) -> Result<()> {
-        if let Some(proc) = self.processes.get_mut(name) {
-            if proc.is_running() {
-                proc.stop().await?;
-            }
-        } else {
-            return Err(GuguError::ProcessNotFound(name.to_string()));
-        }
-        self.processes.remove(name);
-        tracing::info!("[{}] 进程已移除", name);
-        self.save_config()?;
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn list_processes(&self) -> Vec<ProcessInfo> {
-        self.processes.values().map(ManagedProcess::info).collect()
-    }
-
-    pub fn get_process_info(&self, name: &str) -> Option<ProcessInfo> {
-        self.processes.get(name).map(ManagedProcess::info)
-    }
-
-    pub fn get_process_config(&self, name: &str) -> Option<&ProcessConfig> {
-        self.processes.get(name).map(ManagedProcess::config)
-    }
-
-    pub async fn get_process_logs(&self, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
-        let proc = self
-            .processes
-            .get(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        Ok(proc.logs(lines).await)
-    }
-
-    pub async fn clear_process_logs(&self, name: &str) -> Result<()> {
-        let proc = self
-            .processes
-            .get(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        proc.clear_logs().await;
-        Ok(())
-    }
-
-    pub fn subscribe_process_logs(&self, name: &str) -> Result<tokio::sync::broadcast::Receiver<LogEntry>> {
-        let proc = self
-            .processes
-            .get(name)
-            .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-        Ok(proc.subscribe_logs())
-    }
-
-    #[must_use]
-    pub fn all_process_names(&self) -> Vec<String> {
-        self.processes.keys().cloned().collect()
-    }
-
-    pub fn find_dead_processes(&mut self) -> Vec<(String, std::time::Duration)> {
-        let mut dead = Vec::new();
-        for (name, proc) in &mut self.processes {
-            if proc.is_running() && !proc.check_alive()
-                && proc.should_auto_restart()
-            {
-                proc.set_status(ProcessStatus::Restarting);
-                proc.mark_crash_restart();
-                dead.push((name.clone(), proc.restart_delay()));
-            }
-        }
-        dead
-    }
-
-    pub async fn run_due_health_checks(&mut self) {
-        let now = std::time::Instant::now();
-
-        let to_check: Vec<(String, HealthCheckConfig, bool)> = {
-            let mut checks = Vec::new();
-            for (name, proc) in &mut self.processes {
-                if !proc.is_running() {
-                    continue;
-                }
-                let (hc, should_check, ur) = {
-                    let cfg = proc.config();
-                    match &cfg.health_check {
-                        Some(hc) => {
-                            let interval =
-                                std::time::Duration::from_secs(hc.interval_secs);
-                            let should = proc
-                                .last_health_check()
-                                .is_none_or(|last| now.duration_since(last) >= interval);
-                            (hc.clone(), should, cfg.unhealthy_restart)
-                        }
-                        None => continue,
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { break };
+                match cmd {
+                    Command::Shutdown => {
+                        state.stop_all().await;
+                        break;
                     }
-                };
-                if should_check {
-                    proc.set_last_health_check(Some(now));
-                    checks.push((name.clone(), hc, ur));
+                    c => handle(&mut state, &snap_tx, c).await,
                 }
             }
-            checks
-        };
 
-        let mut to_restart: Vec<String> = Vec::new();
-        // 并发执行所有健康检查
-        let check_futures: Vec<_> = to_check
-            .iter()
-            .map(|(_, hc, _)| health::check_health(hc))
-            .collect();
-        let health_results = futures::future::join_all(check_futures).await;
-
-        for ((name, _, unhealthy_restart), healthy) in to_check.iter().zip(health_results) {
-            if let Some(proc) = self.processes.get_mut(name) {
-                proc.set_healthy(Some(healthy));
-            }
-            if !healthy {
-                tracing::warn!("[{}] 健康检查失败", name);
-                if *unhealthy_restart {
-                    to_restart.push(name.clone());
-                }
-            }
-        }
-
-        for name in to_restart {
-            tracing::warn!("[{}] 健康检查失败，准备重启", name);
-            if let Some(proc) = self.processes.get_mut(&name) {
-                if proc.is_running() {
-                    let _ = proc.stop().await;
-                }
-                if proc.should_auto_restart() {
-                    proc.set_status(ProcessStatus::Restarting);
-                    proc.mark_crash_restart();
-                    if let Err(e) = proc.start().await {
-                        tracing::error!("[{}] 健康检查重启失败: {}", name, e);
-                    }
-                }
+            _ = monitor_interval.tick() => {
+                run_monitor_cycle(&mut state).await;
+                broadcast(&state, &snap_tx);
             }
         }
     }
 
-    pub async fn reload_config(&mut self, new_config: &AppConfig) -> Result<()> {
-        self.daemon_config = new_config.daemon.clone();
+    tracing::info!("进程管理器 actor 已停止");
+}
 
-        let to_remove: Vec<String> = self
-            .processes
-            .keys()
-            .filter(|k| !new_config.processes.contains_key(*k))
-            .cloned()
-            .collect();
-        for name in &to_remove {
-            if let Some(proc) = self.processes.get_mut(name) {
-                if proc.is_running() {
-                    let _ = proc.stop().await;
-                }
-            }
-            self.processes.remove(name);
-            tracing::info!("[{}] 进程已移除 (配置重载)", name);
+fn broadcast(state: &State, snap_tx: &watch::Sender<ProcessSnapshot>) {
+    let _ = snap_tx.send(state.snapshot());
+}
+
+// ── 命令分发 ─────────────────────────────────────────────────
+
+async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSnapshot>, cmd: Command) {
+    match cmd {
+        Command::StartProcess { name, reply } => {
+            let _ = reply.send(do_start(state, &name).await);
+            broadcast(state, snap_tx);
         }
-
-        for (name, config) in &new_config.processes {
-            if let Err(e) = config.validate() {
-                tracing::warn!("[{}] 配置验证失败，跳过: {}", name, e);
-                continue;
-            }
-            if let Some(proc) = self.processes.get_mut(name) {
-                let was_running = proc.is_running();
-                let needs_restart = was_running && !proc.config().runtime_fields_eq(config);
-                *proc.config_mut() = config.clone();
-                if needs_restart {
-                    let _ = proc.stop().await;
-                    let _ = proc.start().await;
-                    tracing::info!("[{}] 配置已更新并重启 (配置重载)", name);
-                } else {
-                    tracing::info!("[{}] 配置已更新 (配置重载)", name);
-                }
-            } else {
-                let mut proc = ManagedProcess::new(name.clone(), config.clone());
-                if config.auto_start {
-                    let _ = proc.start().await;
-                }
-                self.processes.insert(name.clone(), proc);
-                tracing::info!("[{}] 新进程已添加 (配置重载)", name);
-            }
+        Command::StopProcess { name, reply } => {
+            let _ = reply.send(do_stop(state, &name).await);
+            broadcast(state, snap_tx);
         }
-
-        Ok(())
-    }
-
-    pub async fn reload_from_file(&mut self) -> Result<()> {
-        let path = match &self.config_path {
-            Some(p) => p.clone(),
-            None => return Err(GuguError::ConfigError("未配置配置文件路径".into())),
-        };
-        let config = AppConfig::load(&path)?;
-        self.reload_config(&config).await
-    }
-
-    fn save_config(&self) -> Result<()> {
-        if let Some(ref path) = self.config_path {
-            let config = AppConfig {
-                daemon: self.daemon_config.clone(),
-                processes: self
-                    .processes
-                    .iter()
-                    .map(|(name, proc)| (name.clone(), proc.config().clone()))
-                    .collect(),
-            };
-            config.save(path)?;
-            tracing::debug!("配置已保存到 {}", path.display());
+        Command::RestartProcess { name, reply } => {
+            let _ = reply.send(do_restart(state, &name).await);
+            broadcast(state, snap_tx);
         }
-        Ok(())
+        Command::CheckHealth { name, reply } => {
+            let _ = reply.send(do_check_health(state, &name).await);
+            broadcast(state, snap_tx);
+        }
+        Command::AddProcess { name, config, start_now, reply } => {
+            let _ = reply.send(do_add(state, name, config, start_now).await);
+            broadcast(state, snap_tx);
+        }
+        Command::UpdateProcess { name, config, new_name, force_restart, reply } => {
+            let _ = reply.send(do_update(state, &name, config, new_name, force_restart).await);
+            broadcast(state, snap_tx);
+        }
+        Command::RemoveProcess { name, reply } => {
+            let _ = reply.send(do_remove(state, &name).await);
+            broadcast(state, snap_tx);
+        }
+        Command::ClearLogs { name, reply } => {
+            let _ = reply.send(do_clear_logs(state, &name).await);
+        }
+        Command::ReloadConfig { config, reply } => {
+            let _ = reply.send(do_reload(state, &config).await);
+            broadcast(state, snap_tx);
+        }
+        Command::ReloadFromFile { reply } => {
+            let _ = reply.send(do_reload_from_file(state).await);
+            broadcast(state, snap_tx);
+        }
+        Command::GetProcessConfig { name, reply } => {
+            let cfg = state.processes.get(&name).map(|p| p.config().clone());
+            let _ = reply.send(Ok(cfg));
+        }
+        Command::GetProcessLogs { name, lines, reply } => {
+            let _ = reply.send(do_get_logs(state, &name, lines).await);
+        }
+        Command::SubscribeLogs { name, reply } => {
+            let _ = reply.send(do_subscribe(state, &name));
+        }
+        Command::Shutdown => unreachable!(),
     }
 }
 
-pub async fn start_monitor(manager: SharedManager) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-    loop {
-        interval.tick().await;
+// ── 具体操作 ─────────────────────────────────────────────────
 
-        // 检测已退出进程 — 持锁时间短，只修改状态
-        let dead = {
-            let mut mgr = manager.write().await;
-            mgr.find_dead_processes()
-        };
+fn get_proc<'a>(state: &'a mut State, name: &str) -> Result<&'a mut ManagedProcess> {
+    state.processes.get_mut(name).ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))
+}
 
-        // 每个进程独立获取写锁来重启，不阻塞其他操作
-        for (name, delay) in dead {
-            let mgr_clone = manager.clone();
-            tokio::spawn(async move {
-                tracing::info!("[{}] 准备自动重启，等待 {:?}", name, delay);
-                tokio::time::sleep(delay).await;
-                let mut mgr = mgr_clone.write().await;
-                if let Some(proc) = mgr.processes.get_mut(&name) {
-                    if !proc.is_running() {
-                        if let Err(e) = proc.start().await {
-                            tracing::error!("[{}] 自动重启失败: {}", name, e);
-                        }
-                    }
-                }
-            });
+async fn do_start(state: &mut State, name: &str) -> Result<()> {
+    let proc = get_proc(state, name)?;
+    proc.reset_crash_restart_count();
+    proc.start().await
+}
+
+async fn do_stop(state: &mut State, name: &str) -> Result<()> {
+    get_proc(state, name)?.stop().await
+}
+
+async fn do_restart(state: &mut State, name: &str) -> Result<()> {
+    get_proc(state, name)?.restart().await
+}
+
+async fn do_check_health(state: &mut State, name: &str) -> Result<bool> {
+    let hc = {
+        let proc = get_proc(state, name)?;
+        proc.config().health_check.clone()
+            .ok_or_else(|| GuguError::ConfigError("该进程未配置健康检查".into()))?
+    };
+    let healthy = crate::health::check_health(&hc).await;
+    if let Some(proc) = state.processes.get_mut(name) {
+        proc.set_healthy(Some(healthy));
+    }
+    Ok(healthy)
+}
+
+async fn do_add(state: &mut State, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
+    if state.processes.contains_key(&name) {
+        return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
+    }
+    config.validate()?;
+    let mut proc = ManagedProcess::new(name.clone(), config);
+    if start_now {
+        proc.start().await?;
+    }
+    state.processes.insert(name.clone(), proc);
+    tracing::info!("[{}] 进程配置已添加", name);
+    state.save_config()
+}
+
+async fn do_update(state: &mut State, name: &str, config: ProcessConfig, new_name: Option<String>, force_restart: bool) -> Result<()> {
+    if !state.processes.contains_key(name) {
+        return Err(GuguError::ProcessNotFound(name.to_string()));
+    }
+    config.validate()?;
+
+    let was_running = state.processes[name].is_running();
+    let needs_restart = force_restart || !state.processes[name].config().runtime_fields_eq(&config);
+
+    if needs_restart && was_running {
+        // SAFETY: 上方已验证 name 存在于 processes
+        state.processes.get_mut(name).expect("已验证存在").stop().await?;
+    }
+    // SAFETY: 同上
+    *state.processes.get_mut(name).expect("已验证存在").config_mut() = config;
+
+    if let Some(ref new) = new_name {
+        if new != name {
+            if state.processes.contains_key(new) {
+                return Err(GuguError::ConfigError(format!("进程 '{new}' 已存在")));
+            }
+            // SAFETY: name 已验证存在，且 new 不存在
+            let mut proc = state.processes.remove(name).expect("已验证存在");
+            proc.rename(new.clone());
+            state.processes.insert(new.clone(), proc);
+            tracing::info!("[{}] 进程已改名为 [{}]", name, new);
         }
+    }
 
-        // 健康检查 — 尽量缩短持锁时间
-        {
-            let mut mgr = manager.write().await;
-            mgr.run_due_health_checks().await;
+    let target = new_name.as_deref().unwrap_or(name);
+    if needs_restart && was_running {
+        if let Some(proc) = state.processes.get_mut(target) {
+            let _ = proc.start().await;
+        }
+    }
+    tracing::info!("[{}] 进程配置已更新", target);
+    state.save_config()
+}
+
+async fn do_remove(state: &mut State, name: &str) -> Result<()> {
+    let Some(proc) = state.processes.get_mut(name) else {
+        return Err(GuguError::ProcessNotFound(name.to_string()));
+    };
+    if proc.is_running() {
+        proc.stop().await?;
+    }
+    state.processes.remove(name);
+    tracing::info!("[{}] 进程已移除", name);
+    state.save_config()
+}
+
+async fn do_clear_logs(state: &mut State, name: &str) -> Result<()> {
+    get_proc(state, name)?.clear_logs().await;
+    Ok(())
+}
+
+async fn do_get_logs(state: &mut State, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
+    let proc = state.processes.get(name)
+        .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+    Ok(proc.logs(lines).await)
+}
+
+fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntry>> {
+    let proc = state.processes.get(name)
+        .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+    Ok(proc.subscribe_logs())
+}
+
+async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
+    state.daemon_config = new_config.daemon.clone();
+
+    let to_remove: Vec<String> = state.processes.keys()
+        .filter(|k| !new_config.processes.contains_key(*k)).cloned().collect();
+    for name in &to_remove {
+        if let Some(proc) = state.processes.get_mut(name) {
+            if proc.is_running() {
+                let _ = proc.stop().await;
+            }
+        }
+        state.processes.remove(name);
+        tracing::info!("[{}] 进程已移除 (配置重载)", name);
+    }
+
+    for (name, config) in &new_config.processes {
+        if let Err(e) = config.validate() {
+            tracing::warn!("[{}] 配置验证失败，跳过: {}", name, e);
+            continue;
+        }
+        if let Some(proc) = state.processes.get_mut(name) {
+            let was_running = proc.is_running();
+            let needs_restart = was_running && !proc.config().runtime_fields_eq(config);
+            *proc.config_mut() = config.clone();
+            if needs_restart {
+                let _ = proc.stop().await;
+                let _ = proc.start().await;
+                tracing::info!("[{}] 配置已更新并重启 (配置重载)", name);
+            } else {
+                tracing::info!("[{}] 配置已更新 (配置重载)", name);
+            }
+        } else {
+            let mut proc = ManagedProcess::new(name.clone(), config.clone());
+            if config.auto_start {
+                let _ = proc.start().await;
+            }
+            state.processes.insert(name.clone(), proc);
+            tracing::info!("[{}] 新进程已添加 (配置重载)", name);
+        }
+    }
+    Ok(())
+}
+
+async fn do_reload_from_file(state: &mut State) -> Result<()> {
+    let path = state.config_path.clone()
+        .ok_or_else(|| GuguError::ConfigError("未配置配置文件路径".into()))?;
+    let config = AppConfig::load(&path)?;
+    do_reload(state, &config).await
+}
+
+// ── 监控循环 ─────────────────────────────────────────────────
+
+async fn run_monitor_cycle(state: &mut State) {
+    let dead = find_dead(state);
+    for (name, delay) in dead {
+        tracing::info!("[{}] 准备自动重启，等待 {:?}", name, delay);
+        tokio::time::sleep(delay).await;
+        if let Some(proc) = state.processes.get_mut(&name) {
+            if !proc.is_running() {
+                if let Err(e) = proc.start().await {
+                    tracing::error!("[{}] 自动重启失败: {}", name, e);
+                }
+            }
+        }
+    }
+
+    run_health_checks(state).await;
+}
+
+fn find_dead(state: &mut State) -> Vec<(String, std::time::Duration)> {
+    let mut dead = Vec::new();
+    for (name, proc) in &mut state.processes {
+        if proc.is_running() && !proc.check_alive() && proc.should_auto_restart() {
+            proc.set_status(ProcessStatus::Restarting);
+            proc.mark_crash_restart();
+            dead.push((name.clone(), proc.restart_delay()));
+        }
+    }
+    dead
+}
+
+async fn run_health_checks(state: &mut State) {
+    let now = std::time::Instant::now;
+
+    let to_check: Vec<(String, HealthCheckConfig, bool)> = {
+        let mut checks = Vec::new();
+        for (name, proc) in &mut state.processes {
+            if !proc.is_running() { continue; }
+            let (hc, should_check, ur) = {
+                let cfg = proc.config();
+                match &cfg.health_check {
+                    Some(hc) => {
+                        let interval = std::time::Duration::from_secs(hc.interval_secs);
+                        let should = proc.last_health_check()
+                            .is_none_or(|last| now().duration_since(last) >= interval);
+                        (hc.clone(), should, cfg.unhealthy_restart)
+                    }
+                    None => continue,
+                }
+            };
+            if should_check {
+                proc.set_last_health_check(Some(now()));
+                checks.push((name.clone(), hc, ur));
+            }
+        }
+        checks
+    };
+
+    let futures: Vec<_> = to_check.iter().map(|(_, hc, _)| crate::health::check_health(hc)).collect();
+    let results = futures::future::join_all(futures).await;
+
+    let mut to_restart = Vec::new();
+    for ((name, _, unhealthy_restart), healthy) in to_check.iter().zip(results) {
+        if let Some(proc) = state.processes.get_mut(name) {
+            proc.set_healthy(Some(healthy));
+        }
+        if !healthy {
+            tracing::warn!("[{}] 健康检查失败", name);
+            if *unhealthy_restart {
+                to_restart.push(name.clone());
+            }
+        }
+    }
+
+    for name in to_restart {
+        tracing::warn!("[{}] 健康检查失败，准备重启", name);
+        if let Some(proc) = state.processes.get_mut(&name) {
+            if proc.is_running() {
+                let _ = proc.stop().await;
+            }
+            if proc.should_auto_restart() {
+                proc.set_status(ProcessStatus::Restarting);
+                proc.mark_crash_restart();
+                if let Err(e) = proc.start().await {
+                    tracing::error!("[{}] 健康检查重启失败: {}", name, e);
+                }
+            }
         }
     }
 }

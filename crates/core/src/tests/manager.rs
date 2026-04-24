@@ -17,6 +17,7 @@ fn test_config() -> ProcessConfig {
         health_check: None,
         unhealthy_restart: false,
         depends_on: Vec::new(),
+        group: None,
         max_log_size_mb: None,
         stdout_log: None,
         stderr_log: None,

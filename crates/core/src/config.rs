@@ -118,6 +118,8 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
     pub max_log_size_mb: Option<u64>,
     #[serde(default)]
     pub stdout_log: Option<PathBuf>,

@@ -54,6 +54,7 @@ pub struct ProcessInfo {
     pub has_health_check: bool,
     pub unhealthy_restart: bool,
     pub healthy: Option<bool>,
+    pub group: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
 }
@@ -382,6 +383,7 @@ impl ManagedProcess {
             has_health_check: self.config.health_check.is_some(),
             unhealthy_restart: self.config.unhealthy_restart,
             healthy: self.healthy,
+            group: self.config.group.clone(),
             started_at: self.started_at,
             uptime_secs,
         }

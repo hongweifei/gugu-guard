@@ -15,7 +15,9 @@ use crate::error::{GuguError, Result};
 const MAX_LOG_LINES: usize = 1000;
 const LOG_BROADCAST_CAPACITY: usize = 256;
 // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

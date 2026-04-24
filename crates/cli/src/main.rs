@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 mod windows_service;
 mod daemon;
 
+#[cfg(windows)]
 const SERVICE_NAME: &str = "GuguGuard";
 
 #[derive(Parser)]

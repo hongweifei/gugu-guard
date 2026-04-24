@@ -6,9 +6,9 @@ pub mod ws;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Router;
-use axum::middleware;
 use gugu_core::manager::SharedManager;
 use state::AppState;
 use std::net::SocketAddr;
@@ -21,6 +21,8 @@ fn embedded_static_handler(req: Request) -> Response {
     match assets::WebAssets::get(path) {
         Some(file) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
+            // SAFETY: Response::builder 仅在 method/header 非法时失败，
+            // 此处只设 CONTENT_TYPE，不可能 panic。
             Response::builder()
                 .header(header::CONTENT_TYPE, mime.as_ref())
                 .body(Body::from(file.data.to_vec()))
@@ -52,7 +54,7 @@ pub async fn run_server(
         let origins: Vec<HeaderValue> = state
             .cors_origins
             .iter()
-            .filter_map(|o| o.parse().ok())
+            .filter_map(|o: &String| o.parse().ok())
             .collect();
         CorsLayer::new()
             .allow_origin(origins)
@@ -63,7 +65,10 @@ pub async fn run_server(
     let app = Router::new()
         .merge(api::routes())
         .merge(ws::routes())
-        .layer(middleware::from_fn_with_state(state.clone(), api::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::auth_middleware,
+        ))
         .layer(cors_layer)
         .fallback(|req| std::future::ready(embedded_static_handler(req)))
         .with_state(state);

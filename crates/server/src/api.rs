@@ -8,21 +8,18 @@ use axum::{
     Json, Router,
 };
 use gugu_core::config::{HealthCheckConfig, ProcessConfig};
+use gugu_core::process::LogStream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::state::AppState;
 
+// ── 响应类型 ──────────────────────────────────────────────
+
 #[derive(Serialize)]
 struct ApiSuccess {
     message: String,
-}
-
-impl ApiSuccess {
-    fn new(msg: &str) -> Self {
-        Self { message: msg.to_string() }
-    }
 }
 
 #[derive(Serialize)]
@@ -58,15 +55,26 @@ struct FsEntry {
     is_dir: bool,
 }
 
+// ── 路由注册 ──────────────────────────────────────────────
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/processes", get(list_processes))
-        .route("/api/v1/processes/:name", get(get_process).post(create_process).put(update_process).delete(delete_process))
+        .route(
+            "/api/v1/processes/:name",
+            get(get_process)
+                .post(create_process)
+                .put(update_process)
+                .delete(delete_process),
+        )
         .route("/api/v1/processes/:name/config", get(get_process_config))
         .route("/api/v1/processes/:name/start", post(start_process))
         .route("/api/v1/processes/:name/stop", post(stop_process))
         .route("/api/v1/processes/:name/restart", post(restart_process))
-        .route("/api/v1/processes/:name/logs", get(get_logs).delete(clear_logs))
+        .route(
+            "/api/v1/processes/:name/logs",
+            get(get_logs).delete(clear_logs),
+        )
         .route("/api/v1/processes/:name/logs/download", get(download_logs))
         .route("/api/v1/processes/:name/health", post(check_health))
         .route("/api/v1/stats", get(get_stats))
@@ -74,46 +82,51 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/reload", post(reload_config))
 }
 
+// ── 认证中间件 ──────────────────────────────────────────────
+
 pub async fn auth_middleware(
     State(state): State<AppState>,
     req: Request,
     next: Next,
 ) -> axum::response::Response {
-    if let Some(ref expected_key) = state.api_key {
-        if !expected_key.is_empty() {
-            let auth_header = req
-                .headers()
-                .get("Authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "));
+    let Some(ref expected_key) = state.api_key else {
+        return next.run(req).await;
+    };
+    if expected_key.is_empty() {
+        return next.run(req).await;
+    }
 
-            if let Some(key) = auth_header {
-                if constant_time_eq(key, expected_key) {
+    // Bearer token
+    if let Some(key) = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        if constant_time_eq(key, expected_key) {
+            return next.run(req).await;
+        }
+    }
+
+    // Query token
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            if let Some(token) = pair.strip_prefix("token=") {
+                if constant_time_eq(token, expected_key) {
                     return next.run(req).await;
                 }
             }
-
-            if let Some(query) = req.uri().query() {
-                for pair in query.split('&') {
-                    if let Some(token) = pair.strip_prefix("token=") {
-                        if constant_time_eq(token, expected_key) {
-                            return next.run(req).await;
-                        }
-                    }
-                }
-            }
-
-            return StatusCode::UNAUTHORIZED.into_response();
         }
     }
-    next.run(req).await
+
+    StatusCode::UNAUTHORIZED.into_response()
 }
 
+/// Constant-time 字符串比较，防止 timing attack。
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
-    let len_eq = a_bytes.len() == b_bytes.len();
-    let mut result: u8 = if len_eq { 0 } else { 0xff };
+    let mut result: u8 = if a_bytes.len() == b_bytes.len() { 0 } else { 0xff };
     let max_len = a_bytes.len().max(b_bytes.len());
     for i in 0..max_len {
         let x = a_bytes.get(i).copied().unwrap_or(0);
@@ -122,6 +135,8 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     }
     result == 0
 }
+
+// ── 请求体 ──────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct LogQuery {
@@ -138,7 +153,7 @@ struct CreateProcessRequest {
     command: String,
     #[serde(default)]
     args: Vec<String>,
-    working_dir: Option<std::path::PathBuf>,
+    working_dir: Option<PathBuf>,
     #[serde(default)]
     env: HashMap<String, String>,
     #[serde(default = "gugu_core::config::default_true")]
@@ -161,8 +176,8 @@ struct CreateProcessRequest {
     depends_on: Vec<String>,
     #[serde(default)]
     max_log_size_mb: Option<u64>,
-    stdout_log: Option<std::path::PathBuf>,
-    stderr_log: Option<std::path::PathBuf>,
+    stdout_log: Option<PathBuf>,
+    stderr_log: Option<PathBuf>,
     #[serde(default)]
     start_now: bool,
     new_name: Option<String>,
@@ -170,7 +185,7 @@ struct CreateProcessRequest {
 
 impl From<CreateProcessRequest> for ProcessConfig {
     fn from(req: CreateProcessRequest) -> Self {
-        ProcessConfig {
+        Self {
             command: req.command,
             args: req.args,
             working_dir: req.working_dir,
@@ -191,19 +206,46 @@ impl From<CreateProcessRequest> for ProcessConfig {
     }
 }
 
+// ── 辅助函数 ──────────────────────────────────────────────
+
+fn api_res(
+    result: gugu_core::Result<()>,
+    success_msg: &str,
+    error_status: StatusCode,
+) -> axum::response::Response {
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiSuccess {
+                message: success_msg.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (error_status, Json(ApiError::new(e.to_string()))).into_response(),
+    }
+}
+
+fn clean_path(path: &std::path::Path) -> String {
+    gugu_core::config::path_to_forward_slashes(&gugu_core::config::strip_unc_prefix(path))
+}
+
+// ── 处理函数 ──────────────────────────────────────────────
+
 async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    Json(mgr.list_processes())
+    Json(state.manager.list_processes())
 }
 
 async fn get_process(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    match mgr.get_process_info(&name) {
+    match state.manager.get_process_info(&name) {
         Some(info) => Json(Some(info)).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(ApiError::new("进程未找到"))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程未找到")),
+        )
+            .into_response(),
     }
 }
 
@@ -214,10 +256,19 @@ async fn create_process(
 ) -> impl IntoResponse {
     let start_now = body.start_now;
     let config: ProcessConfig = body.into();
-    let mut mgr = state.manager.write().await;
-    match mgr.add_process(name, config, start_now).await {
-        Ok(()) => (StatusCode::CREATED, Json(ApiSuccess::new("进程已添加"))).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
+    match state.manager.add_process(name, config, start_now).await {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(ApiSuccess {
+                message: "进程已添加".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(e.to_string())),
+        )
+            .into_response(),
     }
 }
 
@@ -228,32 +279,34 @@ async fn update_process(
 ) -> impl IntoResponse {
     let new_name = body.new_name.clone();
     let config: ProcessConfig = body.into();
-    let mut mgr = state.manager.write().await;
-    match mgr.update_process(&name, config, new_name, false).await {
-        Ok(()) => Json(ApiSuccess::new("进程已更新")).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.update_process(&name, config, new_name, false).await;
+    api_res(result, "进程已更新", StatusCode::BAD_REQUEST)
 }
 
 async fn delete_process(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.remove_process(&name).await {
-        Ok(()) => Json(ApiSuccess::new("进程已移除")).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.remove_process(&name).await;
+    api_res(result, "进程已移除", StatusCode::NOT_FOUND)
 }
 
 async fn get_process_config(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    match mgr.get_process_config(&name) {
-        Some(config) => Json(config).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(ApiError::new("进程未找到"))).into_response(),
+    match state.manager.get_process_config(&name).await {
+        Ok(Some(config)) => Json(config).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("进程未找到")),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new(e.to_string())),
+        )
+            .into_response(),
     }
 }
 
@@ -261,33 +314,24 @@ async fn start_process(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.start_process(&name).await {
-        Ok(()) => Json(ApiSuccess::new("进程已启动")).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.start_process(&name).await;
+    api_res(result, "进程已启动", StatusCode::BAD_REQUEST)
 }
 
 async fn stop_process(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.stop_process(&name).await {
-        Ok(()) => Json(ApiSuccess::new("进程已停止")).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.stop_process(&name).await;
+    api_res(result, "进程已停止", StatusCode::BAD_REQUEST)
 }
 
 async fn restart_process(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.restart_process(&name).await {
-        Ok(()) => Json(ApiSuccess::new("进程已重启")).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.restart_process(&name).await;
+    api_res(result, "进程已重启", StatusCode::BAD_REQUEST)
 }
 
 async fn get_logs(
@@ -295,10 +339,13 @@ async fn get_logs(
     Path(name): Path<String>,
     Query(query): Query<LogQuery>,
 ) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    match mgr.get_process_logs(&name, query.lines).await {
+    match state.manager.get_process_logs(&name, query.lines).await {
         Ok(logs) => Json(logs).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new(e.to_string())),
+        )
+            .into_response(),
     }
 }
 
@@ -306,11 +353,8 @@ async fn clear_logs(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    match mgr.clear_process_logs(&name).await {
-        Ok(()) => Json(ApiSuccess::new("日志已清空")).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
-    }
+    let result = state.manager.clear_process_logs(&name).await;
+    api_res(result, "日志已清空", StatusCode::NOT_FOUND)
 }
 
 async fn download_logs(
@@ -318,30 +362,36 @@ async fn download_logs(
     Path(name): Path<String>,
     Query(query): Query<LogQuery>,
 ) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    match mgr.get_process_logs(&name, query.lines).await {
+    match state.manager.get_process_logs(&name, query.lines).await {
         Ok(logs) => {
-            let mut content = String::new();
+            let mut content = String::with_capacity(logs.len() * 128);
             for entry in &logs {
                 let time = entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
                 let prefix = match &entry.stream {
-                    gugu_core::process::LogStream::Stdout => "OUT",
-                    gugu_core::process::LogStream::Stderr => "ERR",
+                    LogStream::Stdout => "OUT",
+                    LogStream::Stderr => "ERR",
                     _ => "???",
                 };
                 content.push_str(&format!("[{time}] [{prefix}] {}\n", entry.line));
             }
-            let filename = format!("{name}.log");
             (
                 StatusCode::OK,
                 [
                     ("content-type", "text/plain; charset=utf-8".to_string()),
-                    ("content-disposition", format!("attachment; filename=\"{filename}\"")),
+                    (
+                        "content-disposition",
+                        format!("attachment; filename=\"{name}.log\""),
+                    ),
                 ],
                 content,
-            ).into_response()
+            )
+                .into_response()
         }
-        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new(e.to_string())),
+        )
+            .into_response(),
     }
 }
 
@@ -349,25 +399,43 @@ async fn check_health(
     Path(name): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.check_process_health(&name).await {
+    match state.manager.check_process_health(&name).await {
         Ok(healthy) => Json(serde_json::json!({
             "healthy": healthy,
             "message": if healthy { "健康检查通过" } else { "健康检查失败" }
-        })).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(e.to_string())),
+        )
+            .into_response(),
     }
 }
 
 async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
-    let mgr = state.manager.read().await;
-    let processes = mgr.list_processes();
-    let total = processes.len();
-    let running = processes.iter().filter(|p| matches!(p.status, gugu_core::process::ProcessStatus::Running)).count();
-    let stopped = processes.iter().filter(|p| matches!(p.status, gugu_core::process::ProcessStatus::Stopped)).count();
-    let failed = processes.iter().filter(|p| matches!(p.status, gugu_core::process::ProcessStatus::Failed(_))).count();
+    use gugu_core::process::ProcessStatus;
 
-    Json(StatsResponse { total, running, stopped, failed })
+    let processes = state.manager.list_processes();
+    let total = processes.len();
+    let running = processes
+        .iter()
+        .filter(|p| matches!(p.status, ProcessStatus::Running))
+        .count();
+    let stopped = processes
+        .iter()
+        .filter(|p| matches!(p.status, ProcessStatus::Stopped))
+        .count();
+    let failed = processes
+        .iter()
+        .filter(|p| matches!(p.status, ProcessStatus::Failed(_)))
+        .count();
+    Json(StatsResponse {
+        total,
+        running,
+        stopped,
+        failed,
+    })
 }
 
 #[derive(Deserialize)]
@@ -379,7 +447,6 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     let raw = query.path.unwrap_or_else(|| ".".into());
     let dir = PathBuf::from(&raw);
 
-    // 规范化路径，拒绝空路径
     let dir = {
         let resolved = if dir.is_relative() {
             std::env::current_dir().unwrap_or_default().join(&dir)
@@ -388,13 +455,22 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
         };
         match std::fs::canonicalize(&resolved) {
             Ok(p) => gugu_core::config::strip_unc_prefix(&p),
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiError::new(format!("路径不存在: {e}")))).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError::new(format!("路径不存在: {e}"))),
+                )
+                    .into_response()
+            }
         }
     };
 
-    // 只允许目录
     if !dir.is_dir() {
-        return (StatusCode::BAD_REQUEST, Json(ApiError::new("路径不是目录"))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("路径不是目录")),
+        )
+            .into_response();
     }
 
     let path_str = clean_path(&dir);
@@ -402,7 +478,13 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
 
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(e.to_string())),
+            )
+                .into_response()
+        }
     };
 
     let mut entries: Vec<FsEntry> = Vec::with_capacity(256);
@@ -414,24 +496,20 @@ async fn browse_fs(Query(query): Query<BrowseQuery>) -> impl IntoResponse {
     }
 
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
     Json(BrowseResponse {
         path: path_str,
         parent,
         entries,
-    }).into_response()
+    })
+    .into_response()
 }
 
 async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
-    let mut mgr = state.manager.write().await;
-    match mgr.reload_from_file().await {
-        Ok(()) => Json(ApiSuccess::new("配置已重新加载")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError::new(e.to_string()))).into_response(),
-    }
-}
-
-fn clean_path(path: &std::path::Path) -> String {
-    gugu_core::config::path_to_forward_slashes(&gugu_core::config::strip_unc_prefix(path))
+    let result = state.manager.reload_from_file().await;
+    api_res(result, "配置已重新加载", StatusCode::INTERNAL_SERVER_ERROR)
 }

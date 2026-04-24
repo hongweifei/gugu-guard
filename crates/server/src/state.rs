@@ -1,5 +1,6 @@
 use gugu_core::manager::SharedManager;
 
+/// 应用共享状态，通过 axum State 提取器传递。
 #[derive(Clone)]
 pub struct AppState {
     pub manager: SharedManager,

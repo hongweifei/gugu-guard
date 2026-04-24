@@ -4,6 +4,7 @@ let selectedProcess = null;
 let editingName = null;
 let allProcesses = [];
 let searchQuery = '';
+let groupFilter = null;
 let API_KEY = localStorage.getItem('gugu_api_key') || '';
 let logEntries = [];
 let logSearchQuery = '';
@@ -57,19 +58,67 @@ function updateStats(list) {
     document.getElementById('stat-failed').textContent = f;
 }
 
+function getGroups() {
+    const map = {};
+    for (const p of allProcesses) {
+        if (p.group) {
+            map[p.group] = (map[p.group] || 0) + 1;
+        }
+    }
+    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function renderGroupBar() {
+    const bar = document.getElementById('group-bar');
+    const groups = getGroups();
+    if (!groups.length) {
+        bar.innerHTML = '';
+        bar._prevHtml = '';
+        return;
+    }
+    const total = allProcesses.length;
+    const allActive = !groupFilter;
+    let html = `<button class="group-chip${allActive ? ' active' : ''}" data-group="">全部<span class="group-chip-count">${total}</span></button>`;
+    for (const [name, count] of groups) {
+        const active = groupFilter === name;
+        html += `<span class="group-chip${active ? ' active' : ''}" data-group="${esc(name)}">
+            <span class="group-chip-name">${esc(name)}</span><span class="group-chip-count">${count}</span>
+            <span class="group-chip-actions">
+                <button class="gact-start" data-gact="start" data-gname="${esc(name)}" title="启动组 ${esc(name)}">&#9654;</button>
+                <button class="gact-stop" data-gact="stop" data-gname="${esc(name)}" title="停止组 ${esc(name)}">&#9632;</button>
+                <button class="gact-restart" data-gact="restart" data-gname="${esc(name)}" title="重启组 ${esc(name)}">&#8635;</button>
+            </span>
+        </span>`;
+    }
+    if (html !== bar._prevHtml) {
+        bar.innerHTML = html;
+        bar._prevHtml = html;
+    }
+}
+
+async function doGroupAction(action, group) {
+    try {
+        const r = await api('POST', `/groups/${encodeURIComponent(group)}/${action}`);
+        toast(r.message || '操作完成', r.failed > 0 ? 'info' : 'success');
+    } catch { toast('组操作失败', 'error'); }
+}
+
 let prevKeys = [];
 
 function render(force) {
     const grid = document.getElementById('process-grid');
     const list = searchQuery
-        ? allProcesses.filter(p => p.name.toLowerCase().includes(searchQuery) || (p.command || '').toLowerCase().includes(searchQuery))
+        ? allProcesses.filter(p => p.name.toLowerCase().includes(searchQuery) || (p.command || '').toLowerCase().includes(searchQuery) || (p.group || '').toLowerCase().includes(searchQuery))
         : allProcesses;
 
+    const filtered = groupFilter ? list.filter(p => p.group === groupFilter) : list;
+
     updateStats(allProcesses);
+    renderGroupBar();
 
-    const keys = list.map(p => p.name);
+    const keys = filtered.map(p => p.name);
 
-    if (!list.length) {
+    if (!filtered.length) {
         const isSearch = searchQuery && allProcesses.length > 0;
         grid.innerHTML = `<div class="empty-state">
             <div class="empty-icon"><svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -85,7 +134,7 @@ function render(force) {
     }
 
     if (!force && keys.join(',') === prevKeys.join(',')) {
-        for (const p of list) {
+        for (const p of filtered) {
             const card = grid.querySelector(`[data-name="${CSS.escape(p.name)}"]`);
             if (!card) continue;
             patchCard(card, p);
@@ -94,7 +143,7 @@ function render(force) {
     }
 
     prevKeys = keys;
-    grid.innerHTML = list.map((p, i) => buildCard(p, i === 0)).join('');
+    grid.innerHTML = filtered.map((p, i) => buildCard(p, i === 0)).join('');
 }
 
 function buildCard(p, isNew) {
@@ -108,11 +157,12 @@ function buildCard(p, isNew) {
         hcHtml = `<span class="pcard-tag hc ${cls}" title="健康检查: ${label}">HC ${label}</span>`;
     }
     const urTag = p.unhealthy_restart ? '<span class="pcard-tag ur" title="失败自动重启">AR</span>' : '';
+    const groupTag = p.group ? `<span class="pcard-tag group" data-action="filter-group" data-group="${esc(p.group)}" title="筛选组: ${esc(p.group)}">${esc(p.group)}</span>` : '';
     const hcBtn = p.has_health_check ? `<button class="btn btn-hc" data-action="health" data-name="${esc(p.name)}" title="手动健康检查">检查</button>` : '';
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
-            <div class="pcard-badges"><span class="pcard-badge ${st.key}">${esc(st.label)}</span>${hcHtml}${urTag}</div>
+            <div class="pcard-badges"><span class="pcard-badge ${st.key}">${esc(st.label)}</span>${groupTag}${hcHtml}${urTag}</div>
         </div>
         <div class="pcard-meta">
             <div class="pcard-meta-item"><span class="pcard-meta-label">PID</span><span class="pcard-meta-val">${p.pid || '—'}</span></div>
@@ -287,6 +337,7 @@ function closeModal() {
     document.getElementById('process-form').reset();
     document.getElementById('f-auto-start').checked = true;
     document.getElementById('f-auto-restart').checked = true;
+    document.getElementById('f-group').value = '';
     document.getElementById('args-list').innerHTML = '';
     document.getElementById('env-list').innerHTML = '';
     document.getElementById('f-name').classList.remove('duplicate');
@@ -544,6 +595,7 @@ window.editProc = async function(name) {
         f('f-dir').value = cfg.working_dir || '';
         f('f-stdout').value = cfg.stdout_log || '';
         f('f-stderr').value = cfg.stderr_log || '';
+        f('f-group').value = cfg.group || '';
         f('f-max-restarts').value = cfg.max_restarts ?? 3;
         f('f-restart-delay').value = cfg.restart_delay_secs ?? 5;
         f('f-stop-command').value = cfg.stop_command || '';
@@ -587,6 +639,7 @@ document.getElementById('process-form').onsubmit = async (e) => {
         unhealthy_restart: hcData.unhealthy_restart,
         stdout_log: document.getElementById('f-stdout').value || null,
         stderr_log: document.getElementById('f-stderr').value || null,
+        group: document.getElementById('f-group').value.trim() || null,
         start_now: document.getElementById('f-auto-start').checked,
     };
     try {
@@ -661,6 +714,21 @@ document.getElementById('search-input').oninput = (e) => {
     render(true);
 };
 
+document.getElementById('group-bar').addEventListener('click', (e) => {
+    const gact = e.target.closest('[data-gact]');
+    if (gact) {
+        e.stopPropagation();
+        doGroupAction(gact.dataset.gact, gact.dataset.gname);
+        return;
+    }
+    const chip = e.target.closest('[data-group]');
+    if (chip) {
+        const g = chip.dataset.group;
+        groupFilter = g === '' ? null : (groupFilter === g ? null : g);
+        render(true);
+    }
+});
+
 // 事件委托：进程卡片上的按钮
 document.getElementById('process-grid').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
@@ -674,6 +742,7 @@ document.getElementById('process-grid').addEventListener('click', (e) => {
         case 'logs': showLogs(name); break;
         case 'edit': editProc(name); break;
         case 'remove': askRemove(name); break;
+        case 'filter-group': groupFilter = btn.dataset.group; render(true); break;
     }
 });
 

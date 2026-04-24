@@ -47,6 +47,8 @@
         </div>
     </section>
 
+    <section class="group-bar" id="group-bar"></section>
+
     <section class="process-grid" id="process-grid">
         <div class="empty-state" id="empty-state">
             <div class="empty-icon">
@@ -99,6 +101,11 @@
                     <label>进程名称 <span class="required">*</span></label>
                     <input type="text" id="f-name" placeholder="my-service" required>
                     <div class="field-hint" id="f-name-hint"></div>
+                </div>
+                <div class="field">
+                    <label>进程组</label>
+                    <input type="text" id="f-group" placeholder="web / api / db ... (可选)">
+                    <div class="field-hint">同组进程可批量启停</div>
                 </div>
                 <div class="field">
                     <label>执行命令 <span class="required">*</span></label>

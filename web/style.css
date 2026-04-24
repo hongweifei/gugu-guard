@@ -96,6 +96,8 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .pcard-tag.hc.unhealthy { color: var(--red); background: var(--red-dim); }
 .pcard-tag.hc.unknown { color: var(--text-3); background: var(--bg-2); }
 .pcard-tag.ur { color: var(--amber); background: var(--amber-dim); }
+.pcard-tag.group { color: var(--accent); background: rgba(59,130,246,.1); cursor: pointer; }
+.pcard-tag.group:hover { background: rgba(59,130,246,.2); }
 .btn-hc { font-size: .72rem !important; padding: 3px 8px !important; }
 
 .pcard-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-bottom: 14px; font-size: .82rem; }
@@ -116,6 +118,21 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .act-logs:hover { background: var(--purple-dim); }
 .act-delete { border-color: rgba(239,68,68,.2); color: var(--text-3); }
 .act-delete:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+
+/* ── Group Bar ── */
+.group-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; min-height: 0; transition: margin .2s; }
+.group-bar:empty { margin-bottom: 0; }
+.group-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-1); color: var(--text-2); font-size: .82rem; font-weight: 500; cursor: pointer; transition: all .15s; }
+.group-chip:hover { border-color: var(--border-hover); background: var(--bg-2); }
+.group-chip.active { border-color: var(--accent); background: rgba(59,130,246,.1); color: var(--accent); }
+.group-chip-count { font-size: .72rem; font-weight: 700; color: var(--text-3); min-width: 16px; text-align: center; }
+.group-chip.active .group-chip-count { color: var(--accent); }
+.group-chip-actions { display: flex; gap: 2px; margin-left: 2px; }
+.group-chip-actions button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; font-size: .7rem; transition: all .1s; }
+.group-chip-actions button:hover { background: var(--bg-3); color: var(--text); }
+.group-chip-actions button.gact-start:hover { color: var(--green); background: var(--green-dim); }
+.group-chip-actions button.gact-stop:hover { color: var(--red); background: var(--red-dim); }
+.group-chip-actions button.gact-restart:hover { color: var(--sky); background: var(--sky-dim); }
 
 /* ── Empty ── */
 .empty-state { grid-column: 1/-1; text-align: center; padding: 80px 20px; color: var(--text-3); }

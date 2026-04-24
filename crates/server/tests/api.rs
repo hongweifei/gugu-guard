@@ -43,13 +43,13 @@ fn build_router(shared: SharedManager, api_key: Option<String>) -> axum::Router 
 
     let protected = gugu_server::api::routes()
         .merge(gugu_server::ws::routes())
+        .merge(gugu_server::metrics::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             gugu_server::api::auth_middleware,
         ));
 
     axum::Router::new()
-        .merge(gugu_server::metrics::routes())
         .merge(protected)
         .layer(cors_layer)
         .with_state(state)
@@ -417,10 +417,10 @@ mod metrics_endpoint {
     use super::*;
 
     #[tokio::test]
-    async fn returns_ok_without_auth() {
+    async fn rejects_without_auth() {
         let app = make_app_with_key(Some("secret-key".to_string()));
         let resp = send_get(app, "/metrics").await;
-        assert_eq!(resp.status(), StatusCode::OK, "/metrics 不需要认证");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "/metrics 需要认证");
     }
 
     #[tokio::test]

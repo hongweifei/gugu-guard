@@ -63,13 +63,13 @@ pub async fn run_server(
 
     let protected = api::routes()
         .merge(ws::routes())
+        .merge(metrics::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth_middleware,
         ));
 
     let app = Router::new()
-        .merge(metrics::routes())
         .merge(protected)
         .layer(cors_layer)
         .fallback(|req| std::future::ready(embedded_static_handler(req)))

@@ -611,7 +611,7 @@ async fn start_group(
     let succeeded = results.iter().filter(|r| r.success).count();
     let failed = results.len() - succeeded;
     Json(BatchResponse {
-        message: format!("进程组 '{}' 启动完成", group),
+        message: format!("进程组 '{group}' 启动完成"),
         total: results.len(),
         succeeded,
         failed,
@@ -645,7 +645,7 @@ async fn stop_group(
     let succeeded = results.iter().filter(|r| r.success).count();
     let failed = results.len() - succeeded;
     Json(BatchResponse {
-        message: format!("进程组 '{}' 停止完成", group),
+        message: format!("进程组 '{group}' 停止完成"),
         total: results.len(),
         succeeded,
         failed,
@@ -679,7 +679,7 @@ async fn restart_group(
     let succeeded = results.iter().filter(|r| r.success).count();
     let failed = results.len() - succeeded;
     Json(BatchResponse {
-        message: format!("进程组 '{}' 重启完成", group),
+        message: format!("进程组 '{group}' 重启完成"),
         total: results.len(),
         succeeded,
         failed,

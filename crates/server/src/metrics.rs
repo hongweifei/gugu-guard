@@ -25,6 +25,12 @@ pub struct Metrics {
     prev_names: Mutex<Vec<String>>,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Metrics {
     pub fn new() -> Self {
         let registry = Registry::new();
@@ -142,12 +148,11 @@ impl Metrics {
 
         for p in processes {
             let status_val = match &p.status {
-                ProcessStatus::Stopped => 0,
                 ProcessStatus::Running => 1,
                 ProcessStatus::Starting => 2,
                 ProcessStatus::Restarting => 3,
                 ProcessStatus::Failed(_) => 4,
-                _ => 0,
+                ProcessStatus::Stopped | _ => 0,
             };
 
             self.process_status

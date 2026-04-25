@@ -847,9 +847,9 @@ async function init() {
         }
         allProcesses = await resp.json();
         render(true);
+        connectWS();
     } catch {
         document.getElementById('process-grid').innerHTML = '<div class="empty-state"><h3>连接失败</h3><p>无法连接到守护进程</p></div>';
     }
-    connectWS();
 }
 init();

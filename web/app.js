@@ -326,14 +326,18 @@ function appendLogEntries(entries) {
 }
 
 function openModal(title, submit) {
+    const backdrop = document.getElementById('modal-backdrop');
+    if (!backdrop) return;
     document.getElementById('modal-title').textContent = title;
     document.getElementById('btn-submit-form').textContent = submit;
-    document.getElementById('modal-backdrop').classList.add('open');
+    backdrop.classList.add('open');
     updatePreview();
 }
 
 function closeModal() {
-    document.getElementById('modal-backdrop').classList.remove('open');
+    const backdrop = document.getElementById('modal-backdrop');
+    if (!backdrop) return;
+    backdrop.classList.remove('open');
     document.getElementById('process-form').reset();
     document.getElementById('f-auto-start').checked = true;
     document.getElementById('f-auto-restart').checked = true;
@@ -604,7 +608,12 @@ window.editProc = async function(name) {
             Object.entries(cfg.env).forEach(([k, v]) => addEnvRow(k, v));
         }
         fillHealthCheck(cfg);
-    } catch {
+        openModal('编辑 — ' + name, '保存');
+    } catch (e) {
+        if (e.message === 'Unauthorized') {
+            editingName = null;
+            return;
+        }
         f('f-dir').value = '';
         f('f-stdout').value = '';
         f('f-stderr').value = '';
@@ -612,9 +621,8 @@ window.editProc = async function(name) {
         f('f-restart-delay').value = 5;
         f('f-stop-timeout').value = 10;
         resetHealthCheck();
+        openModal('编辑 — ' + name, '保存');
     }
-
-    openModal('编辑 — ' + name, '保存');
 };
 
 document.getElementById('process-form').onsubmit = async (e) => {
@@ -778,8 +786,13 @@ function connectWS() {
 }
 
 function showLogin() {
-    document.getElementById('login-backdrop').classList.add('open');
-    setTimeout(() => document.getElementById('login-key').focus(), 100);
+    const el = document.getElementById('login-backdrop');
+    if (!el) return;
+    el.classList.add('open');
+    setTimeout(() => {
+        const inp = document.getElementById('login-key');
+        if (inp) inp.focus();
+    }, 100);
 }
 
 window.toggleLoginVis = function() {

@@ -142,7 +142,7 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .empty-state p { font-size: .88rem; }
 
 /* ── Log Overlay ── */
-.log-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 200; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.log-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 200; opacity: 0; pointer-events: none; transition: opacity .2s; }
 .log-overlay.open { opacity: 1; pointer-events: auto; }
 .log-container { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 90vw; max-width: 960px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 40px rgba(0,0,0,.5); transform: translateY(10px); transition: transform .2s; }
 .log-overlay.open .log-container { transform: translateY(0); }
@@ -175,8 +175,8 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 #btn-download-logs:hover { background: var(--sky-dim) !important; }
 
 /* ── Modal ── */
-.modal-backdrop, .confirm-backdrop, .login-backdrop-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 300; opacity: 0; pointer-events: none; transition: opacity .2s; }
-.modal-backdrop.open, .confirm-backdrop.open { opacity: 1; pointer-events: auto; }
+.modal-backdrop, .confirm-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 300; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.modal-backdrop.open, .confirm-backdrop.open, #login-backdrop.open { opacity: 1; pointer-events: auto; }
 .modal-panel { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 560px; max-width: 95vw; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,.5); transform: translateY(10px); transition: transform .2s; }
 .modal-lg { width: 640px; }
 .modal-backdrop.open .modal-panel { transform: translateY(0); }

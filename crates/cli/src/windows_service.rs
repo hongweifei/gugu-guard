@@ -76,6 +76,7 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "gugu_core=info,gugu_server=info,gugu=info".into()),
             )
+            .with_ansi(false) // Windows 服务无终端，禁用 ANSI 转义
             .init();
 
         let handles = match crate::daemon::run_core(config_path, None).await {

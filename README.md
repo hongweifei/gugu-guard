@@ -205,7 +205,10 @@ gugu-guard/
 │   ├── core/       # 核心库: 配置、进程管理、日志、健康检查
 │   ├── server/     # Web 服务: REST API、WebSocket、认证、静态文件
 │   └── cli/        # 命令行工具
-├── web/            # WebUI (HTML/CSS/JS)
+├── web/            # WebUI (无构建步骤，直接内嵌进二进制)
+│   ├── index.html
+│   ├── style.css
+│   └── js/         # core(状态/工具) / render(列表) / logs(日志) / form(表单) / app(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
 ```

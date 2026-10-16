@@ -205,7 +205,10 @@ gugu-guard/
 │   ├── core/       # Core lib: config, process management, logging, health checks
 │   ├── server/     # Web server: REST API, WebSocket, auth, static files
 │   └── cli/        # Command line tool
-├── web/            # WebUI (HTML/CSS/JS)
+├── web/            # WebUI (no build step, embedded into the binary)
+│   ├── index.html
+│   ├── style.css
+│   └── js/         # core(state/utils) / render(list) / logs(viewer) / form(modals) / app(wiring+boot)
 ├── config.example.toml
 └── Cargo.toml      # Workspace root config
 ```

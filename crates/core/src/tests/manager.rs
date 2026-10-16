@@ -347,6 +347,45 @@ mod get_process_config {
         let result = mgr.get_process_config("missing").await.unwrap();
         assert!(result.is_none(), "不存在的进程应返回 None");
     }
+
+    #[tokio::test]
+    async fn returns_declared_paths_and_all_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gugu.toml");
+        std::fs::write(&path, r#"
+[daemon]
+log_dir = "logs"
+
+[processes.web]
+command = "node"
+args = ["app.js"]
+auto_start = false
+stdout_log = "logs/web.log"
+max_log_size_mb = 10
+depends_on = ["db"]
+
+[processes.web.health_check]
+type = "tcp"
+port = 8080
+fail_threshold = 5
+"#)
+        .unwrap();
+        let config = AppConfig::load(&path).unwrap();
+        let mgr = crate::manager::start(&config, Some(path));
+        let cfg = mgr.get_process_config("web").await.unwrap().expect("应存在");
+        assert_eq!(
+            cfg.stdout_log.as_ref().map(|p| p.to_string_lossy().replace('\\', "/")),
+            Some("logs/web.log".to_string()),
+            "应返回配置文件里的声明式相对路径，而非解析后的绝对路径"
+        );
+        let s = serde_json::to_string(&cfg).unwrap();
+        let abs = dir.path().display().to_string().replace('\\', "/");
+        assert!(!s.contains(&abs), "返回的配置不应泄漏本机绝对路径");
+        assert_eq!(cfg.max_log_size_mb, Some(10), "max_log_size_mb 应完整返回");
+        assert_eq!(cfg.depends_on, vec!["db".to_string()], "depends_on 应完整返回");
+        assert_eq!(cfg.health_check.as_ref().unwrap().fail_threshold, 5, "fail_threshold 应完整返回");
+        mgr.shutdown();
+    }
 }
 
 mod clear_process_logs {

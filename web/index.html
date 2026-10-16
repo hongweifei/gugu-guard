@@ -170,6 +170,10 @@
                         <div class="field"><label>检查间隔 (秒)</label><input type="number" id="f-hc-interval" value="30" min="1"></div>
                         <div class="field"><label>超时时间 (秒)</label><input type="number" id="f-hc-timeout" value="5" min="1"></div>
                     </div>
+                    <div class="field-row">
+                        <div class="field"><label>连续失败判定次数</label><input type="number" id="f-hc-fail" value="3" min="1" title="健康检查连续失败达到该次数才判定不健康，防止瞬时抖动误伤进程"></div>
+                        <div class="field"></div>
+                    </div>
                     <label class="toggle"><input type="checkbox" id="f-unhealthy-restart"><span class="toggle-mark"></span>检查失败时自动重启</label>
                 </div>
 
@@ -177,14 +181,19 @@
                 <div class="field-row toggles-row">
                     <label class="toggle"><input type="checkbox" id="f-auto-start" checked><span class="toggle-mark"></span>守护进程启动时自动启动</label>
                     <label class="toggle"><input type="checkbox" id="f-auto-restart" checked><span class="toggle-mark"></span>进程崩溃后自动重启</label>
+                    <label class="toggle"><input type="checkbox" id="f-shell"><span class="toggle-mark"></span>经 Shell 执行命令</label>
                 </div>
                 <div class="field-row">
                     <div class="field"><label>最大重启次数</label><input type="number" id="f-max-restarts" value="3" min="0"></div>
                     <div class="field"><label>重启间隔 (秒)</label><input type="number" id="f-restart-delay" value="5" min="0"></div>
                 </div>
                 <div class="field-row">
-                    <div class="field"><label>自定义停止命令</label><input type="text" id="f-stop-command" placeholder="nginx -s quit (留空则默认终止)"></div>
+                    <div class="field"><label>计数恢复 (秒)</label><input type="number" id="f-restart-reset" value="60" min="1" title="进程稳定运行达到该秒数后，崩溃重启计数自动归零，让守护长期有效"></div>
                     <div class="field"><label>停止超时 (秒)</label><input type="number" id="f-stop-timeout" value="10" min="1"></div>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label>自定义停止命令</label><input type="text" id="f-stop-command" placeholder="nginx -s quit (留空则默认终止)"></div>
+                    <div class="field"></div>
                 </div>
 
                 <div class="modal-foot">

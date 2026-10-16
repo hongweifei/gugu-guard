@@ -2,6 +2,7 @@ const API = '/api/v1';
 let ws = null;
 let selectedProcess = null;
 let editingName = null;
+let editingBase = null;
 let allProcesses = [];
 let searchQuery = '';
 let groupFilter = null;
@@ -349,6 +350,7 @@ function closeModal() {
     document.getElementById('f-name-hint').textContent = '';
     resetHealthCheck();
     editingName = null;
+    editingBase = null;
 }
 
 window.addArgRow = function(value = '') {
@@ -402,6 +404,7 @@ function collectHealthCheck() {
         type,
         interval_secs: parseInt(document.getElementById('f-hc-interval').value) || 30,
         timeout_secs: parseInt(document.getElementById('f-hc-timeout').value) || 5,
+        fail_threshold: parseInt(document.getElementById('f-hc-fail').value) || 3,
     };
     if (type === 'tcp') {
         const port = parseInt(document.getElementById('f-hc-port').value);
@@ -436,6 +439,7 @@ function fillHealthCheck(cfg) {
     if (type === 'http') document.getElementById('f-hc-url').value = hc.url || '';
     document.getElementById('f-hc-interval').value = hc.interval_secs || 30;
     document.getElementById('f-hc-timeout').value = hc.timeout_secs || 5;
+    document.getElementById('f-hc-fail').value = hc.fail_threshold || 3;
     document.getElementById('f-unhealthy-restart').checked = cfg.unhealthy_restart || false;
     toggleHcFields();
 }
@@ -447,6 +451,7 @@ function resetHealthCheck() {
     document.getElementById('f-hc-url').value = '';
     document.getElementById('f-hc-interval').value = 30;
     document.getElementById('f-hc-timeout').value = 5;
+    document.getElementById('f-hc-fail').value = 3;
     document.getElementById('f-unhealthy-restart').checked = false;
     toggleHcFields();
 }
@@ -596,12 +601,17 @@ window.editProc = async function(name) {
 
     try {
         const cfg = await api('GET', `/processes/${encodeURIComponent(name)}/config`);
+        // 记住完整原配置：提交时以它为底稿，表单没暴露的字段
+        // (depends_on、max_log_size_mb 等) 才不会在保存后被重置。
+        editingBase = cfg;
         f('f-dir').value = cfg.working_dir || '';
         f('f-stdout').value = cfg.stdout_log || '';
         f('f-stderr').value = cfg.stderr_log || '';
         f('f-group').value = cfg.group || '';
         f('f-max-restarts').value = cfg.max_restarts ?? 3;
         f('f-restart-delay').value = cfg.restart_delay_secs ?? 5;
+        f('f-restart-reset').value = cfg.restart_reset_secs ?? 60;
+        f('f-shell').checked = !!cfg.shell;
         f('f-stop-command').value = cfg.stop_command || '';
         f('f-stop-timeout').value = cfg.stop_timeout_secs ?? 10;
         if (cfg.env && typeof cfg.env === 'object') {
@@ -614,11 +624,14 @@ window.editProc = async function(name) {
             editingName = null;
             return;
         }
+        editingBase = null;
         f('f-dir').value = '';
         f('f-stdout').value = '';
         f('f-stderr').value = '';
         f('f-max-restarts').value = 3;
         f('f-restart-delay').value = 5;
+        f('f-restart-reset').value = 60;
+        f('f-shell').checked = false;
         f('f-stop-timeout').value = 10;
         resetHealthCheck();
         openModal('编辑 — ' + name, '保存');
@@ -641,6 +654,8 @@ document.getElementById('process-form').onsubmit = async (e) => {
         auto_restart: document.getElementById('f-auto-restart').checked,
         max_restarts: parseInt(document.getElementById('f-max-restarts').value) || 3,
         restart_delay_secs: parseInt(document.getElementById('f-restart-delay').value) || 5,
+        restart_reset_secs: parseInt(document.getElementById('f-restart-reset').value) || 60,
+        shell: document.getElementById('f-shell').checked,
         stop_command: document.getElementById('f-stop-command').value.trim() || null,
         stop_timeout_secs: parseInt(document.getElementById('f-stop-timeout').value) || 10,
         health_check: hcData.health_check,
@@ -653,7 +668,10 @@ document.getElementById('process-form').onsubmit = async (e) => {
     try {
         if (editingName) {
             if (newName !== editingName) body.new_name = newName;
-            const r = await api('PUT', `/processes/${encodeURIComponent(editingName)}`, body);
+            // PUT 是全量替换：以编辑时读回的完整配置为底稿，表单值覆盖其上，
+            // 表单没有的字段 (depends_on、max_log_size_mb…) 原样保留。
+            const payload = editingBase ? { ...editingBase, ...body } : body;
+            const r = await api('PUT', `/processes/${encodeURIComponent(editingName)}`, payload);
             toast(r.message || '已更新', 'success');
         } else {
             const r = await api('POST', `/processes/${encodeURIComponent(newName)}`, body);

@@ -434,7 +434,10 @@ async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSnapshot>, cmd
             broadcast(state, snap_tx);
         }
         Command::GetProcessConfig { name, reply } => {
-            let cfg = state.processes.get(&name).map(|p| p.config().clone());
+            // 返回配置声明式视图 (相对路径)，与 gugu.toml 磁盘内容一致：
+            // WebUI 编辑对话框据此回填，保存时原样回传，不再泄漏解析后的绝对路径。
+            let cfg = state.processes.get(&name)
+                .map(|p| state.declared_paths(p.config()));
             let _ = reply.send(Ok(cfg));
         }
         Command::GetProcessLogs { name, lines, reply } => {

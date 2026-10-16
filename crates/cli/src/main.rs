@@ -19,8 +19,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, default_value = "gugu.toml", global = true)]
-    config: PathBuf,
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
 
     #[arg(long, global = true)]
     server: Option<String>,
@@ -30,6 +30,13 @@ struct Cli {
 
     #[arg(long, global = true, hide = true)]
     mode: Option<String>,
+}
+
+/// 解析配置文件路径：未显式指定时，优先使用程序同目录下的 gugu.toml，
+/// 其次是当前目录下的 gugu.toml，两者都不存在时返回程序同目录路径
+/// (运行时会在此自动生成)。显式传入的路径按原样使用。
+fn resolve_config_path(explicit: Option<PathBuf>) -> PathBuf {
+    explicit.unwrap_or_else(gugu_core::config::default_config_path)
 }
 
 #[derive(Subcommand)]
@@ -142,6 +149,7 @@ impl<'a> ApiHelper<'a> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config_path = resolve_config_path(cli.config.clone());
 
     match &cli.command {
         Commands::Run => {
@@ -155,34 +163,34 @@ async fn main() -> Result<()> {
                     anyhow::bail!("Service 模式仅在 Windows 上可用");
                 }
             }
-            run_daemon(&cli.config, cli.api_key.clone()).await
+            run_daemon(&config_path, cli.api_key.clone()).await
         }
-        Commands::Install { mode } => install_service(&cli.config, mode),
+        Commands::Install { mode } => install_service(&config_path, mode),
         Commands::Uninstall { mode } => uninstall_service(mode),
         _ => {
-            let server_url = get_server_url(&cli)?;
-            let api_key = get_api_key(&cli)?;
+            let server_url = get_server_url(&config_path, cli.server.as_deref())?;
+            let api_key = get_api_key(&config_path, cli.api_key.as_deref())?;
             run_client(&cli.command, &server_url, api_key.as_deref()).await
         }
     }
 }
 
-fn get_server_url(cli: &Cli) -> Result<String> {
-    if let Some(ref url) = cli.server {
-        return Ok(url.clone());
+fn get_server_url(config_path: &Path, explicit: Option<&str>) -> Result<String> {
+    if let Some(url) = explicit {
+        return Ok(url.to_string());
     }
-    let config = AppConfig::load(&cli.config).context("加载配置文件失败")?;
+    let config = AppConfig::load(config_path).context("加载配置文件失败")?;
     let addr = config.daemon.web.addr.as_deref().unwrap_or("127.0.0.1");
     let port = config.daemon.web.port.unwrap_or(9090);
     let connect_addr = if addr == "0.0.0.0" { "127.0.0.1" } else { addr };
     Ok(format!("http://{connect_addr}:{port}"))
 }
 
-fn get_api_key(cli: &Cli) -> Result<Option<String>> {
-    if let Some(ref key) = cli.api_key {
-        return Ok(Some(key.clone()));
+fn get_api_key(config_path: &Path, explicit: Option<&str>) -> Result<Option<String>> {
+    if let Some(key) = explicit {
+        return Ok(Some(key.to_string()));
     }
-    let config = AppConfig::load(&cli.config).ok();
+    let config = AppConfig::load(config_path).ok();
     Ok(config.and_then(|c| c.daemon.api_key))
 }
 
@@ -249,6 +257,16 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
 }
 
 fn install_service(config_path: &Path, mode: &str) -> Result<()> {
+    // 注册自启前确保配置文件真实存在（默认位于程序目录），
+    // 避免开机后服务指向一个不存在的路径。
+    match daemon::ensure_config_template(config_path) {
+        Ok(true) => println!(
+            "未找到配置文件，已生成默认模板: {}\n请先编辑其中的进程配置，再启动服务",
+            config_path.display()
+        ),
+        Ok(false) => {}
+        Err(e) => return Err(e),
+    }
     match mode {
         "service" => {
             #[cfg(windows)]

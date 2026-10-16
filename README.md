@@ -17,6 +17,7 @@
 - **进程依赖** — `depends_on` 配置启动顺序，支持拓扑排序
 - **配置热重载** — SIGHUP (Linux) 或 `POST /api/v1/reload` 重新加载配置
 - **智能更新** — 修改非运行时配置（日志路径、重启策略等）不重启进程
+- **绿色部署** — 配置默认跟着程序走，日志/PID 也在程序目录，整个文件夹搬走即用
 - **开机自启** — Windows (任务计划程序) / Linux (systemd)
 - **防多实例** — PID 文件锁
 - **优雅退出** — Ctrl+C / SIGTERM / SIGHUP 信号处理
@@ -43,7 +44,25 @@ cargo install --git https://gitee.com/hongweifei/gugu-guard.git
 
 编译后只需一个 `gugu` 可执行文件，WebUI 已内嵌在二进制中，无需额外文件。
 
-### 创建配置
+### 配置文件（绿色部署）
+
+配置**默认跟着程序走**。启动时按以下顺序寻找，找不到会自动在程序目录生成一份带注释的模板：
+
+1. `-c` 显式指定的路径（优先级最高）
+2. **程序同目录**下的 `gugu.toml`（推荐位置）
+3. 当前目录下的 `gugu.toml`（方便在源码目录直接运行）
+
+配置里的相对路径（日志、PID、工作目录）都以**配置文件所在目录**为基准，因此整个文件夹可以随程序一起搬走，无需改配置：
+
+```
+gugu-guard/
+├── gugu.exe        # 单文件即可，WebUI 已内嵌
+├── gugu.toml       # 首次运行自动生成在程序旁边
+├── gugu.pid
+└── logs/           # 进程日志也统一放这里
+```
+
+也可以手动复制示例配置再编辑：
 
 ```bash
 cp config.example.toml gugu.toml
@@ -83,7 +102,7 @@ timeout_secs = 5
 ### 启动守护进程
 
 ```bash
-# 前台运行
+# 前台运行 (自动读取程序同目录的 gugu.toml，首次运行会生成)
 gugu run
 
 # 指定配置文件
@@ -138,7 +157,7 @@ gugu uninstall                    # 卸载开机自启
 全局选项：
 
 ```bash
--c, --config <PATH>      # 指定配置文件 (默认 gugu.toml)
+-c, --config <PATH>      # 指定配置文件 (默认：程序同目录的 gugu.toml)
     --server <URL>       # 指定服务端地址
     --api-key <KEY>      # 指定 API Key (优先级高于配置文件)
 ```

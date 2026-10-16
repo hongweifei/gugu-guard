@@ -17,6 +17,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Process Dependencies** — `depends_on` for startup ordering with topological sort
 - **Hot Config Reload** — SIGHUP (Linux) or `POST /api/v1/reload` to reload config at runtime
 - **Smart Updates** — Non-runtime config changes (log paths, restart policies, etc.) don't restart the process
+- **Portable Layout** — Config lives next to the binary by default; logs/PID resolve against the config folder, so the whole directory can be moved as-is
 - **Auto-start on Boot** — Windows (Task Scheduler) / Linux (systemd)
 - **Single Instance** — PID file lock to prevent duplicate daemons
 - **Graceful Shutdown** — Ctrl+C / SIGTERM / SIGHUP signal handling
@@ -43,7 +44,25 @@ cargo install --git https://gitee.com/hongweifei/gugu-guard.git
 
 After compilation, you only need a single `gugu` binary — the WebUI is embedded at compile time, no extra files required.
 
-### Create Config
+### Config File (Portable)
+
+The config **follows the program**. On startup it searches in this order, and if nothing is found it generates a commented template in the program's directory:
+
+1. Path explicitly given with `-c` (highest priority)
+2. `gugu.toml` in the **same directory as the binary** (recommended)
+3. `gugu.toml` in the current working directory (handy when running from the source tree)
+
+Relative paths inside the config (logs, PID, working dir) are resolved against **the config file's directory**, so the whole folder travels with the binary without editing anything:
+
+```
+gugu-guard/
+├── gugu            # single file, WebUI embedded
+├── gugu.toml       # auto-generated next to the binary on first run
+├── gugu.pid
+└── logs/           # process logs land here too
+```
+
+You can also copy the example and edit it:
 
 ```bash
 cp config.example.toml gugu.toml
@@ -83,7 +102,7 @@ timeout_secs = 5
 ### Start the Daemon
 
 ```bash
-# Run in foreground
+# Run in foreground (reads gugu.toml next to the binary; auto-created on first run)
 gugu run
 
 # Specify config file
@@ -138,7 +157,7 @@ gugu uninstall                    # Unregister auto-start
 Global options:
 
 ```bash
--c, --config <PATH>      # Config file path (default: gugu.toml)
+-c, --config <PATH>      # Config file path (default: gugu.toml next to the binary)
     --server <URL>       # Server URL to connect to
     --api-key <KEY>      # API Key (overrides config file)
 ```

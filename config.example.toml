@@ -12,10 +12,12 @@ port = 9090
 # cors_origins = ["http://localhost:3000"]
 
 # 示例进程配置
+# 注意：其中的相对路径 (logs/、工作目录) 都相对于本配置文件所在目录，
+# 把程序和配置放在哪里，日志就生成在哪里，整体可随身携带 (绿色部署)。
 [processes.example-web]
 command = "python"
 args = ["-m", "http.server", "8080"]
-auto_start = true
+auto_start = false            # 试跑示例时改为 true
 auto_restart = true
 max_restarts = 3
 restart_delay_secs = 5

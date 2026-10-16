@@ -9,6 +9,58 @@ pub struct CoreHandles {
     pub pid_path: PathBuf,
 }
 
+/// 内置配置模板：首次运行且找不到配置时写入，让配置永远出现在程序旁边。
+pub const DEFAULT_CONFIG_TEMPLATE: &str = "\
+# 咕咕鸽进程守护 配置文件
+# 其中的相对路径 (日志、PID、工作目录) 都相对于本文件所在目录 (即程序目录)，
+# 把整个文件夹搬到任何机器、任何位置都不需要改配置。
+
+[daemon]
+pid_file = \"gugu.pid\"
+log_dir = \"logs\"
+# api_key = \"your-secret-key\"
+
+[daemon.web]
+addr = \"0.0.0.0\"
+port = 9090
+# cors_origins = [\"http://localhost:3000\"]
+
+# 进程可以通过 WebUI 或 gugu add 添加 (会自动写回本文件)，也可以手动在此声明。
+# 修改后执行 gugu reload 或重启守护进程生效。示例：
+
+# [processes.my-app]
+# command = \"node\"
+# args = [\"app.js\"]
+# auto_start = true
+# auto_restart = true
+# max_restarts = 3
+# restart_delay_secs = 5
+# max_log_size_mb = 10
+# stdout_log = \"logs/my-app-stdout.log\"
+# stderr_log = \"logs/my-app-stderr.log\"
+
+# [processes.my-app.health_check]
+# type = \"tcp\"
+# port = 8080
+";
+
+/// 配置文件不存在时，在目标位置生成内置模板。返回是否新建。
+///
+/// # Errors
+/// 创建目录或写入文件失败时返回底层 IO 错误。
+pub fn ensure_config_template(path: &Path) -> Result<bool> {
+    if path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("创建配置目录失败: {}", parent.display()))?;
+    }
+    std::fs::write(path, DEFAULT_CONFIG_TEMPLATE)
+        .with_context(|| format!("写入配置模板失败: {}", path.display()))?;
+    Ok(true)
+}
+
 fn pid_path(config: &AppConfig, config_path: &Path) -> PathBuf {
     let config_dir = config_path.parent().unwrap_or(Path::new("."));
     match config.daemon.pid_file {
@@ -61,6 +113,14 @@ fn remove_pid_file(path: &Path) {
 }
 
 pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result<CoreHandles> {
+    match ensure_config_template(config_path) {
+        Ok(true) => tracing::info!(
+            "未找到配置文件，已自动生成默认模板: {}，编辑后运行 gugu reload 生效",
+            config_path.display()
+        ),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("{e:#} (将按默认空配置启动)"),
+    }
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
     let pid = pid_path(&config, config_path);
@@ -71,7 +131,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .or_else(|| std::env::var("GUGU_API_KEY").ok());
 
     tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
-    tracing::info!("配置文件: {}", config_path.display());
+    tracing::info!("配置文件: {}", gugu_core::config::canonicalize_clean(config_path).display());
     tracing::info!("进程 PID: {}", current_pid());
 
     if api_key.is_some() {

@@ -494,3 +494,70 @@ mod path_to_forward_slashes {
         );
     }
 }
+
+// ── 默认配置路径选择 ──────────────────────────────────────────
+
+mod select_config_path {
+    use super::*;
+    use std::path::Path;
+
+    fn exists_in(files: &[&str]) -> impl Fn(&Path) -> bool {
+        let set: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+        move |p| set.iter().any(|f| f == p)
+    }
+
+    #[test]
+    fn prefers_config_next_to_exe() {
+        let exe = Path::new("/opt/gugu");
+        let cwd = Path::new("/home/user");
+        let result = select_config_path(
+            Some(exe),
+            cwd,
+            &exists_in(&["/opt/gugu/gugu.toml", "/home/user/gugu.toml"]),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/opt/gugu/gugu.toml"),
+            "程序同目录存在配置时应优先使用"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_cwd_when_exe_dir_has_no_config() {
+        let exe = Path::new("/opt/gugu");
+        let cwd = Path::new("/home/user");
+        let result = select_config_path(
+            Some(exe),
+            cwd,
+            &exists_in(&["/home/user/gugu.toml"]),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/home/user/gugu.toml"),
+            "程序目录没有配置但当前目录有时应使用当前目录"
+        );
+    }
+
+    #[test]
+    fn defaults_to_exe_dir_when_no_config_exists() {
+        let exe = Path::new("/opt/gugu");
+        let cwd = Path::new("/home/user");
+        let result = select_config_path(Some(exe), cwd, &exists_in(&[]));
+        assert_eq!(
+            result,
+            PathBuf::from("/opt/gugu/gugu.toml"),
+            "两处都不存在时应返回程序同目录，让新配置跟着程序走"
+        );
+    }
+
+    #[test]
+    fn uses_cwd_when_exe_dir_unavailable() {
+        let cwd = Path::new("/home/user");
+        let result = select_config_path(None, cwd, &exists_in(&[]));
+        assert_eq!(
+            result,
+            PathBuf::from("/home/user/gugu.toml"),
+            "拿不到程序目录时应退回当前目录"
+        );
+    }
+}

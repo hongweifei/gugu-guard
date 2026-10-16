@@ -1,10 +1,12 @@
+//! `ManagedProcess`：单个被守护进程的生命周期状态机。
+//!
+//! 平台机制不在此文件：启动命令构造在 [`command`]，停止/强杀在 [`terminate`]，
+//! 输出采集在 [`capture`]，Windows 进程树在 [`job`]。
+
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
@@ -12,78 +14,24 @@ use tokio::task::JoinHandle;
 use crate::config::ProcessConfig;
 use crate::error::{GuguError, Result};
 
-const MAX_LOG_LINES: usize = 1000;
+use super::capture::read_stream;
+use super::command::split_command_words;
+use super::terminate::{force_kill, run_stop_command, send_default_stop_signal};
+use super::types::{LogEntry, LogStream, ProcessInfo, ProcessStatus};
+
+#[cfg(windows)]
+use super::command::{is_bat_cmd, resolve_program, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+#[cfg(windows)]
+use super::job;
+
 const LOG_BROADCAST_CAPACITY: usize = 256;
-// CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-#[cfg(windows)]
-const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum ProcessStatus {
-    Stopped,
-    Running,
-    Starting,
-    Failed(String),
-    Restarting,
-}
-
-impl std::fmt::Display for ProcessStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Stopped => write!(f, "已停止"),
-            Self::Running => write!(f, "运行中"),
-            Self::Starting => write!(f, "启动中"),
-            Self::Failed(e) => write!(f, "失败: {e}"),
-            Self::Restarting => write!(f, "重启中"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessInfo {
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub status: ProcessStatus,
-    pub pid: Option<u32>,
-    pub restart_count: u32,
-    pub auto_start: bool,
-    pub auto_restart: bool,
-    pub has_health_check: bool,
-    pub unhealthy_restart: bool,
-    pub healthy: Option<bool>,
-    pub group: Option<String>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub uptime_secs: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub timestamp: DateTime<Utc>,
-    pub stream: LogStream,
-    pub line: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-#[non_exhaustive]
-pub enum LogStream {
-    Stdout,
-    Stderr,
-}
 
 pub struct ManagedProcess {
     name: String,
     config: ProcessConfig,
     child: Option<Child>,
     #[cfg(windows)]
-    job: Option<windows_sys_job::Job>,
+    job: Option<job::Job>,
     status: ProcessStatus,
     crash_restart_count: u32,
     health_failures: u32,
@@ -179,7 +127,7 @@ impl ManagedProcess {
         (self.health_failures, self.health_failures >= threshold)
     }
 
-    /// 缺陷4：进程已运行且存活时长达到 `restart_reset_secs`，崩溃重启计数归零，
+    /// 进程已运行且存活时长达到 `restart_reset_secs` 时，崩溃重启计数归零，
     /// 让守护长期有效（慢速崩溃循环也能一直被拉起，而非一次事故后永久放弃）。
     #[must_use]
     pub fn maybe_decay_crash_count(&mut self, uptime_secs: i64) -> bool {
@@ -273,7 +221,7 @@ impl ManagedProcess {
                 // Windows: 将子进程分配到 Job Object，确保进程树可控终止
                 #[cfg(windows)]
                 {
-                    match windows_sys_job::create_kill_on_close_job() {
+                    match job::create_kill_on_close_job() {
                         Ok(job) => {
                             if let Some(pid) = pid {
                                 if let Err(e) = job.assign_process(pid) {
@@ -353,7 +301,7 @@ impl ManagedProcess {
                 // Windows: 优先通过 Job Object 终止整棵进程树
                 #[cfg(windows)]
                 {
-                    let terminated_via_job = self.job.as_ref().is_some_and(windows_sys_job::Job::terminate);
+                    let terminated_via_job = self.job.as_ref().is_some_and(job::Job::terminate);
                     if terminated_via_job {
                         tracing::debug!("[{}] 已通过 Job Object 终止进程树", name);
                     } else {
@@ -531,378 +479,5 @@ impl ManagedProcess {
     pub async fn clear_logs(&self) {
         self.stdout_lines.lock().await.clear();
         self.stderr_lines.lock().await.clear();
-    }
-}
-
-/// 把命令串按空白分词 (双引号保护带空白的段)，返回 (exe, 前置参数)。
-/// 不支持 `\"` 转义；需要复杂引号时用 args 数组或 shell = true。
-pub(crate) fn split_command_words(s: &str) -> (String, Vec<String>) {
-    let mut tokens: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    let mut has_token = false;
-    for ch in s.chars() {
-        match ch {
-            '"' => { in_quote = !in_quote; has_token = true; }
-            c if (c == ' ' || c == '\t') && !in_quote => {
-                if has_token {
-                    tokens.push(std::mem::take(&mut cur));
-                    has_token = false;
-                }
-            }
-            c => { cur.push(c); has_token = true; }
-        }
-    }
-    if has_token {
-        tokens.push(cur);
-    }
-    if tokens.is_empty() {
-        return (String::new(), Vec::new());
-    }
-    let exe = tokens.remove(0);
-    (exe, tokens)
-}
-
-#[cfg(windows)]
-fn is_bat_cmd(path: &std::path::Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"))
-}
-
-/// Windows: 在 PATH 中按 PATHEXT 解析裸命令名，返回找到的完整路径。
-/// 含路径分隔符或找不到的情况返回 None (交由 CreateProcess 自行处理/报错)。
-#[cfg(windows)]
-fn resolve_program(exe: &str) -> Option<PathBuf> {
-    let direct = PathBuf::from(exe);
-    if exe.contains('\\') || exe.contains('/') {
-        return direct.is_file().then_some(direct);
-    }
-    let path_var = std::env::var_os("PATH")?;
-    let has_ext = std::path::Path::new(exe).extension().is_some();
-    let exts: Vec<String> = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
-        .split(';')
-        .filter(|e| !e.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    for dir in std::env::split_paths(&path_var) {
-        let cand = dir.join(exe);
-        if cand.is_file() {
-            return Some(cand);
-        }
-        if !has_ext {
-            for ext in &exts {
-                let cand = dir.join(format!("{exe}{ext}"));
-                if cand.is_file() {
-                    return Some(cand);
-                }
-            }
-        }
-    }
-    None
-}
-
-async fn run_stop_command(name: &str, stop_cmd: &str, working_dir: Option<&std::path::Path>, env: &std::collections::HashMap<String, String>) {
-    let mut cmd;
-    #[cfg(windows)]
-    {
-        cmd = tokio::process::Command::new("cmd");
-        cmd.arg("/C").arg(stop_cmd);
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(unix)]
-    {
-        cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c").arg(stop_cmd);
-    }
-
-    if let Some(dir) = working_dir {
-        cmd.current_dir(dir);
-    }
-
-    cmd.envs(env)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    tracing::info!("[{}] 执行自定义停止命令: {}", name, stop_cmd);
-    match cmd.status().await {
-        Ok(s) => tracing::debug!("[{}] 停止命令退出码: {:?}", name, s.code()),
-        Err(e) => tracing::warn!("[{}] 停止命令执行失败: {}", name, e),
-    }
-}
-
-async fn send_default_stop_signal(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        #[cfg(windows)]
-        {
-            let _ = tokio::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
-        }
-
-        #[cfg(unix)]
-        {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
-        }
-    }
-}
-
-async fn force_kill(child: &mut Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
-    #[cfg(windows)]
-    {
-        // force_kill 是兜底，直接用 taskkill /F 确保进程终止
-        let _ = tokio::process::Command::new("taskkill")
-            .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
-    }
-}
-
-pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
-    reader: R,
-    log_path: Option<PathBuf>,
-    buffer: Arc<Mutex<VecDeque<LogEntry>>>,
-    log_tx: broadcast::Sender<LogEntry>,
-    stream: LogStream,
-    name: &str,
-    max_log_size_mb: Option<u64>,
-) {
-    let mut buf_reader = BufReader::new(reader);
-    let mut raw: Vec<u8> = Vec::with_capacity(1024);
-    let mut file = open_log_file(log_path.as_deref()).await;
-    let max_bytes = max_log_size_mb.unwrap_or(0) * 1024 * 1024;
-    let mut line_count: u32 = 0;
-
-    loop {
-        raw.clear();
-        match buf_reader.read_until(b'\n', &mut raw).await {
-            Ok(0) => break,
-            Ok(_) => {
-                // 按字节切行，容忍非 UTF-8（GBK 等）输出：内存/广播走 lossy 转换，
-                // 文件保留原始字节，不丢任何一行。
-                let mut body: &[u8] = &raw;
-                if body.last() == Some(&b'\n') {
-                    body = &body[..body.len() - 1];
-                }
-                if body.last() == Some(&b'\r') {
-                    body = &body[..body.len() - 1];
-                }
-                let line = String::from_utf8_lossy(body).into_owned();
-                let entry = LogEntry {
-                    timestamp: Utc::now(),
-                    stream: stream.clone(),
-                    line,
-                    process_name: None,
-                };
-
-                if let Some(ref mut f) = file {
-                    let mut bytes = raw.clone();
-                    if bytes.last() != Some(&b'\n') {
-                        bytes.push(b'\n');
-                    }
-                    if let Err(e) = f.write_all(&bytes).await {
-                        tracing::debug!("[{}] 写入日志文件失败: {}", name, e);
-                    }
-                }
-
-                let mut buf = buffer.lock().await;
-                if buf.len() >= MAX_LOG_LINES {
-                    buf.pop_front();
-                }
-                buf.push_back(entry.clone());
-                drop(buf);
-
-                let _ = log_tx.send(entry);
-
-                line_count += 1;
-                if max_bytes > 0 && line_count.is_multiple_of(256) {
-                    let should_rotate = match file.as_ref() {
-                        Some(f) => f.metadata().await.map(|m| m.len() > max_bytes).unwrap_or(false),
-                        None => false,
-                    };
-                    if should_rotate {
-                        file = rotate_log_file(log_path.as_deref()).await;
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::debug!("[{}] 读取 {} 流错误: {}", name, stream_type(&stream), e);
-                break;
-            }
-        }
-    }
-}
-
-async fn open_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
-    let p = path?;
-
-    if let Some(parent) = p.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            tracing::debug!("创建日志目录失败 {}: {}", parent.display(), e);
-        }
-    }
-    match tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .await
-    {
-        Ok(f) => Some(f),
-        Err(e) => {
-            tracing::debug!("打开日志文件失败 {}: {}", p.display(), e);
-            None
-        }
-    }
-}
-
-async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
-    let p = path?;
-
-    for i in (1..=5).rev() {
-        let old = append_suffix(p, i);
-        let next = append_suffix(p, i + 1);
-        let _ = tokio::fs::rename(&old, &next).await;
-    }
-    let _ = tokio::fs::rename(p, append_suffix(p, 1)).await;
-
-    tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .await
-        .ok()
-}
-
-fn stream_type(stream: &LogStream) -> &'static str {
-    match stream {
-        LogStream::Stdout => "stdout",
-        LogStream::Stderr => "stderr",
-    }
-}
-
-fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
-    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy()));
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    match ext {
-        Some(ext) => parent.join(format!("{stem}.{n}{ext}")),
-        None => parent.join(format!("{stem}.{n}")),
-    }
-}
-
-/// Windows Job Object 封装，用于可靠管理进程树生命周期。
-///
-/// 核心机制：
-/// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: 当 Job 句柄关闭（守护进程退出/崩溃）时
-///   自动终止所有关联进程，防止孤儿进程
-/// - `TerminateJobObject`: 主动终止整棵进程树，比 `taskkill /T` 更可靠
-///   因为 Job Object 跟踪所有后代进程，包括 cmd /C 产生的脱离进程树的子进程
-#[cfg(windows)]
-mod windows_sys_job {
-    use std::io;
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, SetInformationJobObject, TerminateJobObject,
-        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation,
-    };
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
-
-    /// 以 usize 存储 HANDLE 原始值，使 Job 满足 Send（*mut c_void 不满足 Send）。
-    /// SAFE: HANDLE 本质上是内核对象的整数标识符，可在线程间安全传递。
-    pub struct Job {
-        handle: usize,
-    }
-
-    // SAFETY: Windows HANDLE 是内核对象标识符，可安全跨线程使用。
-    unsafe impl Send for Job {}
-
-    extern "system" {
-        fn CreateJobObjectW(lpjobattributes: *const std::ffi::c_void, lpname: *const u16) -> *mut std::ffi::c_void;
-    }
-
-    impl Job {
-        /// 将进程分配到此 Job Object。
-        pub fn assign_process(&self, pid: u32) -> io::Result<()> {
-            let proc_handle = unsafe {
-                OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid)
-            };
-            if proc_handle.is_null() {
-                return Err(io::Error::last_os_error());
-            }
-            let result = unsafe {
-                AssignProcessToJobObject(self.as_handle(), proc_handle)
-            };
-            unsafe { CloseHandle(proc_handle) };
-            if result == 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        }
-
-        /// 终止 Job 中所有进程。成功返回 true。
-        pub fn terminate(&self) -> bool {
-            unsafe { TerminateJobObject(self.as_handle(), 1) != 0 }
-        }
-
-        fn as_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
-            self.handle as *mut _
-        }
-    }
-
-    impl Drop for Job {
-        fn drop(&mut self) {
-            if self.handle != 0 {
-                unsafe { CloseHandle(self.as_handle()) };
-            }
-        }
-    }
-
-    /// 创建匿名 Job Object，设置 KILL_ON_JOB_CLOSE 以确保进程树在句柄关闭时被清理。
-    pub fn create_kill_on_close_job() -> io::Result<Job> {
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-
-        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
-            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
-                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                ..unsafe { std::mem::zeroed() }
-            },
-            ..unsafe { std::mem::zeroed() }
-        };
-
-        let h: windows_sys::Win32::Foundation::HANDLE = handle;
-        let result = unsafe {
-            SetInformationJobObject(
-                h,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        if result == 0 {
-            unsafe { CloseHandle(h) };
-            return Err(io::Error::last_os_error());
-        }
-
-        Ok(Job { handle: handle as usize })
     }
 }

@@ -12,6 +12,8 @@ fn test_config() -> ProcessConfig {
         auto_restart: true,
         max_restarts: 3,
         restart_delay_secs: 5,
+        restart_reset_secs: 60,
+        shell: false,
         stop_command: None,
         stop_timeout_secs: 10,
         health_check: None,
@@ -539,5 +541,49 @@ mod shutdown {
             err.to_string().contains("进程管理器"),
             "关闭后应拒绝命令，实际: {err}"
         );
+    }
+}
+
+// ── 配置回写保真 ──────────────────────────────────────────────
+
+mod save_fidelity {
+    use super::*;
+
+    #[tokio::test]
+    async fn add_process_preserves_comments_and_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gugu.toml");
+        std::fs::write(&path, r#"# 顶部注释
+[daemon]
+log_dir = "logs"  # 目录注释
+
+[processes.web]
+command = "ping"
+args = ["127.0.0.1", "-n", "2"]
+auto_start = false
+stdout_log = "logs/web.log"  # 日志路径注释
+"#)
+        .unwrap();
+
+        let config = AppConfig::load(&path).unwrap();
+        let mgr = crate::manager::start(&config, Some(path.clone()));
+        mgr.add_process("job".to_string(), test_config(), false)
+            .await
+            .unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("顶部注释"), "文件注释应保留");
+        assert!(saved.contains("日志路径注释"),
+            "进程字段注释应保留");
+        assert!(
+            saved.contains("\"logs/web.log\""),
+            "相对日志路径应保持相对，不应被回写成绝对路径，实际:\n{saved}"
+        );
+        let abs_dir = dir.path().display().to_string().replace('\\', "/");
+        assert!(
+            !saved.contains(&abs_dir),
+            "不应把本机绝对路径写进配置"
+        );
+        mgr.shutdown();
     }
 }

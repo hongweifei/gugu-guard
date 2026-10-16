@@ -86,6 +86,7 @@ pub struct ManagedProcess {
     job: Option<windows_sys_job::Job>,
     status: ProcessStatus,
     crash_restart_count: u32,
+    health_failures: u32,
     healthy: Option<bool>,
     started_at: Option<DateTime<Utc>>,
     stdout_lines: Arc<Mutex<VecDeque<LogEntry>>>,
@@ -106,6 +107,7 @@ impl ManagedProcess {
             job: None,
             status: ProcessStatus::Stopped,
             crash_restart_count: 0,
+            health_failures: 0,
             healthy: None,
             started_at: None,
             stdout_lines: Arc::new(Mutex::new(VecDeque::new())),
@@ -158,10 +160,37 @@ impl ManagedProcess {
 
     pub fn reset_crash_restart_count(&mut self) {
         self.crash_restart_count = 0;
+        self.health_failures = 0;
     }
 
     pub fn mark_crash_restart(&mut self) {
         self.crash_restart_count += 1;
+    }
+
+    /// 记录一次健康检查结果，返回 (当前连续失败次数, 是否达到判定阈值)。
+    /// 达到阈值才允许触发 unhealthy_restart —— 单次抖动不再误伤进程。
+    pub fn record_health(&mut self, ok: bool) -> (u32, bool) {
+        if ok {
+            self.health_failures = 0;
+            return (0, false);
+        }
+        self.health_failures += 1;
+        let threshold = self.config.health_check.as_ref().map_or(1, |hc| hc.fail_threshold);
+        (self.health_failures, self.health_failures >= threshold)
+    }
+
+    /// 缺陷4：进程已运行且存活时长达到 `restart_reset_secs`，崩溃重启计数归零，
+    /// 让守护长期有效（慢速崩溃循环也能一直被拉起，而非一次事故后永久放弃）。
+    #[must_use]
+    pub fn maybe_decay_crash_count(&mut self, uptime_secs: i64) -> bool {
+        if self.crash_restart_count > 0
+            && self.is_running()
+            && uptime_secs >= self.config.restart_reset_secs.max(1) as i64
+        {
+            self.crash_restart_count = 0;
+            return true;
+        }
+        false
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -172,25 +201,61 @@ impl ManagedProcess {
         self.status = ProcessStatus::Starting;
         self.abort_log_tasks();
 
-        let full_cmd = if self.config.args.is_empty() {
-            self.config.command.clone()
-        } else {
-            let args_str = self.config.args.join(" ");
-            format!("{} {args_str}", self.config.command)
-        };
-
+        // shell=true 时保持旧行为：command+args 拼接后交给 shell (支持管道等)。
+        // 默认 (shell=false) 直接启动可执行文件，参数以数组传递，
+        // 空格路径不再被拆碎，参数中的 & | 等也不会被当作命令执行。
         let mut cmd;
-        #[cfg(windows)]
-        {
-            cmd = Command::new("cmd");
-            cmd.arg("/C").arg(&full_cmd);
-            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-        }
-        #[cfg(unix)]
-        {
-            cmd = Command::new("sh");
-            cmd.arg("-c").arg(&full_cmd);
-            cmd.process_group(0);
+        if self.config.shell {
+            let full_cmd = if self.config.args.is_empty() {
+                self.config.command.clone()
+            } else {
+                let args_str = self.config.args.join(" ");
+                format!("{} {args_str}", self.config.command)
+            };
+            #[cfg(windows)]
+            {
+                cmd = Command::new("cmd");
+                cmd.arg("/C").arg(&full_cmd);
+                cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+            }
+            #[cfg(unix)]
+            {
+                cmd = Command::new("sh");
+                cmd.arg("-c").arg(&full_cmd);
+                cmd.process_group(0);
+            }
+        } else {
+            let (exe, mut argv) = split_command_words(&self.config.command);
+            if exe.is_empty() {
+                self.status = ProcessStatus::Failed("command 为空，无法启动".into());
+                return Err(GuguError::StartFailed(self.name.clone(), "command 为空".into()));
+            }
+            argv.extend(self.config.args.iter().cloned());
+            #[cfg(windows)]
+            {
+                match resolve_program(&exe) {
+                    Some(target) if is_bat_cmd(&target) => {
+                        if argv.iter().any(|a| a.contains('"')) {
+                            tracing::warn!(
+                                "[{}] .bat/.cmd 包装执行时，参数中的双引号可能破坏 cmd 解析，建议改用 shell = true",
+                                self.name
+                            );
+                        }
+                        cmd = Command::new("cmd");
+                        cmd.arg("/D").arg("/C").arg("call").arg(&target);
+                    }
+                    Some(target) => cmd = Command::new(target),
+                    None => cmd = Command::new(&exe),
+                }
+                cmd.args(&argv);
+                cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+            }
+            #[cfg(unix)]
+            {
+                cmd = Command::new(&exe);
+                cmd.args(&argv);
+                cmd.process_group(0);
+            }
         }
 
         cmd.envs(&self.config.env)
@@ -256,6 +321,7 @@ impl ManagedProcess {
                 self.started_at = Some(Utc::now());
                 self.status = ProcessStatus::Running;
                 self.last_health_check = None;
+                self.health_failures = 0;
 
                 tracing::info!("[{}] 进程已启动 (PID: {:?})", self.name, pid);
                 Ok(())
@@ -468,6 +534,74 @@ impl ManagedProcess {
     }
 }
 
+/// 把命令串按空白分词 (双引号保护带空白的段)，返回 (exe, 前置参数)。
+/// 不支持 `\"` 转义；需要复杂引号时用 args 数组或 shell = true。
+pub(crate) fn split_command_words(s: &str) -> (String, Vec<String>) {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote = false;
+    let mut has_token = false;
+    for ch in s.chars() {
+        match ch {
+            '"' => { in_quote = !in_quote; has_token = true; }
+            c if (c == ' ' || c == '\t') && !in_quote => {
+                if has_token {
+                    tokens.push(std::mem::take(&mut cur));
+                    has_token = false;
+                }
+            }
+            c => { cur.push(c); has_token = true; }
+        }
+    }
+    if has_token {
+        tokens.push(cur);
+    }
+    if tokens.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    let exe = tokens.remove(0);
+    (exe, tokens)
+}
+
+#[cfg(windows)]
+fn is_bat_cmd(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"))
+}
+
+/// Windows: 在 PATH 中按 PATHEXT 解析裸命令名，返回找到的完整路径。
+/// 含路径分隔符或找不到的情况返回 None (交由 CreateProcess 自行处理/报错)。
+#[cfg(windows)]
+fn resolve_program(exe: &str) -> Option<PathBuf> {
+    let direct = PathBuf::from(exe);
+    if exe.contains('\\') || exe.contains('/') {
+        return direct.is_file().then_some(direct);
+    }
+    let path_var = std::env::var_os("PATH")?;
+    let has_ext = std::path::Path::new(exe).extension().is_some();
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    for dir in std::env::split_paths(&path_var) {
+        let cand = dir.join(exe);
+        if cand.is_file() {
+            return Some(cand);
+        }
+        if !has_ext {
+            for ext in &exts {
+                let cand = dir.join(format!("{exe}{ext}"));
+                if cand.is_file() {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    None
+}
+
 async fn run_stop_command(name: &str, stop_cmd: &str, working_dir: Option<&std::path::Path>, env: &std::collections::HashMap<String, String>) {
     let mut cmd;
     #[cfg(windows)]
@@ -539,7 +673,7 @@ async fn force_kill(child: &mut Child) {
     }
 }
 
-async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
+pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     log_path: Option<PathBuf>,
     buffer: Arc<Mutex<VecDeque<LogEntry>>>,
@@ -549,26 +683,39 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     max_log_size_mb: Option<u64>,
 ) {
     let mut buf_reader = BufReader::new(reader);
-    let mut line = String::new();
+    let mut raw: Vec<u8> = Vec::with_capacity(1024);
     let mut file = open_log_file(log_path.as_deref()).await;
     let max_bytes = max_log_size_mb.unwrap_or(0) * 1024 * 1024;
     let mut line_count: u32 = 0;
 
     loop {
-        line.clear();
-        match buf_reader.read_line(&mut line).await {
+        raw.clear();
+        match buf_reader.read_until(b'\n', &mut raw).await {
             Ok(0) => break,
             Ok(_) => {
-                let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                // 按字节切行，容忍非 UTF-8（GBK 等）输出：内存/广播走 lossy 转换，
+                // 文件保留原始字节，不丢任何一行。
+                let mut body: &[u8] = &raw;
+                if body.last() == Some(&b'\n') {
+                    body = &body[..body.len() - 1];
+                }
+                if body.last() == Some(&b'\r') {
+                    body = &body[..body.len() - 1];
+                }
+                let line = String::from_utf8_lossy(body).into_owned();
                 let entry = LogEntry {
                     timestamp: Utc::now(),
                     stream: stream.clone(),
-                    line: trimmed.to_string(),
+                    line,
                     process_name: None,
                 };
 
                 if let Some(ref mut f) = file {
-                    if let Err(e) = f.write_all(format!("{trimmed}\n").as_bytes()).await {
+                    let mut bytes = raw.clone();
+                    if bytes.last() != Some(&b'\n') {
+                        bytes.push(b'\n');
+                    }
+                    if let Err(e) = f.write_all(&bytes).await {
                         tracing::debug!("[{}] 写入日志文件失败: {}", name, e);
                     }
                 }

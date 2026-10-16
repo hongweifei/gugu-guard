@@ -10,7 +10,8 @@
 - **Web 管理面板** — 暗色主题 UI，动态表单，实时状态更新
 - **命令行工具** — 完整的 CLI，支持彩色表格输出
 - **日志捕获** — stdout/stderr 自动捕获，内存环形缓冲区 + 文件持久化 + 自动轮转
-- **健康检查** — TCP 端口检测 / HTTP 请求检测，支持失败自动重启
+- **健康检查** — TCP 端口 / HTTP 请求检测，连续失败达到阈值才判定重启，瞬时抖动不误伤
+- **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
 - **CORS 配置** — 可限制允许的跨域来源
@@ -222,6 +223,9 @@ gugu-guard/
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
 
+> 守护进程自身的运行日志按天写入 `log_dir` 下的 `gugu-daemon.<日期>.log`（保留最近 30 份），
+> 前台、开机自启任务、Windows 服务三种形态都会写文件；仅当 stdout 是终端时才额外打印到控制台。
+
 ### 进程配置
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -234,6 +238,8 @@ gugu-guard/
 | `auto_restart` | bool | `true` | 崩溃后自动重启 |
 | `max_restarts` | u32 | `3` | 最大连续崩溃重启次数 |
 | `restart_delay_secs` | u64 | `5` | 重启间隔（秒） |
+| `restart_reset_secs` | u64 | `60` | 进程稳定运行达该秒数后，崩溃重启计数自动归零，守护长期有效 |
+| `shell` | bool | `false` | true 时将 command+args 拼接后经 shell 执行（支持管道等）；默认直接启动可执行文件 |
 | `stop_timeout_secs` | u64 | `10` | 停止超时（秒） |
 | `depends_on` | string[] | `[]` | 依赖的进程名，按依赖顺序启动 |
 | `max_log_size_mb` | u64 | — | 日志文件大小上限 (MB)，超限自动轮转 |
@@ -250,6 +256,7 @@ port = 8080               # TCP 模式
 # url = "http://localhost:8080/health"  # HTTP 模式
 interval_secs = 30
 timeout_secs = 5
+fail_threshold = 3        # 连续失败该次数才判定不健康（配合 unhealthy_restart 才重启）
 ```
 
 ## License

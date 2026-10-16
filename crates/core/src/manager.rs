@@ -217,26 +217,48 @@ struct State {
     processes: HashMap<String, ManagedProcess>,
     daemon_config: DaemonConfig,
     config_path: Option<PathBuf>,
+    config_dir: PathBuf,
+    log_base: PathBuf,
 }
 
 impl State {
     fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
-        let config_dir = config_path.as_deref()
-            .and_then(|p| p.parent())
-            .unwrap_or(std::path::Path::new("."));
-
-        let log_base = config.daemon.log_dir.as_ref()
-            .map(|d| crate::config::resolve_relative_path(d, config_dir))
-            .unwrap_or_else(|| config_dir.to_path_buf());
+        let (config_dir, log_base) = Self::bases(config, config_path.as_deref());
 
         let processes = config.processes.iter()
             .map(|(name, pc)| {
-                let resolved = Self::resolve_paths(pc, config_dir, &log_base);
+                let resolved = Self::resolve_paths(pc, &config_dir, &log_base);
                 (name.clone(), ManagedProcess::new(name.clone(), resolved))
             })
             .collect();
 
-        Self { processes, daemon_config: config.daemon.clone(), config_path }
+        Self { processes, daemon_config: config.daemon.clone(), config_path, config_dir, log_base }
+    }
+
+    fn bases(config: &AppConfig, config_path: Option<&std::path::Path>) -> (PathBuf, PathBuf) {
+        let config_dir = config_path
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let log_base = config.daemon.log_dir.as_ref()
+            .map(|d| crate::config::resolve_relative_path(d, &config_dir))
+            .unwrap_or_else(|| config_dir.clone());
+        (config_dir, log_base)
+    }
+
+    /// 回写前把内存中已解析的绝对路径还原为配置相对形式 (绿色可搬移)。
+    fn declared_paths(&self, c: &ProcessConfig) -> ProcessConfig {
+        let mut r = c.clone();
+        if let Some(d) = &r.working_dir {
+            r.working_dir = Some(crate::config::relativize_path(d, &self.config_dir));
+        }
+        if let Some(l) = &r.stdout_log {
+            r.stdout_log = Some(crate::config::relativize_path(l, &self.log_base));
+        }
+        if let Some(l) = &r.stderr_log {
+            r.stderr_log = Some(crate::config::relativize_path(l, &self.log_base));
+        }
+        r
     }
 
     fn resolve_paths(c: &ProcessConfig, config_dir: &std::path::Path, log_base: &std::path::Path) -> ProcessConfig {
@@ -262,7 +284,7 @@ impl State {
         let config = AppConfig {
             daemon: self.daemon_config.clone(),
             processes: self.processes.iter()
-                .map(|(n, p)| (n.clone(), p.config().clone())).collect(),
+                .map(|(n, p)| (n.clone(), self.declared_paths(p.config()))).collect(),
         };
         config.save(path)?;
         tracing::debug!("配置已保存到 {}", path.display());
@@ -543,12 +565,9 @@ fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntr
 async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
     state.daemon_config = new_config.daemon.clone();
 
-    let config_dir = state.config_path.as_deref()
-        .and_then(|p| p.parent())
-        .unwrap_or(std::path::Path::new("."));
-    let log_base = state.daemon_config.log_dir.as_ref()
-        .map(|d| crate::config::resolve_relative_path(d, config_dir))
-        .unwrap_or_else(|| config_dir.to_path_buf());
+    let (config_dir, log_base) = State::bases(new_config, state.config_path.as_deref());
+    state.config_dir = config_dir.clone();
+    state.log_base = log_base.clone();
 
     let to_remove: Vec<String> = state.processes.keys()
         .filter(|k| !new_config.processes.contains_key(*k)).cloned().collect();
@@ -567,7 +586,7 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
             tracing::warn!("[{}] 配置验证失败，跳过: {}", name, e);
             continue;
         }
-        let resolved = State::resolve_paths(config, config_dir, &log_base);
+        let resolved = State::resolve_paths(config, &config_dir, &log_base);
         if let Some(proc) = state.processes.get_mut(name) {
             let was_running = proc.is_running();
             let needs_restart = was_running && !proc.config().runtime_fields_eq(&resolved);
@@ -601,6 +620,14 @@ async fn do_reload_from_file(state: &mut State) -> Result<()> {
 // ── 监控循环 ─────────────────────────────────────────────────
 
 async fn run_monitor_cycle(state: &mut State) {
+    // 缺陷4：存活达到阈值的进程把崩溃重启计数归零，守护长期有效
+    for (name, proc) in &mut state.processes {
+        let uptime = proc.info().uptime_secs.unwrap_or(0);
+        if proc.maybe_decay_crash_count(uptime) {
+            tracing::info!("[{name}] 已稳定运行 {uptime}s，崩溃重启计数已归零");
+        }
+    }
+
     let dead = find_dead(state);
     if !dead.is_empty() {
         // 并行等待各进程的重启延迟，然后依次启动
@@ -671,14 +698,19 @@ async fn run_health_checks(state: &mut State) {
     let results = futures::future::join_all(futures).await;
 
     let mut to_restart = Vec::new();
-    for ((name, _, unhealthy_restart), healthy) in to_check.iter().zip(results) {
+    for ((name, hc, unhealthy_restart), healthy) in to_check.iter().zip(results) {
         if let Some(proc) = state.processes.get_mut(name) {
             proc.set_healthy(Some(healthy));
-        }
-        if !healthy {
-            tracing::warn!("[{}] 健康检查失败", name);
-            if *unhealthy_restart {
-                to_restart.push(name.clone());
+            let (fails, tripped) = proc.record_health(healthy);
+            if !healthy {
+                if tripped {
+                    tracing::warn!("[{name}] 健康检查连续失败 {fails} 次 (阈值 {})，判定不健康", hc.fail_threshold);
+                    if *unhealthy_restart {
+                        to_restart.push(name.clone());
+                    }
+                } else {
+                    tracing::warn!("[{name}] 健康检查失败 ({fails}/{})，等待连续失败确认", hc.fail_threshold);
+                }
             }
         }
     }

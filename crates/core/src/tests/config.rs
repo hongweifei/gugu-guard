@@ -12,6 +12,8 @@ fn minimal_config() -> ProcessConfig {
         auto_restart: true,
         max_restarts: 3,
         restart_delay_secs: 5,
+        restart_reset_secs: 60,
+        shell: false,
         stop_command: None,
         stop_timeout_secs: 10,
         health_check: None,
@@ -164,6 +166,7 @@ mod validate {
             check_type: HealthCheckType::Tcp { host: None, port: 0 },
             interval_secs: 10,
             timeout_secs: 3,
+            fail_threshold: 3,
         });
 
         assert!(
@@ -179,6 +182,7 @@ mod validate {
             check_type: HealthCheckType::Http { url: "  ".to_string() },
             interval_secs: 10,
             timeout_secs: 3,
+            fail_threshold: 3,
         });
 
         assert!(
@@ -194,6 +198,7 @@ mod validate {
             check_type: HealthCheckType::Tcp { host: None, port: 8080 },
             interval_secs: 0,
             timeout_secs: 3,
+            fail_threshold: 3,
         });
 
         assert!(
@@ -209,6 +214,7 @@ mod validate {
             check_type: HealthCheckType::Tcp { host: None, port: 8080 },
             interval_secs: 10,
             timeout_secs: 0,
+            fail_threshold: 3,
         });
 
         assert!(
@@ -227,12 +233,52 @@ mod validate {
             },
             interval_secs: 10,
             timeout_secs: 3,
+            fail_threshold: 3,
         });
 
         assert!(
             config.validate().is_ok(),
             "有效配置应通过验证"
         );
+    }
+
+    #[test]
+    fn rejects_health_check_with_zero_fail_threshold() {
+        let mut config = minimal_config();
+        config.health_check = Some(HealthCheckConfig {
+            check_type: HealthCheckType::Tcp { host: None, port: 8080 },
+            interval_secs: 10,
+            timeout_secs: 3,
+            fail_threshold: 0,
+        });
+        assert!(
+            config.validate().is_err(),
+            "失败判定阈值为 0 应验证失败"
+        );
+    }
+}
+
+// ── 守护语义新字段的默认值 ────────────────────────────────────
+
+mod guard_field_defaults {
+    use super::*;
+
+    #[test]
+    fn defaults_for_new_guard_fields() {
+        let toml_src = r#"
+[processes.svc]
+command = "echo hi"
+
+[processes.svc.health_check]
+type = "tcp"
+port = 8080
+"#;
+        let config: AppConfig = toml::from_str(toml_src).unwrap();
+        let svc = &config.processes["svc"];
+        assert_eq!(svc.restart_reset_secs, 60, "重启计数衰减窗口默认 60 秒");
+        assert!(!svc.shell, "默认直接启动，不经 shell");
+        assert_eq!(svc.health_check.as_ref().unwrap().fail_threshold, 3,
+            "健康检查失败判定阈值默认 3");
     }
 }
 
@@ -286,6 +332,50 @@ mod save_and_load {
             config.processes.is_empty(),
             "加载不存在的文件应返回空配置"
         );
+    }
+
+    #[test]
+    fn save_preserves_comments_and_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gugu.toml");
+        std::fs::write(&path, r#"# 文件顶注释
+[daemon]
+log_dir = "logs"  # 日志目录注释
+
+# web 面板说明
+[daemon.web]
+addr = "127.0.0.1"
+port = 9090
+
+# 进程 web 的说明注释
+[processes.web]
+command = "node server.js"  # 行尾注释
+auto_start = true
+stdout_log = "logs/web.log"
+
+[processes.gone]
+command = "old"
+"#)
+            .unwrap();
+
+        let mut config = AppConfig::load(&path).unwrap();
+        // 改一个字段、删一个进程、加一个进程
+        config.processes.get_mut("web").unwrap().restart_delay_secs = 9;
+        config.processes.remove("gone");
+        config.processes.insert("fresh".to_string(), minimal_config());
+
+        config.save(&path).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+
+        assert!(out.contains("文件顶注释"), "顶层注释应保留");
+        assert!(out.contains("日志目录注释"), "daemon 行尾注释应保留");
+        assert!(out.contains("web 面板说明"), "web 段落注释应保留");
+        assert!(out.contains("进程 web 的说明注释"), "进程表头注释应保留");
+        assert!(out.contains("行尾注释"), "进程字段行尾注释应保留");
+        assert!(out.contains("restart_delay_secs = 9"), "修改后的值应写回");
+        assert!(out.contains("processes.fresh") || out.contains("[[processes]]"), "新增进程应写入");
+        assert!(!out.contains("processes.gone"), "已删除进程应移除");
+        assert!(!out.contains("command = \"old\""), "已删除进程内容不应残留");
     }
 }
 

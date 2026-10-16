@@ -13,6 +13,8 @@ fn test_config() -> ProcessConfig {
         auto_restart: true,
         max_restarts: 3,
         restart_delay_secs: 5,
+        restart_reset_secs: 60,
+        shell: false,
         stop_command: None,
         stop_timeout_secs: 10,
         health_check: None,
@@ -204,6 +206,7 @@ mod managed_process_info {
             check_type: crate::config::HealthCheckType::Tcp { host: None, port: 3000 },
             interval_secs: 10,
             timeout_secs: 3,
+            fail_threshold: 3,
         });
 
         let mut proc = ManagedProcess::new("web".to_string(), config);
@@ -306,7 +309,144 @@ mod log_entry_serde {
     }
 }
 
+// ── 健康检查连续失败判定 (缺陷5) ──────────────────────────────
+
+mod health_fail_threshold {
+    use super::*;
+
+    fn hc_config() -> ProcessConfig {
+        let mut c = test_config();
+        c.unhealthy_restart = true;
+        c.health_check = Some(crate::config::HealthCheckConfig {
+            check_type: crate::config::HealthCheckType::Tcp { host: None, port: 80 },
+            interval_secs: 10,
+            timeout_secs: 3,
+            fail_threshold: 3,
+        });
+        c
+    }
+
+    #[test]
+    fn does_not_trip_below_threshold() {
+        let mut p = ManagedProcess::new("w".into(), hc_config());
+        assert_eq!(p.record_health(false), (1, false), "第 1 次失败不应判定");
+        assert_eq!(p.record_health(false), (2, false), "第 2 次失败不应判定");
+    }
+
+    #[test]
+    fn trips_at_threshold() {
+        let mut p = ManagedProcess::new("w".into(), hc_config());
+        p.record_health(false);
+        p.record_health(false);
+        assert_eq!(p.record_health(false), (3, true), "第 3 次 (达阈值) 应判定");
+    }
+
+    #[test]
+    fn success_resets_consecutive_failures() {
+        let mut p = ManagedProcess::new("w".into(), hc_config());
+        p.record_health(false);
+        p.record_health(false);
+        assert_eq!(p.record_health(true), (0, false), "成功应清零连续失败计数");
+        assert_eq!(p.record_health(false), (1, false), "清零后应重新从 1 数起");
+    }
+}
+
+// ── 崩溃重启计数衰减 (缺陷4) ──────────────────────────────────
+
+mod crash_count_decay {
+    use super::*;
+
+    fn running_config() -> ProcessConfig {
+        let mut c = test_config();
+        c.restart_reset_secs = 60;
+        c
+    }
+
+    #[test]
+    fn resets_after_stable_uptime() {
+        let mut p = ManagedProcess::new("w".into(), running_config());
+        p.mark_crash_restart();
+        p.set_status(ProcessStatus::Running);
+        assert!(!p.maybe_decay_crash_count(30), "未达稳定时长不应衰减");
+        assert!(p.should_auto_restart(), "崩溃 1 次且未到衰减点，计数应为 1");
+        assert!(p.maybe_decay_crash_count(61), "达到稳定运行阈值应衰减");
+        assert!(!p.maybe_decay_crash_count(999), "计数已为 0，重复调用应返回 false");
+    }
+
+    #[test]
+    fn does_not_reset_when_not_running() {
+        let mut p = ManagedProcess::new("w".into(), running_config());
+        p.mark_crash_restart();
+        p.set_status(ProcessStatus::Stopped);
+        assert!(!p.maybe_decay_crash_count(999), "非运行态不应衰减计数");
+    }
+}
+
+// ── 命令分词 (缺陷7：直接 spawn 不经 shell) ───────────────────
+
+mod command_split {
+    use crate::process::split_command_words;
+
+    #[test]
+    fn splits_plain_command_into_exe_and_leading_args() {
+        let (exe, lead) = split_command_words("node app.js");
+        assert_eq!(exe, "node");
+        assert_eq!(lead, vec!["app.js".to_string()]);
+    }
+
+    #[test]
+    fn respects_double_quotes_for_path_with_spaces() {
+        let (exe, lead) = split_command_words("\"C:\\Program Files\\a.exe\" --flag");
+        assert_eq!(exe, "C:\\Program Files\\a.exe", "引号内空格不应被拆开");
+        assert_eq!(lead, vec!["--flag".to_string()]);
+    }
+
+    #[test]
+    fn handles_empty_and_single() {
+        let (exe, lead) = split_command_words("");
+        assert_eq!(exe, "");
+        assert!(lead.is_empty());
+        let (exe, lead) = split_command_words("java");
+        assert_eq!(exe, "java");
+        assert!(lead.is_empty());
+    }
+}
+
 // ── LogStream 序列化 ──────────────────────────────────────────
+
+mod read_stream_non_utf8 {
+    use super::*;
+    use crate::process::read_stream;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use tokio::sync::{broadcast, Mutex};
+
+    #[tokio::test]
+    async fn continues_after_invalid_utf8_line() {
+        // 三行：有效 / 非法 UTF-8 (0xFF 0xFE) / 有效
+        // 旧实现遇非法行 read_line 返回 Err 后 break，"last" 永远进不了缓冲
+        let bytes: Vec<u8> = vec![
+            b'f', b'i', b'r', b's', b't', b'\n',
+            0xFF, 0xFE, b'\n',
+            b'l', b'a', b's', b't', b'\n',
+        ];
+        let reader = std::io::Cursor::new(bytes);
+        let buffer: Arc<Mutex<VecDeque<LogEntry>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let (tx, _rx) = broadcast::channel(16);
+        read_stream(reader, None, buffer.clone(), tx, LogStream::Stdout, "t", None).await;
+
+        let buf = buffer.lock().await;
+        let lines: Vec<String> = buf.iter().map(|e| e.line.clone()).collect();
+        assert!(
+            lines.iter().any(|l| l.contains("first")),
+            "首行有效内容应被捕获，实际: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("last")),
+            "遇到非法 UTF-8 后应继续读取后续行，实际: {lines:?}"
+        );
+    }
+}
 
 mod log_stream_serde {
     use super::*;
@@ -321,5 +461,74 @@ mod log_stream_serde {
     fn stderr_serializes_to_lowercase() {
         let json = serde_json::to_string(&LogStream::Stderr).unwrap();
         assert_eq!(json, "\"stderr\"", "Stderr 应序列化为小写");
+    }
+}
+
+// ── 直接启动 (缺陷7) Windows 实跑对照 ────────────────────────
+
+#[cfg(windows)]
+mod direct_spawn_windows {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    async fn run_and_capture(mut p: ManagedProcess, expect: &str) -> Vec<String> {
+        p.start().await.expect("应能启动");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let lines = loop {
+            let logs = p.logs(64).await;
+            let ls: Vec<String> = logs.iter().map(|e| e.line.clone()).collect();
+            if ls.iter().any(|l| l.contains(expect)) || Instant::now() >= deadline {
+                break ls;
+            }
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        };
+        if p.is_running() {
+            let _ = p.stop().await;
+        }
+        lines
+    }
+
+    #[tokio::test]
+    async fn space_in_arg_survives_direct_spawn_via_bat() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("echoarg.bat");
+        std::fs::write(&bat, "@echo [%~1]\r\n@ping -n 5 127.0.0.1 > nul\r\n").unwrap();
+        let mut c = test_config();
+        c.command = bat.display().to_string();
+        c.args = vec!["a b c".to_string()];
+        let lines = run_and_capture(ManagedProcess::new("bat".into(), c), "[").await;
+        assert!(
+            lines.iter().any(|l| l.trim() == "[a b c]"),
+            "直接启动时含空格的参数应完整传入 (%~1)，实际: {lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_false_does_not_execute_metacharacter() {
+        let mut c = test_config();
+        c.command = "cmd".to_string();
+        c.args = vec!["/D".into(), "/C".into(), "echo".into(), "A & echo B".into()];
+        let lines = run_and_capture(ManagedProcess::new("m1".into(), c), "A").await;
+        assert!(
+            lines.iter().any(|l| l.contains("A & echo B")),
+            "& 应作为字面量输出，实际: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.trim() == "B"),
+            "被注入的第二条命令不应被执行，实际: {lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_true_still_executes_metacharacter() {
+        let mut c = test_config();
+        c.shell = true;
+        c.command = "cmd".into();
+        c.args = vec!["/D".into(), "/C".into(), "echo A & echo B".into()];
+        let lines = run_and_capture(ManagedProcess::new("m2".into(), c), "B").await;
+        assert!(
+            lines.iter().any(|l| l.trim() == "B"),
+            "shell = true 应保持拼接执行语义，实际: {lines:?}"
+        );
     }
 }

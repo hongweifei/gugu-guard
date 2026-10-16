@@ -1,12 +1,51 @@
 use anyhow::{Context, Result};
 use gugu_core::config::AppConfig;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::layer::SubscriberExt;
 
 pub struct CoreHandles {
     pub shared: gugu_core::manager::SharedManager,
     pub shutdown_tx: tokio::sync::oneshot::Sender<()>,
     pub server_handle: tokio::task::JoinHandle<()>,
     pub pid_path: PathBuf,
+    /// 文件日志的非阻塞写线程句柄，随 CoreHandles 存活。
+    pub _log_guard: Option<WorkerGuard>,
+}
+
+/// 初始化日志：控制台 (仅在终端) + 按天滚动的文件层。
+/// 文件层保证服务/计划任务形态下守护进程自身日志有处可查。
+fn init_logging(log_base: &Path) -> Option<WorkerGuard> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "gugu_core=info,gugu_server=info,gugu=info".into());
+
+    let built = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("gugu-daemon")
+        .filename_suffix("log")
+        .max_log_files(30)
+        .build(log_base);
+    let mut worker_guard = None;
+    let file_layer = match built {
+        Ok(appender) => {
+            let (nb, guard) = tracing_appender::non_blocking(appender);
+            worker_guard = Some(guard);
+            Some(tracing_subscriber::fmt::layer().with_writer(nb).with_ansi(false))
+        }
+        Err(e) => {
+            eprintln!("初始化文件日志失败 ({}): {e}，仅按现有方式输出", log_base.display());
+            None
+        }
+    };
+    let console = std::io::stdout().is_terminal()
+        .then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stdout));
+
+    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer).with(console);
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        return None;
+    }
+    worker_guard
 }
 
 /// 内置配置模板：首次运行且找不到配置时写入，让配置永远出现在程序旁边。
@@ -25,7 +64,9 @@ addr = \"0.0.0.0\"
 port = 9090
 # cors_origins = [\"http://localhost:3000\"]
 
-# 进程可以通过 WebUI 或 gugu add 添加 (会自动写回本文件)，也可以手动在此声明。
+# 守护进程自身的运行日志按天写入 log_dir 下的 gugu-daemon.<日期>.log (保留最近 30 份)。
+
+# 进程可以通过 WebUI 或 gugu add 添加 (会自动写回本文件，注释与相对路径都会保留)，也可以手动在此声明。
 # 修改后执行 gugu reload 或重启守护进程生效。示例：
 
 # [processes.my-app]
@@ -35,6 +76,8 @@ port = 9090
 # auto_restart = true
 # max_restarts = 3
 # restart_delay_secs = 5
+# restart_reset_secs = 60
+# shell = false
 # max_log_size_mb = 10
 # stdout_log = \"logs/my-app-stdout.log\"
 # stderr_log = \"logs/my-app-stderr.log\"
@@ -42,6 +85,7 @@ port = 9090
 # [processes.my-app.health_check]
 # type = \"tcp\"
 # port = 8080
+# fail_threshold = 3
 ";
 
 /// 配置文件不存在时，在目标位置生成内置模板。返回是否新建。
@@ -113,15 +157,26 @@ fn remove_pid_file(path: &Path) {
 }
 
 pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result<CoreHandles> {
-    match ensure_config_template(config_path) {
-        Ok(true) => tracing::info!(
+    let template_created = match ensure_config_template(config_path) {
+        Ok(created) => created,
+        Err(e) => {
+            eprintln!("{e:#}");
+            false
+        }
+    };
+    let config = AppConfig::load(config_path).context("加载配置文件失败")?;
+
+    let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let log_base = config.daemon.log_dir.as_ref()
+        .map(|d| gugu_core::config::resolve_relative_path(d, &config_dir))
+        .unwrap_or_else(|| config_dir.clone());
+    let log_guard = init_logging(&log_base);
+    if template_created {
+        tracing::info!(
             "未找到配置文件，已自动生成默认模板: {}，编辑后运行 gugu reload 生效",
             config_path.display()
-        ),
-        Ok(false) => {}
-        Err(e) => tracing::warn!("{e:#} (将按默认空配置启动)"),
+        );
     }
-    let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
     let pid = pid_path(&config, config_path);
     write_pid_file(&pid)?;
@@ -168,6 +223,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         shutdown_tx,
         server_handle,
         pid_path: pid,
+        _log_guard: log_guard,
     })
 }
 

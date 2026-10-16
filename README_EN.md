@@ -10,7 +10,8 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Web Dashboard** — Dark-themed UI, dynamic forms, real-time status updates
 - **CLI Tool** — Full-featured command line with colored table output
 - **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence + auto rotation
-- **Health Checks** — TCP port / HTTP request monitoring with optional auto-restart on failure
+- **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
+- **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
 - **CORS Config** — Configurable allowed cross-origin origins
@@ -222,6 +223,8 @@ gugu-guard/
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
 
+> The daemon writes its own runtime log to `gugu-daemon.<date>.log` in `log_dir`, rotated daily (last 30 kept). All three run modes (foreground, boot task, Windows service) write the file; it also prints to the console only when stdout is a terminal.
+
 ### Process Configuration
 
 | Field | Type | Default | Description |
@@ -234,6 +237,8 @@ gugu-guard/
 | `auto_restart` | bool | `true` | Auto-restart on crash |
 | `max_restarts` | u32 | `3` | Max consecutive crash restart attempts |
 | `restart_delay_secs` | u64 | `5` | Restart delay in seconds |
+| `restart_reset_secs` | u64 | `60` | After the process stays up this many seconds, its crash-restart counter resets to zero, keeping the watchdog effective long-term |
+| `shell` | bool | `false` | When true, command+args are concatenated and run through a shell (pipes, etc.); default launches the executable directly |
 | `stop_timeout_secs` | u64 | `10` | Stop timeout in seconds |
 | `depends_on` | string[] | `[]` | Process dependencies, start in dependency order |
 | `max_log_size_mb` | u64 | — | Log file size limit (MB), auto-rotate when exceeded |
@@ -250,6 +255,7 @@ port = 8080               # TCP mode
 # url = "http://localhost:8080/health"  # HTTP mode
 interval_secs = 30
 timeout_secs = 5
+fail_threshold = 3        # consecutive failures before a process is judged unhealthy (only restarts with unhealthy_restart = true)
 ```
 
 ## License

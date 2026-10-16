@@ -71,14 +71,7 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
 
     let rt = tokio::runtime::Runtime::new().expect("无法创建 tokio runtime");
     rt.block_on(async {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "gugu_core=info,gugu_server=info,gugu=info".into()),
-            )
-            .with_ansi(false) // Windows 服务无终端，禁用 ANSI 转义
-            .init();
-
+        // 日志初始化 (文件层为主，服务无控制台) 统一在 daemon::run_core 内完成
         let handles = match crate::daemon::run_core(config_path, None).await {
             Ok(h) => h,
             Err(e) => {

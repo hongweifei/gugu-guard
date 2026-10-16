@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Table, Cell, Color, Attribute};
 use gugu_core::config::AppConfig;
 use std::collections::HashMap;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
@@ -195,14 +194,7 @@ fn get_api_key(config_path: &Path, explicit: Option<&str>) -> Result<Option<Stri
 }
 
 async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "gugu_core=info,gugu_server=info,gugu=info".into()),
-        )
-        .with_ansi(std::io::stdout().is_terminal())
-        .init();
-
+    // 日志初始化 (控制台 + 文件) 统一在 daemon::run_core 内完成
     let handles = daemon::run_core(config_path, cli_api_key).await?;
     #[cfg(unix)]
     let shared = handles.shared.clone();

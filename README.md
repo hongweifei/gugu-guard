@@ -264,4 +264,4 @@ fail_threshold = 3        # 连续失败该次数才判定不健康（配合 unh
 
 ## License
 
-MIT
+MIT — 见 [LICENSE](./LICENSE)

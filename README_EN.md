@@ -263,4 +263,4 @@ fail_threshold = 3        # consecutive failures before a process is judged unhe
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE)

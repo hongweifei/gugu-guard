@@ -22,7 +22,7 @@
 - **配置热重载** — SIGHUP (Linux) 或 `POST /api/v1/reload` 重新加载配置
 - **智能更新** — 修改非运行时配置（日志路径、重启策略等）不重启进程
 - **绿色部署** — 配置默认跟着程序走，日志/PID 也在程序目录，整个文件夹搬走即用
-- **开机自启** — Windows (任务计划程序) / Linux (systemd)
+- **开机自启** — 系统级（Windows 任务计划程序 / Windows 服务 / Linux systemd）与用户级（无需管理员）三种模式，支持 `--dry-run` 预览
 - **防多实例** — PID 文件锁
 - **优雅退出** — Ctrl+C / SIGTERM / SIGHUP 信号处理
 - **跨平台** — Windows & Linux
@@ -126,13 +126,33 @@ gugu --api-key "your-secret-key" run
 
 ### 开机自启
 
-```bash
-# Windows (需管理员权限)
-gugu install
+三种模式，按「要不要管理员 / 要不要未登录也跑」选：
 
-# Linux (需 sudo)
-sudo gugu install
+| 模式 | 适用 | 权限 | 行为 |
+|---|---|---|---|
+| `--mode task`（默认） | Windows / Linux | 需管理员 | Windows 任务计划程序（`onstart`，SYSTEM 身份）/ Linux systemd 系统单元 |
+| `--mode service` | 仅 Windows | 需管理员 | Windows 服务（自动启动 + 崩溃阶梯重启 5s/10s/30s） |
+| `--mode user` | Windows / Linux | **无需管理员** | 当前用户登录自启：Windows Run 键 / Linux `systemd --user`（配合 `loginctl enable-linger` 可未登录也起） |
+
+```bash
+# 系统级（需管理员 / sudo）
+gugu install                       # Windows: 任务计划程序 (开机启动)
+sudo gugu install                  # Linux: systemd 系统单元 (开机启动)
+gugu install --mode service        # Windows: 注册为 Windows 服务
+
+# 用户级（不需要任何特权，登录即启）
+gugu install --mode user
+
+# 先预览将要写入/执行的内容，不改动系统
+gugu install --mode task --dry-run
+gugu uninstall --dry-run
 ```
+
+安装时会先做**权限预检**（不满足会直接告诉你改用 `sudo`/管理员，或改用 `--mode user`），
+安装后**回读真实状态**（`systemctl is-enabled` / `schtasks /query` / `reg query` / `sc query`），
+卸载对「本来就没装」保持容错；`--dry-run` 只打印计划，不碰系统。
+
+> 含空格的安装路径也能正常工作：systemd 单元与 Windows 自启命令里的路径都做了引号包裹。
 
 ### 配置热重载
 
@@ -164,8 +184,10 @@ gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
 gugu check                        # 校验配置文件（只读，不启动进程）
 gugu status --json                # 以 JSON 输出，便于脚本消费（list 同）
-gugu install                      # 注册开机自启
-gugu uninstall                    # 卸载开机自启
+gugu install                      # 注册开机自启 (--mode task|service|user)
+gugu install --mode user          # 用户级自启（无需管理员，登录即启）
+gugu install --dry-run            # 仅预览将写入/执行的内容
+gugu uninstall                    # 卸载开机自启 (同样支持 --mode / --dry-run)
 ```
 
 全局选项：

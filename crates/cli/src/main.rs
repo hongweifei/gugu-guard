@@ -32,6 +32,10 @@ struct Cli {
 
     #[arg(long, global = true, hide = true)]
     mode: Option<String>,
+
+    /// 分离到后台运行（供开机自启项调用，不占用控制台）
+    #[arg(long, global = true, hide = true)]
+    detach: bool,
 }
 
 /// 解析配置文件路径：未显式指定时，优先使用程序同目录下的 gugu.toml，
@@ -46,16 +50,22 @@ enum Commands {
     #[command(about = "启动守护进程")]
     Run,
 
-    #[command(about = "注册为系统服务 (开机自启)")]
+    #[command(about = "注册开机自启 (task: 系统级 | service: Windows 服务 | user: 当前用户)")]
     Install {
         #[arg(short, long, default_value = "task")]
         mode: String,
+        /// 只打印将要写入/执行的内容，不改动系统
+        #[arg(long)]
+        dry_run: bool,
     },
 
-    #[command(about = "卸载系统服务")]
+    #[command(about = "卸载开机自启")]
     Uninstall {
         #[arg(short, long, default_value = "task")]
         mode: String,
+        /// 只打印将要执行的内容，不改动系统
+        #[arg(long)]
+        dry_run: bool,
     },
 
     #[command(about = "校验配置文件 (只读，不启动进程)")]
@@ -159,10 +169,16 @@ async fn main() -> Result<()> {
                     anyhow::bail!("Service 模式仅在 Windows 上可用");
                 }
             }
+            if cli.detach {
+                // 开机自启项（Run 键）调用：由自己分离出一个无窗口的后台进程
+                return lifecycle::start(&config_path).await;
+            }
             run_daemon(&config_path, cli.api_key.clone()).await
         }
-        Commands::Install { mode } => install::install_service(&config_path, mode),
-        Commands::Uninstall { mode } => install::uninstall_service(mode),
+        Commands::Install { mode, dry_run } => {
+            install::install_service(&config_path, mode, *dry_run)
+        }
+        Commands::Uninstall { mode, dry_run } => install::uninstall_service(mode, *dry_run),
         Commands::Check => check::run(&config_path),
         Commands::Daemon { action } => match action {
             DaemonAction::Start => lifecycle::start(&config_path).await,

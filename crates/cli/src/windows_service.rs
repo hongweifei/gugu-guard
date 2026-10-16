@@ -130,7 +130,7 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
     Ok(())
 }
 
-pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
+pub fn install(config_path: &std::path::Path, dry_run: bool) -> anyhow::Result<()> {
     use windows_service::service::{
         ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType,
     };
@@ -139,10 +139,6 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("无法获取当前可执行文件路径")?;
     let config_abs = gugu_core::config::canonicalize_clean(config_path);
 
-    let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
-    let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)
-        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {e}"))?;
-
     let launch_args = vec![
         OsString::from("run"),
         OsString::from("-c"),
@@ -150,6 +146,29 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
         OsString::from("--mode"),
         OsString::from("service"),
     ];
+
+    if dry_run {
+        println!("[dry-run] 将注册 Windows 服务:");
+        println!("  名称: {SERVICE_NAME}  显示名: {SERVICE_DISPLAY}");
+        println!("  启动类型: AutoStart (开机自启)");
+        println!("  可执行: {}", exe.display());
+        println!(
+            "  参数: {}",
+            launch_args
+                .iter()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        println!(
+            "[dry-run] sc failure {SERVICE_NAME} reset= 86400 actions= restart/5000/restart/10000/restart/30000"
+        );
+        return Ok(());
+    }
+
+    let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
+    let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)
+        .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {e}"))?;
 
     let service_info = ServiceInfo {
         name: OsString::from(SERVICE_NAME),
@@ -175,41 +194,96 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
     println!("成功: 已安装为 Windows 服务 ({SERVICE_NAME})");
     println!("  程序: {}", exe.display());
     println!("  配置: {}", config_abs.display());
-    println!("  启动类型: 自动");
+
+    // 回读启动类型：不假设 create_service 一定按预期落盘
+    match service.query_config() {
+        Ok(cfg) => println!("  回读: 启动类型 = {:?}", cfg.start_type),
+        Err(e) => println!("  ⚠ 回读启动类型失败: {e}"),
+    }
+
+    // 失败自动恢复：服务崩溃后由服务管理器按阶梯间隔拉起（不影响开机自启，失败只提示）
+    let failure_args = [
+        "failure",
+        SERVICE_NAME,
+        "reset=",
+        "86400",
+        "actions=",
+        "restart/5000/restart/10000/restart/30000",
+    ];
+    match std::process::Command::new("sc").args(failure_args).status() {
+        Ok(s) if s.success() => {
+            let back = std::process::Command::new("sc")
+                .args(["qfailure", SERVICE_NAME])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+            let first = back.lines().next().unwrap_or("").trim().to_string();
+            println!("  已设置崩溃自动重启 (阶梯 5s/10s/30s): {first}");
+        }
+        Ok(s) => println!(
+            "  ⚠ 设置崩溃自动重启失败 (退出码 {:?})，不影响开机自启",
+            s.code()
+        ),
+        Err(e) => println!("  ⚠ 无法执行 sc 设置崩溃自动重启: {e}"),
+    }
+
     println!("  管理: sc start {SERVICE_NAME} | sc stop {SERVICE_NAME} | sc query {SERVICE_NAME}");
 
     Ok(())
 }
 
-pub fn uninstall() -> anyhow::Result<()> {
+pub fn uninstall(dry_run: bool) -> anyhow::Result<()> {
     use windows_service::service::ServiceAccess;
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    if dry_run {
+        println!("[dry-run] sc stop {SERVICE_NAME}");
+        println!("[dry-run] sc delete {SERVICE_NAME}");
+        return Ok(());
+    }
 
     let manager_access = ServiceManagerAccess::CONNECT;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)
         .map_err(|e| anyhow::anyhow!("无法连接服务管理器: {e}"))?;
 
     let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE;
-    let service = service_manager
-        .open_service(SERVICE_NAME, service_access)
-        .map_err(|e| anyhow::anyhow!("打开服务失败 (可能未安装): {e}"))?;
+    let service = match service_manager.open_service(SERVICE_NAME, service_access) {
+        Ok(s) => s,
+        Err(e) => {
+            // 与 systemd 侧口径一致：本来就没装不算错误
+            println!("未找到 Windows 服务 ({SERVICE_NAME})，无需卸载 ({e})");
+            return Ok(());
+        }
+    };
+
+    // 顺序修正：先停止（并等它真的停下）再删除；反序可能留下仍在运行的进程
+    let status = service
+        .query_status()
+        .map_err(|e| anyhow::anyhow!("查询服务状态失败: {e}"))?;
+    if status.current_state != ServiceState::Stopped {
+        println!("正在停止服务...");
+        if let Err(e) = service.stop() {
+            println!("⚠ 发送停止请求失败: {e}（继续尝试删除）");
+        }
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(500));
+            match service.query_status() {
+                Ok(s) if s.current_state == ServiceState::Stopped => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    }
 
     service
         .delete()
         .map_err(|e| anyhow::anyhow!("删除服务失败: {e}"))?;
 
-    let status = service
-        .query_status()
-        .map_err(|e| anyhow::anyhow!("查询服务状态失败: {e}"))?;
-
-    if status.current_state != ServiceState::Stopped {
-        match service.stop() {
-            Ok(_) => println!("已发送停止请求..."),
-            Err(_) => println!("服务将在下次重启时被移除"),
-        }
+    // 回读：确认已不可打开（服务管理器常把它标记为待删除）
+    match service_manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS) {
+        Ok(_) => println!("已卸载 Windows 服务 ({SERVICE_NAME})（仍标记为待删除，重启后彻底移除）"),
+        Err(_) => println!("成功: 已卸载 Windows 服务 ({SERVICE_NAME})"),
     }
-
-    println!("成功: 已卸载 Windows 服务 ({SERVICE_NAME})");
 
     Ok(())
 }

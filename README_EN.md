@@ -22,7 +22,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Hot Config Reload** — SIGHUP (Linux) or `POST /api/v1/reload` to reload config at runtime
 - **Smart Updates** — Non-runtime config changes (log paths, restart policies, etc.) don't restart the process
 - **Portable Layout** — Config lives next to the binary by default; logs/PID resolve against the config folder, so the whole directory can be moved as-is
-- **Auto-start on Boot** — Windows (Task Scheduler) / Linux (systemd)
+- **Auto-start on Boot** — three modes: system level (Windows Task Scheduler / Windows Service / Linux systemd) and user level (no admin rights needed), with `--dry-run` preview
 - **Single Instance** — PID file lock to prevent duplicate daemons
 - **Graceful Shutdown** — Ctrl+C / SIGTERM / SIGHUP signal handling
 - **Cross-platform** — Windows & Linux
@@ -126,13 +126,33 @@ Open `http://localhost:9090` in your browser to access the web dashboard.
 
 ### Auto-start on Boot
 
-```bash
-# Windows (requires admin)
-gugu install
+Three modes — pick by "needs admin?" and "must it run before logon?":
 
-# Linux (requires sudo)
-sudo gugu install
+| Mode | Platforms | Rights | Behaviour |
+|---|---|---|---|
+| `--mode task` (default) | Windows / Linux | admin / sudo | Windows Task Scheduler (`onstart`, as SYSTEM) / Linux systemd system unit |
+| `--mode service` | Windows only | admin | Windows Service (AutoStart + crash recovery at 5s/10s/30s) |
+| `--mode user` | Windows / Linux | **none needed** | Per-user at logon: Windows Run key / Linux `systemd --user` (add `loginctl enable-linger` to run before logon) |
+
+```bash
+# System level (admin / sudo)
+gugu install                       # Windows: Task Scheduler
+sudo gugu install                  # Linux: systemd system unit
+gugu install --mode service        # Windows: register as a Windows Service
+
+# User level (no privileges required, starts at logon)
+gugu install --mode user
+
+# Preview what would be written/executed; changes nothing
+gugu install --mode task --dry-run
+gugu uninstall --dry-run
 ```
+
+Install performs a **permission pre-check** (it tells you to use sudo/admin, or to switch to `--mode user`),
+then **reads the state back** (`systemctl is-enabled` / `schtasks /query` / `reg query` / `sc query`);
+uninstall tolerates "not installed at all"; `--dry-run` only prints the plan.
+
+> Paths containing spaces work: both the systemd unit and the Windows auto-start command quote their paths.
 
 ### Hot Config Reload
 
@@ -164,8 +184,10 @@ gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
 gugu check                        # Validate config (read-only, starts nothing)
 gugu status --json                # JSON output for scripts (also: list)
-gugu install                      # Register auto-start
-gugu uninstall                    # Unregister auto-start
+gugu install                      # Register auto-start (--mode task|service|user)
+gugu install --mode user          # Per-user auto-start (no admin, starts at logon)
+gugu install --dry-run            # Preview only, changes nothing
+gugu uninstall                    # Remove auto-start (also takes --mode / --dry-run)
 ```
 
 Global options:

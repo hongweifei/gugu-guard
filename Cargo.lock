@@ -604,6 +604,7 @@ dependencies = [
  "comfy-table",
  "gugu-core",
  "gugu-server",
+ "libc",
  "reqwest",
  "serde_json",
  "tokio",
@@ -611,6 +612,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "windows-service",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

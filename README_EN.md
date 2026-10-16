@@ -11,6 +11,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **CLI Tool** — Full-featured command line with colored table output
 - **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence + auto rotation
 - **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
+- **Exit History** — keeps the last 5 exits per process (time, exit code, whether it was auto-restarted), visible in the WebUI card and the API
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog

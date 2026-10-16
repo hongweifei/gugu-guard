@@ -464,6 +464,50 @@ mod log_stream_serde {
     }
 }
 
+// ── 退出历史 ──────────────────────────────────────────────────
+
+mod exit_history {
+    use super::*;
+    use crate::process::MAX_EXIT_HISTORY;
+
+    #[test]
+    fn keeps_newest_records_and_caps_len() {
+        let mut p = ManagedProcess::new("w".into(), test_config());
+        for code in 0..(MAX_EXIT_HISTORY as i32 + 3) {
+            p.record_exit(Some(code));
+        }
+        let exits = p.recent_exits();
+        assert_eq!(exits.len(), MAX_EXIT_HISTORY, "超过上限应丢弃最旧的记录");
+        assert_eq!(
+            exits.last().unwrap().code,
+            Some(MAX_EXIT_HISTORY as i32 + 2),
+            "最新的记录应排在末尾"
+        );
+        assert_eq!(exits.first().unwrap().code, Some(3), "最旧的已被丢弃");
+    }
+
+    #[test]
+    fn marks_only_latest_exit_as_auto_restarted() {
+        let mut p = ManagedProcess::new("w".into(), test_config());
+        p.record_exit(Some(1));
+        p.record_exit(Some(137));
+        p.mark_last_exit_auto_restarted();
+        let exits = p.recent_exits();
+        assert!(!exits[0].auto_restarted, "更早的记录不应被改动");
+        assert!(exits[1].auto_restarted, "最近一条应被标记为自动拉起");
+    }
+
+    #[test]
+    fn snapshot_carries_exit_history() {
+        let mut p = ManagedProcess::new("w".into(), test_config());
+        p.record_exit(None);
+        let info = p.info();
+        assert_eq!(info.recent_exits.len(), 1, "快照应携带退出历史");
+        assert_eq!(info.recent_exits[0].code, None, "无退出码时应为 None");
+        assert!(!info.recent_exits[0].auto_restarted, "默认未被自动拉起");
+    }
+}
+
 // ── 直接启动 (缺陷7) Windows 实跑对照 ────────────────────────
 
 #[cfg(windows)]

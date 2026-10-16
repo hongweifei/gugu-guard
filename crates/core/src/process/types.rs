@@ -42,6 +42,19 @@ pub struct ProcessInfo {
     pub group: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub uptime_secs: Option<i64>,
+    /// 最近几次退出的历史（新的在后，最多 [`crate::process::MAX_EXIT_HISTORY`] 条）。
+    #[serde(default)]
+    pub recent_exits: Vec<ExitRecord>,
+}
+
+/// 一次进程退出的记录：用于排障（「昨晚崩了 4 次，每次退出码 137」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExitRecord {
+    pub at: DateTime<Utc>,
+    /// 退出码；被信号杀死等场景为 None。
+    pub code: Option<i32>,
+    /// 退出后是否由守护进程自动拉起（手动停止或未配置自动重启时为 false）。
+    pub auto_restarted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

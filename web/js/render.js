@@ -98,6 +98,20 @@ function render(force) {
     grid.innerHTML = filtered.map((p, i) => buildCard(p, i === 0)).join('');
 }
 
+function lastExitInfo(p) {
+    const list = p.recent_exits || [];
+    if (!list.length) return { label: '—', title: '暂无退出记录' };
+    const last = list[list.length - 1];
+    const code = last.code == null ? '未知' : last.code;
+    const t = new Date(last.at).toLocaleString();
+    const label = `${code} · ${new Date(last.at).toLocaleTimeString()}${last.auto_restarted ? ' · 已自愈' : ''}`;
+    const title = list.map(e => {
+        const c = e.code == null ? '未知' : e.code;
+        return `${new Date(e.at).toLocaleString()} 退出码 ${c}${e.auto_restarted ? ' (已自动拉起)' : ''}`;
+    }).join('\n');
+    return { label, title: `最近 ${list.length} 次退出：\n${title}` };
+}
+
 function buildCard(p, isNew) {
     const st = statusOf(p);
     const cmd = p.args?.length ? `${p.command} ${p.args.join(' ')}` : (p.command || '');
@@ -111,6 +125,7 @@ function buildCard(p, isNew) {
     const urTag = p.unhealthy_restart ? '<span class="pcard-tag ur" title="失败自动重启">AR</span>' : '';
     const groupTag = p.group ? `<span class="pcard-tag group" data-action="filter-group" data-group="${esc(p.group)}" title="筛选组: ${esc(p.group)}">${esc(p.group)}</span>` : '';
     const hcBtn = p.has_health_check ? `<button class="btn btn-hc" data-action="health" data-name="${esc(p.name)}" title="手动健康检查">检查</button>` : '';
+    const exit = lastExitInfo(p);
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
@@ -120,6 +135,7 @@ function buildCard(p, isNew) {
             <div class="pcard-meta-item"><span class="pcard-meta-label">PID</span><span class="pcard-meta-val">${p.pid || '—'}</span></div>
             <div class="pcard-meta-item"><span class="pcard-meta-label">运行时间</span><span class="pcard-meta-val">${fmtTime(p.uptime_secs)}</span></div>
             <div class="pcard-meta-item pcard-cmd"><span class="pcard-meta-label">命令</span><span class="pcard-meta-val" title="${esc(cmd)}">${esc(cmd)}</span></div>
+            <div class="pcard-meta-item pcard-exit"><span class="pcard-meta-label">上次退出</span><span class="pcard-meta-val" title="${esc(exit.title)}">${esc(exit.label)}</span></div>
         </div>
         <div class="pcard-actions">
             <button class="btn act-start" data-action="start" data-name="${esc(p.name)}" ${run?'disabled':''}>启动</button>
@@ -147,6 +163,11 @@ function patchCard(card, p) {
     metas[1].textContent = fmtTime(p.uptime_secs);
     metas[2].textContent = cmd;
     metas[2].title = cmd;
+    if (metas[3]) {
+        const exit = lastExitInfo(p);
+        metas[3].textContent = exit.label;
+        metas[3].title = exit.title;
+    }
 
     const btns = card.querySelectorAll('.pcard-actions .btn');
     btns[0].disabled = run;

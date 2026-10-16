@@ -17,7 +17,8 @@ use crate::error::{GuguError, Result};
 use super::capture::read_stream;
 use super::command::split_command_words;
 use super::terminate::{force_kill, run_stop_command, send_default_stop_signal};
-use super::types::{LogEntry, LogStream, ProcessInfo, ProcessStatus};
+use super::types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
+use super::MAX_EXIT_HISTORY;
 
 #[cfg(windows)]
 use super::command::{is_bat_cmd, resolve_program, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
@@ -42,6 +43,8 @@ pub struct ManagedProcess {
     log_tx: broadcast::Sender<LogEntry>,
     log_tasks: Vec<JoinHandle<()>>,
     last_health_check: Option<std::time::Instant>,
+    /// 最近退出历史（新的在后，上限 MAX_EXIT_HISTORY）。
+    exit_history: VecDeque<ExitRecord>,
 }
 
 impl ManagedProcess {
@@ -63,6 +66,7 @@ impl ManagedProcess {
             log_tx,
             log_tasks: Vec::new(),
             last_health_check: None,
+            exit_history: VecDeque::new(),
         }
     }
 
@@ -113,6 +117,30 @@ impl ManagedProcess {
 
     pub fn mark_crash_restart(&mut self) {
         self.crash_restart_count += 1;
+    }
+
+    /// 记录一次进程退出（保留最近 MAX_EXIT_HISTORY 条，新的在后）。
+    pub(crate) fn record_exit(&mut self, code: Option<i32>) {
+        self.exit_history.push_back(ExitRecord {
+            at: Utc::now(),
+            code,
+            auto_restarted: false,
+        });
+        while self.exit_history.len() > MAX_EXIT_HISTORY {
+            self.exit_history.pop_front();
+        }
+    }
+
+    /// 标记最近一次退出是被守护进程自动拉起的（在自动重启真正成功后调用）。
+    pub fn mark_last_exit_auto_restarted(&mut self) {
+        if let Some(last) = self.exit_history.back_mut() {
+            last.auto_restarted = true;
+        }
+    }
+
+    #[must_use]
+    pub fn recent_exits(&self) -> Vec<ExitRecord> {
+        self.exit_history.iter().cloned().collect()
     }
 
     /// 记录一次健康检查结果，返回 (当前连续失败次数, 是否达到判定阈值)。
@@ -287,6 +315,7 @@ impl ManagedProcess {
             return Err(GuguError::NotRunning(self.name.clone()));
         }
 
+        let mut stopped_code: Option<Option<i32>> = None;
         if let Some(ref mut child) = self.child {
             let pid = child.id();
             let stop_cmd = self.config.stop_command.clone();
@@ -316,6 +345,7 @@ impl ManagedProcess {
 
             let timeout = std::time::Duration::from_secs(timeout_secs);
             if let Ok(Ok(status)) = tokio::time::timeout(timeout, child.wait()).await {
+                stopped_code = Some(status.code());
                 tracing::info!(
                     "[{}] 进程已停止 (退出码: {:?})",
                     name,
@@ -324,11 +354,16 @@ impl ManagedProcess {
             } else {
                 // Windows: Job Object 已经终止了进程树，force_kill 作为兜底
                 force_kill(child).await;
-                let _ = child.wait().await;
+                if let Ok(status) = child.wait().await {
+                    stopped_code = Some(status.code());
+                }
                 tracing::warn!("[{}] 进程等待超时，已强制终止", name);
             }
         }
 
+        if let Some(code) = stopped_code {
+            self.record_exit(code);
+        }
         self.abort_log_tasks();
         #[cfg(windows)]
         {
@@ -358,6 +393,7 @@ impl ManagedProcess {
                         self.name,
                         status.code()
                     );
+                    self.record_exit(status.code());
                     self.abort_log_tasks();
                     self.child = None;
                     #[cfg(windows)]
@@ -402,6 +438,7 @@ impl ManagedProcess {
             group: self.config.group.clone(),
             started_at: self.started_at,
             uptime_secs,
+            recent_exits: self.recent_exits(),
         }
     }
 

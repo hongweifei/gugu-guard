@@ -30,8 +30,9 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         for name in names {
             if let Some(proc) = state.processes.get_mut(&name) {
                 if !proc.is_running() {
-                    if let Err(e) = proc.start().await {
-                        tracing::error!("[{}] 自动重启失败: {}", name, e);
+                    match proc.start().await {
+                        Ok(()) => proc.mark_last_exit_auto_restarted(),
+                        Err(e) => tracing::error!("[{}] 自动重启失败: {}", name, e),
                     }
                 }
             }
@@ -110,8 +111,9 @@ async fn run_health_checks(state: &mut State) {
             if proc.should_auto_restart() {
                 proc.set_status(ProcessStatus::Restarting);
                 proc.mark_crash_restart();
-                if let Err(e) = proc.start().await {
-                    tracing::error!("[{}] 健康检查重启失败: {}", name, e);
+                match proc.start().await {
+                    Ok(()) => proc.mark_last_exit_auto_restarted(),
+                    Err(e) => tracing::error!("[{}] 健康检查重启失败: {}", name, e),
                 }
             }
         }

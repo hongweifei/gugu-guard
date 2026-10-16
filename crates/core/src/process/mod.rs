@@ -17,7 +17,10 @@ mod terminate;
 mod types;
 
 pub use managed::ManagedProcess;
-pub use types::{LogEntry, LogStream, ProcessInfo, ProcessStatus};
+pub use types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
+
+/// 每个进程保留的退出历史条数。
+pub const MAX_EXIT_HISTORY: usize = 5;
 
 // 单元测试通过 crate::process::* 访问（保持拆分前的路径不变）
 #[cfg(test)]

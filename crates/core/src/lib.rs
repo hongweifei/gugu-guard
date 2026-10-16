@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod manager;
+pub mod notify;
 pub mod process;
 
 pub use config::AppConfig;

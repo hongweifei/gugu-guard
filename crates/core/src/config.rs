@@ -85,6 +85,19 @@ impl AppConfig {
     }
 }
 
+/// webhook 载荷格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookFormat {
+    /// 钉钉 / 企业微信自定义机器人：`{"msgtype":"text","text":{"content": …}}`
+    #[default]
+    Dingtalk,
+    /// 飞书自定义机器人：`{"msg_type":"text","content":{"text": …}}`
+    Feishu,
+    /// 原样发送事件 JSON（自建接收端用）
+    Raw,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     #[serde(default)]
@@ -93,8 +106,26 @@ pub struct DaemonConfig {
     pub log_dir: Option<PathBuf>,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// 崩溃 / 不健康 / 恢复 通知的 webhook 地址（钉钉、企微、飞书自定义机器人或自建端）。
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// webhook 载荷格式，默认 dingtalk（钉钉与企微同形）。
+    #[serde(default)]
+    pub webhook_format: WebhookFormat,
     #[serde(default)]
     pub web: WebConfig,
+}
+
+impl DaemonConfig {
+    /// 需要发通知时返回 `(url, 载荷格式)`；未配置或空白视为关闭。
+    #[must_use]
+    pub fn notify_target(&self) -> Option<(&str, WebhookFormat)> {
+        let url = self.webhook_url.as_deref()?;
+        if url.trim().is_empty() {
+            return None;
+        }
+        Some((url, self.webhook_format))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

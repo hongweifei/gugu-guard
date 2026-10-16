@@ -13,6 +13,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
 - **Exit History** — keeps the last 5 exits per process (time, exit code, whether it was auto-restarted), visible in the WebUI card and the API
 - **Resource Monitoring** — samples CPU/memory for the whole process tree (including helpers like conhost), shown on the card and in `/metrics`; `max_memory_mb` restarts a process that exceeds its memory cap
+- **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
@@ -229,6 +230,8 @@ gugu-guard/
 | `daemon.pid_file` | string | — | PID file path |
 | `daemon.log_dir` | string | — | Log directory |
 | `daemon.api_key` | string | — | API Key, enables auth when set |
+| `daemon.webhook_url` | string | — | Alert webhook (DingTalk / WeCom / Feishu bot or your own endpoint) |
+| `daemon.webhook_format` | string | `dingtalk` | Payload shape: `dingtalk` (WeCom shares it) / `feishu` / `raw` |
 | `daemon.web.addr` | string | `0.0.0.0` | Listen address |
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |

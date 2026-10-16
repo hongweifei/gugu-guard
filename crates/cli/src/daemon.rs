@@ -62,6 +62,8 @@ pub fn default_config_template() -> String {
 pid_file = \"{pid}\"
 log_dir = \"logs\"
 # api_key = \"your-secret-key\"
+# webhook_url = \"https://oapi.dingtalk.com/robot/send?access_token=xxx\"
+# webhook_format = \"dingtalk\"   # dingtalk(钉钉/企微) | feishu | raw
 
 [daemon.web]
 addr = \"{addr}\"

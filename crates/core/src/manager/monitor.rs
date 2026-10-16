@@ -1,11 +1,34 @@
 //! 2 秒监控循环：崩溃计数衰减、探活自动重启、健康检查连续失败判定。
 
 use crate::config::HealthCheckConfig;
+use crate::notify;
 use crate::process::{format_bytes, ProcessStatus};
 
 use super::state::State;
 
+/// 待投递的通知：`(事件类型, 进程名, 文案)`。
+type Notice = (String, String, String);
+
+/// 待自动重启的进程：`(名称, 重启延迟)`。
+type PendingRestart = (String, std::time::Duration);
+
+/// 已退出且不会再被拉起的进程：`(名称, 退出码, 已重启次数)`。
+type DownExit = (String, Option<i32>, u32);
+
+/// 把收集到的事件投给 webhook（未配置则什么都不做）。
+fn fire(state: &State, events: Vec<Notice>) {
+    let Some((url, format)) = state.daemon_config.notify_target() else {
+        return;
+    };
+    for (event_type, name, message) in events {
+        let payload = notify::event(&event_type, &name, &message);
+        notify::spawn(url.to_string(), format, message, payload);
+    }
+}
+
 pub(super) async fn run_monitor_cycle(state: &mut State) {
+    let mut events: Vec<Notice> = Vec::new();
+
     // 存活达到 restart_reset_secs 的进程把崩溃重启计数归零，守护长期有效
     for (name, proc) in &mut state.processes {
         let uptime = proc.info().uptime_secs.unwrap_or(0);
@@ -39,6 +62,15 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
             format_bytes(used),
             format_bytes(limit)
         );
+        events.push((
+            notify::EVENT_MEMORY_LIMIT.to_string(),
+            name.clone(),
+            format!(
+                "进程 {name} 进程树内存 {} 超过上限 {}，已按自动重启处理",
+                format_bytes(used),
+                format_bytes(limit)
+            ),
+        ));
         if let Some(proc) = state.processes.get_mut(&name) {
             if !proc.should_auto_restart() {
                 tracing::warn!("[{name}] 已达崩溃重启上限，不再自动重启（内存仍超限）");
@@ -56,7 +88,15 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         }
     }
 
-    let dead = find_dead(state);
+    let (dead, down) = find_dead(state);
+    for (name, code, restarts) in down {
+        let code_txt = code.map_or_else(|| "未知".to_string(), |c| c.to_string());
+        events.push((
+            notify::EVENT_DOWN.to_string(),
+            name.clone(),
+            format!("进程 {name} 已退出（退出码 {code_txt}），累计重启 {restarts} 次后不再自动拉起"),
+        ));
+    }
     if !dead.is_empty() {
         // 并行等待各进程的重启延迟，然后依次启动
         let delays: Vec<(String, tokio::time::Sleep)> = dead.into_iter()
@@ -73,7 +113,15 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
             if let Some(proc) = state.processes.get_mut(&name) {
                 if !proc.is_running() {
                     match proc.start().await {
-                        Ok(()) => proc.mark_last_exit_auto_restarted(),
+                        Ok(()) => {
+                            proc.mark_last_exit_auto_restarted();
+                            let restarts = proc.info().restart_count;
+                            events.push((
+                                notify::EVENT_RECOVERED.to_string(),
+                                name.clone(),
+                                format!("进程 {name} 已被守护进程重新拉起（累计重启 {restarts} 次）"),
+                            ));
+                        }
                         Err(e) => tracing::error!("[{}] 自动重启失败: {}", name, e),
                     }
                 }
@@ -81,22 +129,33 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         }
     }
 
-    run_health_checks(state).await;
+    events.extend(run_health_checks(state).await);
+
+    fire(state, events);
 }
 
-fn find_dead(state: &mut State) -> Vec<(String, std::time::Duration)> {
+/// 返回需要通知的事件（退出后不再拉起 / 健康判定不健康 / 重启成功）。
+fn find_dead(state: &mut State) -> (Vec<PendingRestart>, Vec<DownExit>) {
     let mut dead = Vec::new();
+    let mut down = Vec::new();
     for (name, proc) in &mut state.processes {
-        if proc.is_running() && !proc.check_alive() && proc.should_auto_restart() {
-            proc.set_status(ProcessStatus::Restarting);
-            proc.mark_crash_restart();
-            dead.push((name.clone(), proc.restart_delay()));
+        if proc.is_running() && !proc.check_alive() {
+            let last_code = proc.recent_exits().last().and_then(|e| e.code);
+            if proc.should_auto_restart() {
+                proc.set_status(ProcessStatus::Restarting);
+                proc.mark_crash_restart();
+                dead.push((name.clone(), proc.restart_delay()));
+            } else {
+                // 不会再被拉起：这一次退出必须通知到人
+                down.push((name.clone(), last_code, proc.info().restart_count));
+            }
         }
     }
-    dead
+    (dead, down)
 }
 
-async fn run_health_checks(state: &mut State) {
+async fn run_health_checks(state: &mut State) -> Vec<Notice> {
+    let mut events: Vec<Notice> = Vec::new();
     let now = std::time::Instant::now;
 
     let to_check: Vec<(String, HealthCheckConfig, bool)> = {
@@ -140,6 +199,18 @@ async fn run_health_checks(state: &mut State) {
                 } else {
                     tracing::warn!("[{name}] 健康检查失败 ({fails}/{})，等待连续失败确认", hc.fail_threshold);
                 }
+                // 通知只在「刚跨过阈值」那一次发出：持续不健康不会每轮刷屏；
+                // 恢复后再次失败会重新跨过阈值，届时会再通知。
+                if fails == hc.fail_threshold {
+                    events.push((
+                        notify::EVENT_UNHEALTHY.to_string(),
+                        name.clone(),
+                        format!(
+                            "进程 {name} 健康检查连续失败 {fails} 次（阈值 {}），判定不健康",
+                            hc.fail_threshold
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -154,10 +225,19 @@ async fn run_health_checks(state: &mut State) {
                 proc.set_status(ProcessStatus::Restarting);
                 proc.mark_crash_restart();
                 match proc.start().await {
-                    Ok(()) => proc.mark_last_exit_auto_restarted(),
+                    Ok(()) => {
+                        proc.mark_last_exit_auto_restarted();
+                        events.push((
+                            notify::EVENT_RECOVERED.to_string(),
+                            name.clone(),
+                            format!("进程 {name} 健康检查失败后已被重新拉起"),
+                        ));
+                    }
                     Err(e) => tracing::error!("[{}] 健康检查重启失败: {}", name, e),
                 }
             }
         }
     }
+
+    events
 }

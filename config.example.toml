@@ -5,6 +5,10 @@ log_dir = "logs"
 # API Key 认证 (可选，设置后所有 API 和 WebSocket 请求需要携带此 Key)
 # api_key = "your-secret-key"
 
+# 异常通知 (可选)：退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限
+# webhook_url = "https://oapi.dingtalk.com/robot/send?access_token=xxx"
+# webhook_format = "dingtalk"   # dingtalk(钉钉/企微) | feishu | raw(原样事件 JSON)
+
 [daemon.web]
 addr = "0.0.0.0"
 port = 9090

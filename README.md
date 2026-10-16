@@ -13,6 +13,7 @@
 - **健康检查** — TCP 端口 / HTTP 请求检测，连续失败达到阈值才判定重启，瞬时抖动不误伤
 - **崩溃历史** — 保留每个进程最近 5 次退出（时间、退出码、是否被自动拉起），WebUI 卡片与 API 都能看到
 - **资源监控** — 按进程树采样 CPU/内存（含 conhost 等子进程），卡片与 `/metrics` 可见；`max_memory_mb` 超限自动重启，防内存泄漏
+- **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
@@ -229,6 +230,8 @@ gugu-guard/
 | `daemon.pid_file` | string | — | PID 文件路径 |
 | `daemon.log_dir` | string | — | 日志目录 |
 | `daemon.api_key` | string | — | API Key，设置后启用认证 |
+| `daemon.webhook_url` | string | — | 异常通知的 webhook 地址（钉钉/企微/飞书机器人或自建端） |
+| `daemon.webhook_format` | string | `dingtalk` | 载荷格式：`dingtalk`（钉钉与企微同形）/ `feishu` / `raw` |
 | `daemon.web.addr` | string | `0.0.0.0` | 监听地址 |
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |

@@ -46,6 +46,12 @@ cargo build --release
 cargo install --git https://gitee.com/hongweifei/gugu-guard.git
 ```
 
+**方式三：下载预编译绿色包**
+
+到 Releases 下载对应平台的压缩包（`gugu-windows-x86_64.zip` / `gugu-linux-x86_64.tar.gz`），解压即用。
+包内只有一个可执行文件加许可与示例配置——**配置、PID、日志都会在首次运行时生成在程序同目录**，
+整个文件夹可以随意搬移。
+
 编译后只需一个 `gugu` 可执行文件，WebUI 已内嵌在二进制中，无需额外文件。
 
 ### 配置文件（绿色部署）
@@ -209,6 +215,7 @@ gugu add frontend -x "bun run dev" \
 
 ```
 gugu-guard/
+├── .github/workflows/  # CI 门禁 (fmt/clippy/test) 与 tag 触发的绿色包发布
 ├── crates/
 │   ├── core/       # 核心库: 配置、进程管理、日志、健康检查
 │   ├── server/     # Web 服务: REST API、WebSocket、认证、静态文件
@@ -271,6 +278,21 @@ port = 8080               # TCP 模式
 interval_secs = 30
 timeout_secs = 5
 fail_threshold = 3        # 连续失败该次数才判定不健康（配合 unhealthy_restart 才重启）
+```
+
+## 持续集成与发布
+
+- **CI**（`.github/workflows/ci.yml`）：Windows 与 Linux 双平台执行 `cargo fmt --check`、
+  `cargo clippy -- -D warnings`、`cargo test`；master 分支额外把分支与标签镜像到 Gitee
+  （需在仓库 Secrets 配置 `GITEE_TOKEN`，未配置时该步骤自动跳过）
+- **发布**（`.github/workflows/release.yml`）：推送 `v*` 标签即构建两平台绿色包并创建 Release，
+  附上 `gugu-windows-x86_64.zip` / `gugu-linux-x86_64.tar.gz`
+- 本地等价的校验命令（与 CI 一致）：
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## License

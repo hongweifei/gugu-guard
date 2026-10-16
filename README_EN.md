@@ -46,6 +46,12 @@ cargo build --release
 cargo install --git https://gitee.com/hongweifei/gugu-guard.git
 ```
 
+**Option 3: prebuilt portable bundle**
+
+Download the archive for your platform from Releases (`gugu-windows-x86_64.zip` / `gugu-linux-x86_64.tar.gz`)
+and unpack it. The archive holds a single executable plus the license and an example config —
+**config, PID file and logs are all created next to the binary on first run**, so the folder can be moved anywhere.
+
 After compilation, you only need a single `gugu` binary — the WebUI is embedded at compile time, no extra files required.
 
 ### Config File (Portable)
@@ -270,6 +276,21 @@ port = 8080               # TCP mode
 interval_secs = 30
 timeout_secs = 5
 fail_threshold = 3        # consecutive failures before a process is judged unhealthy (only restarts with unhealthy_restart = true)
+```
+
+## CI & Release
+
+- **CI** (`.github/workflows/ci.yml`): on Windows and Linux it runs `cargo fmt --check`,
+  `cargo clippy -- -D warnings` and `cargo test`; on `master` it also mirrors branches and tags to Gitee
+  (set the `GITEE_TOKEN` secret; the step skips itself when the secret is absent)
+- **Release** (`.github/workflows/release.yml`): pushing a `v*` tag builds both platform bundles and
+  creates a Release with `gugu-windows-x86_64.zip` / `gugu-linux-x86_64.tar.gz`
+- Equivalent local gates (same as CI):
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## License

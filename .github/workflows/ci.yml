@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: 门禁 fmt / clippy / test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链 (含 rustfmt/clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存构建产物
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt 检查
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (告警即失败)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  mirror:
+    name: 镜像同步到 Gitee
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 推送分支与标签到 Gitee (未配置 GITEE_TOKEN 则跳过)
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "未配置 secrets.GITEE_TOKEN，跳过 Gitee 镜像"
+            exit 0
+          fi
+          git push "https://oauth2:${GITEE_TOKEN}@gitee.com/hongweifei/gugu-guard.git" \
+            "HEAD:refs/heads/master"
+          git push "https://oauth2:${GITEE_TOKEN}@gitee.com/hongweifei/gugu-guard.git" --tags

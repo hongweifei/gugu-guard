@@ -152,6 +152,8 @@ gugu logs <name> [-l 100]         # View logs
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
+gugu check                        # Validate config (read-only, starts nothing)
+gugu status --json                # JSON output for scripts (also: list)
 gugu install                      # Register auto-start
 gugu uninstall                    # Unregister auto-start
 ```

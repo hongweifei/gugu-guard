@@ -152,6 +152,8 @@ gugu logs <name> [-l 100]         # 查看日志
 gugu add <name> -x "node app.js"  # 添加进程
 gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
+gugu check                        # 校验配置文件（只读，不启动进程）
+gugu status --json                # 以 JSON 输出，便于脚本消费（list 同）
 gugu install                      # 注册开机自启
 gugu uninstall                    # 卸载开机自启
 ```

@@ -17,7 +17,7 @@ use crate::process::{LogEntry, ProcessInfo};
 use std::path::PathBuf;
 use tokio::sync::{broadcast, mpsc, watch};
 
-pub(crate) use deps::topological_sort;
+pub use deps::topological_sort;
 
 // ── Actor 命令 ──────────────────────────────────────────────
 

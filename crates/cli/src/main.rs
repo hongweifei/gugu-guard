@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 mod windows_service;
+mod check;
 mod client;
 mod daemon;
 mod install;
@@ -56,11 +57,22 @@ enum Commands {
         mode: String,
     },
 
+    #[command(about = "校验配置文件 (只读，不启动进程)")]
+    Check,
+
     #[command(about = "显示所有进程状态")]
-    Status,
+    Status {
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
 
     #[command(about = "列出已配置的进程")]
-    List,
+    List {
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
 
     #[command(about = "启动指定进程")]
     Start { name: String },
@@ -135,6 +147,7 @@ async fn main() -> Result<()> {
         }
         Commands::Install { mode } => install::install_service(&config_path, mode),
         Commands::Uninstall { mode } => install::uninstall_service(mode),
+        Commands::Check => check::run(&config_path),
         _ => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;

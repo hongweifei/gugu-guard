@@ -4,7 +4,11 @@ use crate::config::ProcessConfig;
 use crate::error::{GuguError, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-pub(crate) fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<String>> {
+/// 按 `depends_on` 计算启动顺序（被依赖者在前）。
+///
+/// # Errors
+/// 存在循环依赖时返回 `GuguError::CyclicDependency`（消息里带环路成员）。
+pub fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Vec<String>> {
     let mut in_degree: HashMap<&str, u32> = HashMap::with_capacity(processes.len());
     let mut dependents: HashMap<&str, Vec<&str>> = HashMap::with_capacity(processes.len());
 

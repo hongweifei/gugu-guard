@@ -64,22 +64,30 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
     let api = ApiHelper { client: &client, base: server_url, key: api_key };
 
     match command {
-        Commands::Status => {
+        Commands::Status { json } => {
             let resp = api.get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程，请确认是否已启动")?;
             let processes: Vec<gugu_core::process::ProcessInfo> = resp.json().await?;
-            print_status_table(&processes);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&processes)?);
+            } else {
+                print_status_table(&processes);
+            }
         }
 
-        Commands::List => {
+        Commands::List { json } => {
             let resp = api.get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程")?;
             let processes: Vec<gugu_core::process::ProcessInfo> = resp.json().await?;
-            print_list_table(&processes);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&processes)?);
+            } else {
+                print_list_table(&processes);
+            }
         }
 
         Commands::Start { name } => {
@@ -161,7 +169,7 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
             print_api_response(resp).await?;
         }
 
-        Commands::Run | Commands::Install { .. } | Commands::Uninstall { .. } => {
+        Commands::Run | Commands::Install { .. } | Commands::Uninstall { .. } | Commands::Check => {
             unreachable!()
         }
     }

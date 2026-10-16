@@ -41,7 +41,11 @@ impl UsageSampler {
             None => 0.0,
         };
         self.prev = Some((cpu, now));
-        Some(UsageSample { cpu_percent, memory_bytes, process_count })
+        Some(UsageSample {
+            cpu_percent,
+            memory_bytes,
+            process_count,
+        })
     }
 }
 
@@ -81,7 +85,9 @@ mod platform {
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
-    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
         PROCESS_VM_READ,
@@ -229,12 +235,20 @@ mod platform {
 
     fn clock_ticks_per_sec() -> u64 {
         let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-        if v > 0 { v as u64 } else { 100 }
+        if v > 0 {
+            v as u64
+        } else {
+            100
+        }
     }
 
     fn page_size() -> u64 {
         let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if v > 0 { v as u64 } else { 4096 }
+        if v > 0 {
+            v as u64
+        } else {
+            4096
+        }
     }
 
     pub(super) fn cpu_ticks_per_sec() -> u64 {
@@ -262,7 +276,9 @@ mod platform {
             if !name.bytes().all(|b| b.is_ascii_digit()) {
                 continue;
             }
-            let Ok(pid) = name.parse::<u32>() else { continue };
+            let Ok(pid) = name.parse::<u32>() else {
+                continue;
+            };
             if let Some((ppid, cpu_ticks, rss_bytes)) = read_stat(pid) {
                 out.push((pid, ppid, cpu_ticks, rss_bytes));
             }
@@ -335,7 +351,10 @@ mod tests {
 
         assert!(proc_stat::parse("garbage").is_none(), "无右括号应返回 None");
         assert!(proc_stat::parse("1 (x) S").is_none(), "字段不足应返回 None");
-        assert!(proc_stat::parse("1 (x) S abc 1").is_none(), "字段非数字应返回 None");
+        assert!(
+            proc_stat::parse("1 (x) S abc 1").is_none(),
+            "字段非数字应返回 None"
+        );
     }
 
     #[test]
@@ -350,7 +369,9 @@ mod tests {
     #[test]
     fn samples_own_tree() {
         let mut sampler = UsageSampler::new();
-        let sample = sampler.sample(std::process::id()).expect("应能采样自身进程");
+        let sample = sampler
+            .sample(std::process::id())
+            .expect("应能采样自身进程");
         assert!(sample.process_count >= 1, "至少包含自身: {sample:?}");
         assert!(sample.memory_bytes > 0, "自身内存应大于 0: {sample:?}");
         // 第二次采样才有 CPU 百分比（首次无基准）

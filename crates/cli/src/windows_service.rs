@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use windows_service::service::{
-    ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-    ServiceType,
+    ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::{define_windows_service, service_dispatcher};
@@ -68,7 +67,13 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
 
     let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
 
-    set_status(status_handle, ServiceState::StartPending, ServiceControlAccept::empty(), 0, Duration::from_secs(5));
+    set_status(
+        status_handle,
+        ServiceState::StartPending,
+        ServiceControlAccept::empty(),
+        0,
+        Duration::from_secs(5),
+    );
 
     let rt = tokio::runtime::Runtime::new().expect("无法创建 tokio runtime");
     rt.block_on(async {
@@ -77,12 +82,24 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
             Ok(h) => h,
             Err(e) => {
                 tracing::error!("启动核心失败: {}", e);
-                set_status(status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 1, Duration::default());
+                set_status(
+                    status_handle,
+                    ServiceState::Stopped,
+                    ServiceControlAccept::empty(),
+                    1,
+                    Duration::default(),
+                );
                 return;
             }
         };
 
-        set_status(status_handle, ServiceState::Running, ServiceControlAccept::STOP, 0, Duration::default());
+        set_status(
+            status_handle,
+            ServiceState::Running,
+            ServiceControlAccept::STOP,
+            0,
+            Duration::default(),
+        );
 
         loop {
             match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
@@ -91,22 +108,35 @@ fn run_service_inner(config_path: &std::path::Path) -> windows_service::Result<(
             }
         }
 
-        set_status(status_handle, ServiceState::StopPending, ServiceControlAccept::empty(), 0, Duration::from_secs(10));
+        set_status(
+            status_handle,
+            ServiceState::StopPending,
+            ServiceControlAccept::empty(),
+            0,
+            Duration::from_secs(10),
+        );
 
         crate::daemon::graceful_shutdown(handles).await;
 
-        set_status(status_handle, ServiceState::Stopped, ServiceControlAccept::empty(), 0, Duration::default());
+        set_status(
+            status_handle,
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            0,
+            Duration::default(),
+        );
     });
 
     Ok(())
 }
 
 pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
-    use windows_service::service::{ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType};
+    use windows_service::service::{
+        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType,
+    };
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
-    let exe = std::env::current_exe()
-        .context("无法获取当前可执行文件路径")?;
+    let exe = std::env::current_exe().context("无法获取当前可执行文件路径")?;
     let config_abs = gugu_core::config::canonicalize_clean(config_path);
 
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
@@ -168,7 +198,8 @@ pub fn uninstall() -> anyhow::Result<()> {
         .delete()
         .map_err(|e| anyhow::anyhow!("删除服务失败: {e}"))?;
 
-    let status = service.query_status()
+    let status = service
+        .query_status()
         .map_err(|e| anyhow::anyhow!("查询服务状态失败: {e}"))?;
 
     if status.current_state != ServiceState::Stopped {

@@ -94,12 +94,15 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         events.push((
             notify::EVENT_DOWN.to_string(),
             name.clone(),
-            format!("进程 {name} 已退出（退出码 {code_txt}），累计重启 {restarts} 次后不再自动拉起"),
+            format!(
+                "进程 {name} 已退出（退出码 {code_txt}），累计重启 {restarts} 次后不再自动拉起"
+            ),
         ));
     }
     if !dead.is_empty() {
         // 并行等待各进程的重启延迟，然后依次启动
-        let delays: Vec<(String, tokio::time::Sleep)> = dead.into_iter()
+        let delays: Vec<(String, tokio::time::Sleep)> = dead
+            .into_iter()
             .map(|(name, delay)| {
                 tracing::info!("[{}] 准备自动重启，等待 {:?}", name, delay);
                 (name, tokio::time::sleep(delay))
@@ -119,7 +122,9 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
                             events.push((
                                 notify::EVENT_RECOVERED.to_string(),
                                 name.clone(),
-                                format!("进程 {name} 已被守护进程重新拉起（累计重启 {restarts} 次）"),
+                                format!(
+                                    "进程 {name} 已被守护进程重新拉起（累计重启 {restarts} 次）"
+                                ),
                             ));
                         }
                         Err(e) => tracing::error!("[{}] 自动重启失败: {}", name, e),
@@ -161,13 +166,16 @@ async fn run_health_checks(state: &mut State) -> Vec<Notice> {
     let to_check: Vec<(String, HealthCheckConfig, bool)> = {
         let mut checks = Vec::new();
         for (name, proc) in &mut state.processes {
-            if !proc.is_running() { continue; }
+            if !proc.is_running() {
+                continue;
+            }
             let (hc, should_check, ur) = {
                 let cfg = proc.config();
                 match &cfg.health_check {
                     Some(hc) => {
                         let interval = std::time::Duration::from_secs(hc.interval_secs);
-                        let should = proc.last_health_check()
+                        let should = proc
+                            .last_health_check()
                             .is_none_or(|last| now().duration_since(last) >= interval);
                         (hc.clone(), should, cfg.unhealthy_restart)
                     }
@@ -182,7 +190,10 @@ async fn run_health_checks(state: &mut State) -> Vec<Notice> {
         checks
     };
 
-    let futures: Vec<_> = to_check.iter().map(|(_, hc, _)| crate::health::check_health(hc)).collect();
+    let futures: Vec<_> = to_check
+        .iter()
+        .map(|(_, hc, _)| crate::health::check_health(hc))
+        .collect();
     let results = futures::future::join_all(futures).await;
 
     let mut to_restart = Vec::new();
@@ -192,12 +203,18 @@ async fn run_health_checks(state: &mut State) -> Vec<Notice> {
             let (fails, tripped) = proc.record_health(healthy);
             if !healthy {
                 if tripped {
-                    tracing::warn!("[{name}] 健康检查连续失败 {fails} 次 (阈值 {})，判定不健康", hc.fail_threshold);
+                    tracing::warn!(
+                        "[{name}] 健康检查连续失败 {fails} 次 (阈值 {})，判定不健康",
+                        hc.fail_threshold
+                    );
                     if *unhealthy_restart {
                         to_restart.push(name.clone());
                     }
                 } else {
-                    tracing::warn!("[{name}] 健康检查失败 ({fails}/{})，等待连续失败确认", hc.fail_threshold);
+                    tracing::warn!(
+                        "[{name}] 健康检查失败 ({fails}/{})，等待连续失败确认",
+                        hc.fail_threshold
+                    );
                 }
                 // 通知只在「刚跨过阈值」那一次发出：持续不健康不会每轮刷屏；
                 // 恢复后再次失败会重新跨过阈值，届时会再通知。

@@ -39,10 +39,7 @@ mod parse_config {
 command = "echo hello"
 "#;
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert!(
-            config.processes.contains_key("svc"),
-            "应包含 'svc' 进程"
-        );
+        assert!(config.processes.contains_key("svc"), "应包含 'svc' 进程");
     }
 
     #[test]
@@ -65,11 +62,7 @@ command = "echo hello"
 command = "echo hello"
 "#;
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert_eq!(
-            config.daemon.web.port,
-            Some(9090),
-            "默认端口应为 9090"
-        );
+        assert_eq!(config.daemon.web.port, Some(9090), "默认端口应为 9090");
     }
 
     #[test]
@@ -103,7 +96,11 @@ timeout_secs = 3
         let svc = &config.processes["web"];
 
         assert_eq!(svc.command, "node", "command 应为 'node'");
-        assert_eq!(svc.args, vec!["app.js", "--port", "3000"], "args 应正确解析");
+        assert_eq!(
+            svc.args,
+            vec!["app.js", "--port", "3000"],
+            "args 应正确解析"
+        );
         assert!(!svc.auto_start, "auto_start 应为 false");
         assert!(!svc.auto_restart, "auto_restart 应为 false");
         assert_eq!(svc.max_restarts, 5, "max_restarts 应为 5");
@@ -154,17 +151,17 @@ mod validate {
         config.command = String::new();
 
         let err = config.validate().unwrap_err();
-        assert!(
-            !err.to_string().is_empty(),
-            "空命令应返回有意义的错误信息"
-        );
+        assert!(!err.to_string().is_empty(), "空命令应返回有意义的错误信息");
     }
 
     #[test]
     fn rejects_tcp_health_check_with_port_zero() {
         let mut config = minimal_config();
         config.health_check = Some(HealthCheckConfig {
-            check_type: HealthCheckType::Tcp { host: None, port: 0 },
+            check_type: HealthCheckType::Tcp {
+                host: None,
+                port: 0,
+            },
             interval_secs: 10,
             timeout_secs: 3,
             fail_threshold: 3,
@@ -180,7 +177,9 @@ mod validate {
     fn rejects_http_health_check_with_empty_url() {
         let mut config = minimal_config();
         config.health_check = Some(HealthCheckConfig {
-            check_type: HealthCheckType::Http { url: "  ".to_string() },
+            check_type: HealthCheckType::Http {
+                url: "  ".to_string(),
+            },
             interval_secs: 10,
             timeout_secs: 3,
             fail_threshold: 3,
@@ -196,32 +195,32 @@ mod validate {
     fn rejects_health_check_with_zero_interval() {
         let mut config = minimal_config();
         config.health_check = Some(HealthCheckConfig {
-            check_type: HealthCheckType::Tcp { host: None, port: 8080 },
+            check_type: HealthCheckType::Tcp {
+                host: None,
+                port: 8080,
+            },
             interval_secs: 0,
             timeout_secs: 3,
             fail_threshold: 3,
         });
 
-        assert!(
-            config.validate().is_err(),
-            "健康检查间隔为 0 应验证失败"
-        );
+        assert!(config.validate().is_err(), "健康检查间隔为 0 应验证失败");
     }
 
     #[test]
     fn rejects_health_check_with_zero_timeout() {
         let mut config = minimal_config();
         config.health_check = Some(HealthCheckConfig {
-            check_type: HealthCheckType::Tcp { host: None, port: 8080 },
+            check_type: HealthCheckType::Tcp {
+                host: None,
+                port: 8080,
+            },
             interval_secs: 10,
             timeout_secs: 0,
             fail_threshold: 3,
         });
 
-        assert!(
-            config.validate().is_err(),
-            "健康检查超时为 0 应验证失败"
-        );
+        assert!(config.validate().is_err(), "健康检查超时为 0 应验证失败");
     }
 
     #[test]
@@ -237,25 +236,22 @@ mod validate {
             fail_threshold: 3,
         });
 
-        assert!(
-            config.validate().is_ok(),
-            "有效配置应通过验证"
-        );
+        assert!(config.validate().is_ok(), "有效配置应通过验证");
     }
 
     #[test]
     fn rejects_health_check_with_zero_fail_threshold() {
         let mut config = minimal_config();
         config.health_check = Some(HealthCheckConfig {
-            check_type: HealthCheckType::Tcp { host: None, port: 8080 },
+            check_type: HealthCheckType::Tcp {
+                host: None,
+                port: 8080,
+            },
             interval_secs: 10,
             timeout_secs: 3,
             fail_threshold: 0,
         });
-        assert!(
-            config.validate().is_err(),
-            "失败判定阈值为 0 应验证失败"
-        );
+        assert!(config.validate().is_err(), "失败判定阈值为 0 应验证失败");
     }
 }
 
@@ -278,8 +274,11 @@ port = 8080
         let svc = &config.processes["svc"];
         assert_eq!(svc.restart_reset_secs, 60, "重启计数衰减窗口默认 60 秒");
         assert!(!svc.shell, "默认直接启动，不经 shell");
-        assert_eq!(svc.health_check.as_ref().unwrap().fail_threshold, 3,
-            "健康检查失败判定阈值默认 3");
+        assert_eq!(
+            svc.health_check.as_ref().unwrap().fail_threshold,
+            3,
+            "健康检查失败判定阈值默认 3"
+        );
     }
 }
 
@@ -315,13 +314,9 @@ mod save_and_load {
             Some("secret".to_string()),
             "api_key 应一致"
         );
-        assert!(
-            loaded.processes.contains_key("web"),
-            "应包含 'web' 进程"
-        );
+        assert!(loaded.processes.contains_key("web"), "应包含 'web' 进程");
         assert_eq!(
-            loaded.processes["web"].command,
-            "node app.js",
+            loaded.processes["web"].command, "node app.js",
             "command 应一致"
         );
     }
@@ -329,17 +324,16 @@ mod save_and_load {
     #[test]
     fn returns_default_when_file_not_found() {
         let config = AppConfig::load(std::path::Path::new("/nonexistent/gugu.toml")).unwrap();
-        assert!(
-            config.processes.is_empty(),
-            "加载不存在的文件应返回空配置"
-        );
+        assert!(config.processes.is_empty(), "加载不存在的文件应返回空配置");
     }
 
     #[test]
     fn save_preserves_comments_and_layout() {
         let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
-        std::fs::write(&path, r#"# 文件顶注释
+        std::fs::write(
+            &path,
+            r#"# 文件顶注释
 [daemon]
 log_dir = "logs"  # 日志目录注释
 
@@ -356,14 +350,17 @@ stdout_log = "logs/web.log"
 
 [processes.gone]
 command = "old"
-"#)
-            .unwrap();
+"#,
+        )
+        .unwrap();
 
         let mut config = AppConfig::load(&path).unwrap();
         // 改一个字段、删一个进程、加一个进程
         config.processes.get_mut("web").unwrap().restart_delay_secs = 9;
         config.processes.remove("gone");
-        config.processes.insert("fresh".to_string(), minimal_config());
+        config
+            .processes
+            .insert("fresh".to_string(), minimal_config());
 
         config.save(&path).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
@@ -374,7 +371,10 @@ command = "old"
         assert!(out.contains("进程 web 的说明注释"), "进程表头注释应保留");
         assert!(out.contains("行尾注释"), "进程字段行尾注释应保留");
         assert!(out.contains("restart_delay_secs = 9"), "修改后的值应写回");
-        assert!(out.contains("processes.fresh") || out.contains("[[processes]]"), "新增进程应写入");
+        assert!(
+            out.contains("processes.fresh") || out.contains("[[processes]]"),
+            "新增进程应写入"
+        );
         assert!(!out.contains("processes.gone"), "已删除进程应移除");
         assert!(!out.contains("command = \"old\""), "已删除进程内容不应残留");
     }
@@ -419,7 +419,11 @@ mod full_command {
     #[test]
     fn joins_command_with_args() {
         let mut config = minimal_config();
-        config.args = vec!["app.js".to_string(), "--port".to_string(), "3000".to_string()];
+        config.args = vec![
+            "app.js".to_string(),
+            "--port".to_string(),
+            "3000".to_string(),
+        ];
 
         assert_eq!(
             config.full_command(),
@@ -431,11 +435,7 @@ mod full_command {
     #[test]
     fn returns_command_alone_when_no_args() {
         let config = minimal_config();
-        assert_eq!(
-            config.full_command(),
-            "echo",
-            "无参数时仅返回命令"
-        );
+        assert_eq!(config.full_command(), "echo", "无参数时仅返回命令");
     }
 }
 
@@ -450,10 +450,7 @@ mod runtime_fields_eq {
         let mut b = a.clone();
         b.auto_start = false; // 非运行时字段
 
-        assert!(
-            a.runtime_fields_eq(&b),
-            "非运行时字段变更不应影响相等性"
-        );
+        assert!(a.runtime_fields_eq(&b), "非运行时字段变更不应影响相等性");
     }
 
     #[test]
@@ -462,20 +459,14 @@ mod runtime_fields_eq {
         let mut b = a.clone();
         b.command = "python".to_string(); // 运行时字段
 
-        assert!(
-            !a.runtime_fields_eq(&b),
-            "运行时字段变更应被检测"
-        );
+        assert!(!a.runtime_fields_eq(&b), "运行时字段变更应被检测");
     }
 
     #[test]
     fn identical_configs_are_equal() {
         let a = minimal_config();
         let b = a.clone();
-        assert!(
-            a.runtime_fields_eq(&b),
-            "相同配置应相等"
-        );
+        assert!(a.runtime_fields_eq(&b), "相同配置应相等");
     }
 }
 
@@ -553,11 +544,7 @@ mod strip_unc_prefix {
     fn strips_extended_prefix() {
         let path = PathBuf::from(r"\\?\C:\Users\test");
         let result = strip_unc_prefix(&path);
-        assert_eq!(
-            result,
-            PathBuf::from(r"C:\Users\test"),
-            r"应去除 \\?\ 前缀"
-        );
+        assert_eq!(result, PathBuf::from(r"C:\Users\test"), r"应去除 \\?\ 前缀");
     }
 
     #[test]
@@ -617,11 +604,7 @@ mod select_config_path {
     fn falls_back_to_cwd_when_exe_dir_has_no_config() {
         let exe = Path::new("/opt/gugu");
         let cwd = Path::new("/home/user");
-        let result = select_config_path(
-            Some(exe),
-            cwd,
-            &exists_in(&["/home/user/gugu.toml"]),
-        );
+        let result = select_config_path(Some(exe), cwd, &exists_in(&["/home/user/gugu.toml"]));
         assert_eq!(
             result,
             PathBuf::from("/home/user/gugu.toml"),

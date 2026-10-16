@@ -10,9 +10,9 @@ use std::io;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, SetInformationJobObject, TerminateJobObject,
-    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    TerminateJobObject, JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
@@ -26,21 +26,20 @@ pub(super) struct Job {
 unsafe impl Send for Job {}
 
 extern "system" {
-    fn CreateJobObjectW(lpjobattributes: *const std::ffi::c_void, lpname: *const u16) -> *mut std::ffi::c_void;
+    fn CreateJobObjectW(
+        lpjobattributes: *const std::ffi::c_void,
+        lpname: *const u16,
+    ) -> *mut std::ffi::c_void;
 }
 
 impl Job {
     /// 将进程分配到此 Job Object。
     pub(super) fn assign_process(&self, pid: u32) -> io::Result<()> {
-        let proc_handle = unsafe {
-            OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid)
-        };
+        let proc_handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
         if proc_handle.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let result = unsafe {
-            AssignProcessToJobObject(self.as_handle(), proc_handle)
-        };
+        let result = unsafe { AssignProcessToJobObject(self.as_handle(), proc_handle) };
         unsafe { CloseHandle(proc_handle) };
         if result == 0 {
             Err(io::Error::last_os_error())
@@ -96,5 +95,7 @@ pub(super) fn create_kill_on_close_job() -> io::Result<Job> {
         return Err(io::Error::last_os_error());
     }
 
-    Ok(Job { handle: handle as usize })
+    Ok(Job {
+        handle: handle as usize,
+    })
 }

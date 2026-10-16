@@ -25,7 +25,9 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new() -> Self {
-        Self { last: Mutex::new(Vec::new()) }
+        Self {
+            last: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn update(&self, processes: &[ProcessInfo]) {
@@ -171,16 +173,32 @@ fn render_exposition(processes: &[ProcessInfo]) -> String {
         }
     }
 
-    header(&mut out, "gugu_processes", "Total number of managed processes");
+    header(
+        &mut out,
+        "gugu_processes",
+        "Total number of managed processes",
+    );
     out.push_str(&format!("gugu_processes {}\n", sorted.len()));
 
-    header(&mut out, "gugu_processes_failed", "Number of failed processes");
+    header(
+        &mut out,
+        "gugu_processes_failed",
+        "Number of failed processes",
+    );
     out.push_str(&format!("gugu_processes_failed {failed}\n"));
 
-    header(&mut out, "gugu_processes_running", "Number of running processes");
+    header(
+        &mut out,
+        "gugu_processes_running",
+        "Number of running processes",
+    );
     out.push_str(&format!("gugu_processes_running {running}\n"));
 
-    header(&mut out, "gugu_processes_stopped", "Number of stopped processes");
+    header(
+        &mut out,
+        "gugu_processes_stopped",
+        "Number of stopped processes",
+    );
     out.push_str(&format!("gugu_processes_stopped {stopped}\n"));
 
     out
@@ -196,7 +214,10 @@ async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
     let output = state.metrics.render();
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         output,
     )
 }
@@ -237,10 +258,22 @@ mod tests {
         assert!(text.contains("gugu_processes_running 1"), "{text}");
         assert!(text.contains("gugu_processes_stopped 1"), "{text}");
         assert!(text.contains("gugu_processes_failed 0"), "{text}");
-        assert!(text.contains("gugu_process_status{process=\"a\"} 1"), "{text}");
-        assert!(text.contains("gugu_process_status{process=\"b\"} 0"), "{text}");
-        assert!(text.contains("gugu_process_uptime_seconds{process=\"a\"} 7"), "{text}");
-        assert!(text.contains("gugu_process_restarts_total{process=\"a\"} 2"), "{text}");
+        assert!(
+            text.contains("gugu_process_status{process=\"a\"} 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gugu_process_status{process=\"b\"} 0"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gugu_process_uptime_seconds{process=\"a\"} 7"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gugu_process_restarts_total{process=\"a\"} 2"),
+            "{text}"
+        );
         // 按名字排序：a 在 b 之前
         assert!(text.find("process=\"a\"").unwrap() < text.find("process=\"b\"").unwrap());
         // 无健康数据时不输出该族
@@ -256,8 +289,14 @@ mod tests {
             process_count: 2,
         });
         let text = render_exposition(&[p]);
-        assert!(text.contains("gugu_process_cpu_percent{process=\"svc\"} 12.50"), "{text}");
-        assert!(text.contains("gugu_process_memory_bytes{process=\"svc\"} 1048576"), "{text}");
+        assert!(
+            text.contains("gugu_process_cpu_percent{process=\"svc\"} 12.50"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gugu_process_memory_bytes{process=\"svc\"} 1048576"),
+            "{text}"
+        );
         // 没有采样数据时不输出这两族
         let text = render_exposition(&[info("idle", ProcessStatus::Stopped)]);
         assert!(!text.contains("gugu_process_cpu_percent"), "{text}");
@@ -275,6 +314,11 @@ mod tests {
         let text = render_exposition(&[p]);
         assert!(!text.contains("with\"quote"), "双引号必须被转义: {text}");
         assert!(text.contains("with\\\"quote\\\\and\\nnewline"), "{text}");
-        assert!(text.contains("gugu_process_health_status{process=\"with\\\"quote\\\\and\\nnewline\"} 0"), "{text}");
+        assert!(
+            text.contains(
+                "gugu_process_health_status{process=\"with\\\"quote\\\\and\\nnewline\"} 0"
+            ),
+            "{text}"
+        );
     }
 }

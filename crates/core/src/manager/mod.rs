@@ -22,19 +22,63 @@ pub use deps::topological_sort;
 // ── Actor 命令 ──────────────────────────────────────────────
 
 enum Command {
-    StartProcess { name: String, reply: ReplyTx<()> },
-    StopProcess { name: String, reply: ReplyTx<()> },
-    RestartProcess { name: String, reply: ReplyTx<()> },
-    CheckHealth { name: String, reply: ReplyTx<bool> },
-    AddProcess { name: String, config: ProcessConfig, start_now: bool, reply: ReplyTx<()> },
-    UpdateProcess { name: String, config: ProcessConfig, new_name: Option<String>, force_restart: bool, reply: ReplyTx<()> },
-    RemoveProcess { name: String, reply: ReplyTx<()> },
-    ClearLogs { name: String, reply: ReplyTx<()> },
-    ReloadConfig { config: AppConfig, reply: ReplyTx<()> },
-    ReloadFromFile { reply: ReplyTx<()> },
-    GetProcessConfig { name: String, reply: ReplyTx<Option<ProcessConfig>> },
-    GetProcessLogs { name: String, lines: usize, reply: ReplyTx<Vec<LogEntry>> },
-    SubscribeLogs { name: String, reply: ReplyTx<broadcast::Receiver<LogEntry>> },
+    StartProcess {
+        name: String,
+        reply: ReplyTx<()>,
+    },
+    StopProcess {
+        name: String,
+        reply: ReplyTx<()>,
+    },
+    RestartProcess {
+        name: String,
+        reply: ReplyTx<()>,
+    },
+    CheckHealth {
+        name: String,
+        reply: ReplyTx<bool>,
+    },
+    AddProcess {
+        name: String,
+        config: ProcessConfig,
+        start_now: bool,
+        reply: ReplyTx<()>,
+    },
+    UpdateProcess {
+        name: String,
+        config: ProcessConfig,
+        new_name: Option<String>,
+        force_restart: bool,
+        reply: ReplyTx<()>,
+    },
+    RemoveProcess {
+        name: String,
+        reply: ReplyTx<()>,
+    },
+    ClearLogs {
+        name: String,
+        reply: ReplyTx<()>,
+    },
+    ReloadConfig {
+        config: AppConfig,
+        reply: ReplyTx<()>,
+    },
+    ReloadFromFile {
+        reply: ReplyTx<()>,
+    },
+    GetProcessConfig {
+        name: String,
+        reply: ReplyTx<Option<ProcessConfig>>,
+    },
+    GetProcessLogs {
+        name: String,
+        lines: usize,
+        reply: ReplyTx<Vec<LogEntry>>,
+    },
+    SubscribeLogs {
+        name: String,
+        reply: ReplyTx<broadcast::Receiver<LogEntry>>,
+    },
     Shutdown,
 }
 
@@ -88,51 +132,119 @@ impl SharedManager {
     // ── 写操作（命令通道） ──
 
     pub async fn start_process(&self, name: &str) -> Result<()> {
-        self.call(|r| Command::StartProcess { name: name.to_string(), reply: r }).await
+        self.call(|r| Command::StartProcess {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn stop_process(&self, name: &str) -> Result<()> {
-        self.call(|r| Command::StopProcess { name: name.to_string(), reply: r }).await
+        self.call(|r| Command::StopProcess {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn restart_process(&self, name: &str) -> Result<()> {
-        self.call(|r| Command::RestartProcess { name: name.to_string(), reply: r }).await
+        self.call(|r| Command::RestartProcess {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn check_process_health(&self, name: &str) -> Result<bool> {
-        self.call_val(|r| Command::CheckHealth { name: name.to_string(), reply: r }).await
+        self.call_val(|r| Command::CheckHealth {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
-    pub async fn add_process(&self, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
-        self.call(|r| Command::AddProcess { name, config, start_now, reply: r }).await
+    pub async fn add_process(
+        &self,
+        name: String,
+        config: ProcessConfig,
+        start_now: bool,
+    ) -> Result<()> {
+        self.call(|r| Command::AddProcess {
+            name,
+            config,
+            start_now,
+            reply: r,
+        })
+        .await
     }
 
-    pub async fn update_process(&self, name: &str, config: ProcessConfig, new_name: Option<String>, force_restart: bool) -> Result<()> {
-        self.call(|r| Command::UpdateProcess { name: name.to_string(), config, new_name, force_restart, reply: r }).await
+    pub async fn update_process(
+        &self,
+        name: &str,
+        config: ProcessConfig,
+        new_name: Option<String>,
+        force_restart: bool,
+    ) -> Result<()> {
+        self.call(|r| Command::UpdateProcess {
+            name: name.to_string(),
+            config,
+            new_name,
+            force_restart,
+            reply: r,
+        })
+        .await
     }
 
     pub async fn remove_process(&self, name: &str) -> Result<()> {
-        self.call(|r| Command::RemoveProcess { name: name.to_string(), reply: r }).await
+        self.call(|r| Command::RemoveProcess {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn get_process_config(&self, name: &str) -> Result<Option<ProcessConfig>> {
-        self.call_val(|r| Command::GetProcessConfig { name: name.to_string(), reply: r }).await
+        self.call_val(|r| Command::GetProcessConfig {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn get_process_logs(&self, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
-        self.call_val(|r| Command::GetProcessLogs { name: name.to_string(), lines, reply: r }).await
+        self.call_val(|r| Command::GetProcessLogs {
+            name: name.to_string(),
+            lines,
+            reply: r,
+        })
+        .await
     }
 
     pub async fn clear_process_logs(&self, name: &str) -> Result<()> {
-        self.call(|r| Command::ClearLogs { name: name.to_string(), reply: r }).await
+        self.call(|r| Command::ClearLogs {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
-    pub async fn subscribe_process_logs(&self, name: &str) -> Result<broadcast::Receiver<LogEntry>> {
-        self.call_val(|r| Command::SubscribeLogs { name: name.to_string(), reply: r }).await
+    pub async fn subscribe_process_logs(
+        &self,
+        name: &str,
+    ) -> Result<broadcast::Receiver<LogEntry>> {
+        self.call_val(|r| Command::SubscribeLogs {
+            name: name.to_string(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn reload_config(&self, new_config: &AppConfig) -> Result<()> {
-        self.call(|r| Command::ReloadConfig { config: new_config.clone(), reply: r }).await
+        self.call(|r| Command::ReloadConfig {
+            config: new_config.clone(),
+            reply: r,
+        })
+        .await
     }
 
     pub async fn reload_from_file(&self) -> Result<()> {
@@ -149,18 +261,26 @@ impl SharedManager {
     // ── 内部 ──
 
     async fn call<F>(&self, f: F) -> Result<()>
-    where F: FnOnce(ReplyTx<()>) -> Command {
+    where
+        F: FnOnce(ReplyTx<()>) -> Command,
+    {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.cmd_tx.send(f(tx)).await
+        self.cmd_tx
+            .send(f(tx))
+            .await
             .map_err(|_| GuguError::ConfigError("进程管理器已关闭".into()))?;
         rx.await
             .map_err(|_| GuguError::ConfigError("进程管理器未响应".into()))?
     }
 
     async fn call_val<T, F>(&self, f: F) -> Result<T>
-    where F: FnOnce(ReplyTx<T>) -> Command {
+    where
+        F: FnOnce(ReplyTx<T>) -> Command,
+    {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.cmd_tx.send(f(tx)).await
+        self.cmd_tx
+            .send(f(tx))
+            .await
             .map_err(|_| GuguError::ConfigError("进程管理器已关闭".into()))?;
         rx.await
             .map_err(|_| GuguError::ConfigError("进程管理器未响应".into()))?
@@ -181,5 +301,8 @@ pub fn start(config: &AppConfig, config_path: Option<PathBuf>) -> SharedManager 
         actor::actor_loop(state, cmd_rx, snap_tx).await;
     });
 
-    SharedManager { cmd_tx, snapshot: snap_rx }
+    SharedManager {
+        cmd_tx,
+        snapshot: snap_rx,
+    }
 }

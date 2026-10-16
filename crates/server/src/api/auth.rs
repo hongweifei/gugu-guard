@@ -9,11 +9,7 @@ use axum::{
 
 use crate::state::AppState;
 
-pub async fn auth_middleware(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let Some(ref expected_key) = state.api_key else {
         return next.run(req).await;
     };
@@ -51,7 +47,11 @@ pub async fn auth_middleware(
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
-    let mut result: u8 = if a_bytes.len() == b_bytes.len() { 0 } else { 0xff };
+    let mut result: u8 = if a_bytes.len() == b_bytes.len() {
+        0
+    } else {
+        0xff
+    };
     let max_len = a_bytes.len().max(b_bytes.len());
     for i in 0..max_len {
         let x = a_bytes.get(i).copied().unwrap_or(0);

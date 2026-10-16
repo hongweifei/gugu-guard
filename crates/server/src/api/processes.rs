@@ -9,8 +9,8 @@ use axum::{
 
 use crate::state::AppState;
 
-use super::types::{ApiError, ApiSuccess, CreateProcessRequest};
 use super::api_res;
+use super::types::{ApiError, ApiSuccess, CreateProcessRequest};
 
 pub(super) async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.manager.list_processes())
@@ -22,11 +22,7 @@ pub(super) async fn get_process(
 ) -> Response {
     match state.manager.get_process_info(&name) {
         Some(info) => Json(Some(info)).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new("进程未找到")),
-        )
-            .into_response(),
+        None => (StatusCode::NOT_FOUND, Json(ApiError::new("进程未找到"))).into_response(),
     }
 }
 
@@ -44,11 +40,7 @@ pub(super) async fn create_process(
             }),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError::new(e.to_string())),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }
 
@@ -58,7 +50,10 @@ pub(super) async fn update_process(
     Json(body): Json<CreateProcessRequest>,
 ) -> Response {
     let (config, _start_now, new_name) = body.into_config();
-    let result = state.manager.update_process(&name, config, new_name, false).await;
+    let result = state
+        .manager
+        .update_process(&name, config, new_name, false)
+        .await;
     api_res(result, "进程已更新", StatusCode::BAD_REQUEST)
 }
 
@@ -76,16 +71,8 @@ pub(super) async fn get_process_config(
 ) -> Response {
     match state.manager.get_process_config(&name).await {
         Ok(Some(config)) => Json(config).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new("进程未找到")),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new(e.to_string())),
-        )
-            .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(ApiError::new("进程未找到"))).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }
 
@@ -123,10 +110,6 @@ pub(super) async fn check_health(
             "message": if healthy { "健康检查通过" } else { "健康检查失败" }
         }))
         .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError::new(e.to_string())),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }

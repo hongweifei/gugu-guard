@@ -34,11 +34,7 @@ pub(super) async fn browse_fs(Query(query): Query<BrowseQuery>) -> Response {
     };
 
     if !dir.is_dir() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError::new("路径不是目录")),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Json(ApiError::new("路径不是目录"))).into_response();
     }
 
     let path_str = clean_path(&dir);
@@ -47,11 +43,7 @@ pub(super) async fn browse_fs(Query(query): Query<BrowseQuery>) -> Response {
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiError::new(e.to_string())),
-            )
-                .into_response()
+            return (StatusCode::BAD_REQUEST, Json(ApiError::new(e.to_string()))).into_response()
         }
     };
 

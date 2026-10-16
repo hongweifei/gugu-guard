@@ -1,7 +1,9 @@
 //! CLI 客户端子命令：连接守护进程 HTTP API 并输出表格/文本。
 
 use anyhow::{Context, Result};
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Attribute, Cell, Color, Table};
+use comfy_table::{
+    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Attribute, Cell, Color, Table,
+};
 use gugu_core::config::{AppConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT, LOCALHOST};
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,7 +49,11 @@ pub(crate) fn get_server_url(config_path: &Path, explicit: Option<&str>) -> Resu
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
     let addr = config.daemon.web.addr.as_deref().unwrap_or(LOCALHOST);
     let port = config.daemon.web.port.unwrap_or(DEFAULT_PORT);
-    let connect_addr = if addr == DEFAULT_BIND_ADDR { LOCALHOST } else { addr };
+    let connect_addr = if addr == DEFAULT_BIND_ADDR {
+        LOCALHOST
+    } else {
+        addr
+    };
     Ok(format!("http://{connect_addr}:{port}"))
 }
 
@@ -59,13 +65,22 @@ pub(crate) fn get_api_key(config_path: &Path, explicit: Option<&str>) -> Result<
     Ok(config.and_then(|c| c.daemon.api_key))
 }
 
-pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Option<&str>) -> Result<()> {
+pub(crate) async fn run_client(
+    command: &Commands,
+    server_url: &str,
+    api_key: Option<&str>,
+) -> Result<()> {
     let client = reqwest::Client::new();
-    let api = ApiHelper { client: &client, base: server_url, key: api_key };
+    let api = ApiHelper {
+        client: &client,
+        base: server_url,
+        key: api_key,
+    };
 
     match command {
         Commands::Status { json } => {
-            let resp = api.get("/api/v1/processes")
+            let resp = api
+                .get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程，请确认是否已启动")?;
@@ -78,7 +93,8 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
         }
 
         Commands::List { json } => {
-            let resp = api.get("/api/v1/processes")
+            let resp = api
+                .get("/api/v1/processes")
                 .send()
                 .await
                 .context("无法连接到守护进程")?;
@@ -91,24 +107,43 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
         }
 
         Commands::Start { name } => {
-            let resp = api.post(&format!("/api/v1/processes/{name}/start")).send().await?;
+            let resp = api
+                .post(&format!("/api/v1/processes/{name}/start"))
+                .send()
+                .await?;
             print_api_response(resp).await?;
         }
 
         Commands::Stop { name } => {
-            let resp = api.post(&format!("/api/v1/processes/{name}/stop")).send().await?;
+            let resp = api
+                .post(&format!("/api/v1/processes/{name}/stop"))
+                .send()
+                .await?;
             print_api_response(resp).await?;
         }
 
         Commands::Restart { name } => {
-            let resp = api.post(&format!("/api/v1/processes/{name}/restart")).send().await?;
+            let resp = api
+                .post(&format!("/api/v1/processes/{name}/restart"))
+                .send()
+                .await?;
             print_api_response(resp).await?;
         }
 
         Commands::Add {
-            name, command, args, dir, env,
-            no_auto_start, no_auto_restart, max_restarts,
-            restart_delay, stop_timeout, stdout_log, stderr_log, start,
+            name,
+            command,
+            args,
+            dir,
+            env,
+            no_auto_start,
+            no_auto_restart,
+            max_restarts,
+            restart_delay,
+            stop_timeout,
+            stdout_log,
+            stderr_log,
+            start,
         } => {
             let mut env_map = HashMap::new();
             for e in env {
@@ -130,7 +165,8 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
                 "stderr_log": stderr_log,
                 "start_now": start,
             });
-            let resp = api.post(&format!("/api/v1/processes/{name}"))
+            let resp = api
+                .post(&format!("/api/v1/processes/{name}"))
                 .json(&body)
                 .send()
                 .await?;
@@ -138,12 +174,18 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
         }
 
         Commands::Remove { name } => {
-            let resp = api.delete(&format!("/api/v1/processes/{name}")).send().await?;
+            let resp = api
+                .delete(&format!("/api/v1/processes/{name}"))
+                .send()
+                .await?;
             print_api_response(resp).await?;
         }
 
         Commands::Logs { name, lines } => {
-            let resp = api.get(&format!("/api/v1/processes/{name}/logs?lines={lines}")).send().await?;
+            let resp = api
+                .get(&format!("/api/v1/processes/{name}/logs?lines={lines}"))
+                .send()
+                .await?;
             let status = resp.status();
             if !status.is_success() {
                 let text = resp.text().await.unwrap_or_default();
@@ -188,7 +230,9 @@ fn print_status_table(processes: &[gugu_core::process::ProcessInfo]) {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS);
     table.set_header(vec![
         Cell::new("名称").add_attribute(Attribute::Bold),
         Cell::new("状态").add_attribute(Attribute::Bold),
@@ -202,14 +246,17 @@ fn print_status_table(processes: &[gugu_core::process::ProcessInfo]) {
             gugu_core::process::ProcessStatus::Running => Cell::new("运行中").fg(Color::Green),
             gugu_core::process::ProcessStatus::Stopped => Cell::new("已停止").fg(Color::Yellow),
             gugu_core::process::ProcessStatus::Starting => Cell::new("启动中").fg(Color::Cyan),
-            gugu_core::process::ProcessStatus::Failed(e) => Cell::new(format!("失败: {e}")).fg(Color::Red),
+            gugu_core::process::ProcessStatus::Failed(e) => {
+                Cell::new(format!("失败: {e}")).fg(Color::Red)
+            }
             gugu_core::process::ProcessStatus::Restarting => Cell::new("重启中").fg(Color::Magenta),
             _ => Cell::new("未知").fg(Color::White),
         };
 
-        let uptime = p.uptime_secs.map(|s| {
-            format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
-        }).unwrap_or_default();
+        let uptime = p
+            .uptime_secs
+            .map(|s| format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60))
+            .unwrap_or_default();
 
         table.add_row(vec![
             Cell::new(&p.name),
@@ -230,7 +277,9 @@ fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL).apply_modifier(UTF8_ROUND_CORNERS);
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS);
     table.set_header(vec![
         Cell::new("名称").add_attribute(Attribute::Bold),
         Cell::new("命令").add_attribute(Attribute::Bold),

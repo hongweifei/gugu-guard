@@ -9,7 +9,11 @@ use super::monitor::run_monitor_cycle;
 use super::state::State;
 use super::{Command, ProcessSnapshot};
 
-pub(super) async fn actor_loop(mut state: State, mut cmd_rx: mpsc::Receiver<Command>, snap_tx: watch::Sender<ProcessSnapshot>) {
+pub(super) async fn actor_loop(
+    mut state: State,
+    mut cmd_rx: mpsc::Receiver<Command>,
+    snap_tx: watch::Sender<ProcessSnapshot>,
+) {
     let mut monitor_interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
     loop {
@@ -41,7 +45,11 @@ fn broadcast(state: &State, snap_tx: &watch::Sender<ProcessSnapshot>) {
     let _ = snap_tx.send(state.snapshot());
 }
 
-pub(super) async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSnapshot>, cmd: Command) {
+pub(super) async fn handle(
+    state: &mut State,
+    snap_tx: &watch::Sender<ProcessSnapshot>,
+    cmd: Command,
+) {
     match cmd {
         Command::StartProcess { name, reply } => {
             let _ = reply.send(do_start(state, &name).await);
@@ -59,11 +67,22 @@ pub(super) async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSna
             let _ = reply.send(do_check_health(state, &name).await);
             broadcast(state, snap_tx);
         }
-        Command::AddProcess { name, config, start_now, reply } => {
+        Command::AddProcess {
+            name,
+            config,
+            start_now,
+            reply,
+        } => {
             let _ = reply.send(do_add(state, name, config, start_now).await);
             broadcast(state, snap_tx);
         }
-        Command::UpdateProcess { name, config, new_name, force_restart, reply } => {
+        Command::UpdateProcess {
+            name,
+            config,
+            new_name,
+            force_restart,
+            reply,
+        } => {
             let _ = reply.send(do_update(state, &name, config, new_name, force_restart).await);
             broadcast(state, snap_tx);
         }
@@ -85,7 +104,9 @@ pub(super) async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSna
         Command::GetProcessConfig { name, reply } => {
             // 返回配置声明式视图 (相对路径)，与 gugu.toml 磁盘内容一致：
             // WebUI 编辑对话框据此回填，保存时原样回传，不再泄漏解析后的绝对路径。
-            let cfg = state.processes.get(&name)
+            let cfg = state
+                .processes
+                .get(&name)
                 .map(|p| state.declared_paths(p.config()));
             let _ = reply.send(Ok(cfg));
         }
@@ -102,7 +123,10 @@ pub(super) async fn handle(state: &mut State, snap_tx: &watch::Sender<ProcessSna
 // ── 具体操作 ─────────────────────────────────────────────────
 
 fn get_proc<'a>(state: &'a mut State, name: &str) -> Result<&'a mut ManagedProcess> {
-    state.processes.get_mut(name).ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))
+    state
+        .processes
+        .get_mut(name)
+        .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))
 }
 
 async fn do_start(state: &mut State, name: &str) -> Result<()> {
@@ -122,7 +146,9 @@ async fn do_restart(state: &mut State, name: &str) -> Result<()> {
 async fn do_check_health(state: &mut State, name: &str) -> Result<bool> {
     let hc = {
         let proc = get_proc(state, name)?;
-        proc.config().health_check.clone()
+        proc.config()
+            .health_check
+            .clone()
             .ok_or_else(|| GuguError::ConfigError("该进程未配置健康检查".into()))?
     };
     let healthy = crate::health::check_health(&hc).await;
@@ -132,7 +158,12 @@ async fn do_check_health(state: &mut State, name: &str) -> Result<bool> {
     Ok(healthy)
 }
 
-async fn do_add(state: &mut State, name: String, config: ProcessConfig, start_now: bool) -> Result<()> {
+async fn do_add(
+    state: &mut State,
+    name: String,
+    config: ProcessConfig,
+    start_now: bool,
+) -> Result<()> {
     if state.processes.contains_key(&name) {
         return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
     }
@@ -146,7 +177,13 @@ async fn do_add(state: &mut State, name: String, config: ProcessConfig, start_no
     state.save_config()
 }
 
-async fn do_update(state: &mut State, name: &str, config: ProcessConfig, new_name: Option<String>, force_restart: bool) -> Result<()> {
+async fn do_update(
+    state: &mut State,
+    name: &str,
+    config: ProcessConfig,
+    new_name: Option<String>,
+    force_restart: bool,
+) -> Result<()> {
     if !state.processes.contains_key(name) {
         return Err(GuguError::ProcessNotFound(name.to_string()));
     }
@@ -157,10 +194,19 @@ async fn do_update(state: &mut State, name: &str, config: ProcessConfig, new_nam
 
     if needs_restart && was_running {
         // SAFETY: 上方已验证 name 存在于 processes
-        state.processes.get_mut(name).expect("已验证存在").stop().await?;
+        state
+            .processes
+            .get_mut(name)
+            .expect("已验证存在")
+            .stop()
+            .await?;
     }
     // SAFETY: 同上
-    *state.processes.get_mut(name).expect("已验证存在").config_mut() = config;
+    *state
+        .processes
+        .get_mut(name)
+        .expect("已验证存在")
+        .config_mut() = config;
 
     if let Some(ref new) = new_name {
         if new != name {
@@ -203,13 +249,17 @@ async fn do_clear_logs(state: &mut State, name: &str) -> Result<()> {
 }
 
 async fn do_get_logs(state: &mut State, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
-    let proc = state.processes.get(name)
+    let proc = state
+        .processes
+        .get(name)
         .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
     Ok(proc.logs(lines).await)
 }
 
 fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntry>> {
-    let proc = state.processes.get(name)
+    let proc = state
+        .processes
+        .get(name)
         .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
     Ok(proc.subscribe_logs())
 }
@@ -221,8 +271,12 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
     state.config_dir = config_dir.clone();
     state.log_base = log_base.clone();
 
-    let to_remove: Vec<String> = state.processes.keys()
-        .filter(|k| !new_config.processes.contains_key(*k)).cloned().collect();
+    let to_remove: Vec<String> = state
+        .processes
+        .keys()
+        .filter(|k| !new_config.processes.contains_key(*k))
+        .cloned()
+        .collect();
     for name in &to_remove {
         if let Some(proc) = state.processes.get_mut(name) {
             if proc.is_running() {
@@ -263,7 +317,9 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
 }
 
 async fn do_reload_from_file(state: &mut State) -> Result<()> {
-    let path = state.config_path.clone()
+    let path = state
+        .config_path
+        .clone()
         .ok_or_else(|| GuguError::ConfigError("未配置配置文件路径".into()))?;
     let config = AppConfig::load(&path)?;
     do_reload(state, &config).await

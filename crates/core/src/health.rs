@@ -19,14 +19,12 @@ pub async fn check_health(config: &HealthCheckConfig) -> bool {
                 .map(|r| r.is_ok())
                 .unwrap_or(false)
         }
-        crate::config::HealthCheckType::Http { url } => {
-            get_http_client()
-                .get(url)
-                .timeout(timeout)
-                .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false)
-        }
+        crate::config::HealthCheckType::Http { url } => get_http_client()
+            .get(url)
+            .timeout(timeout)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false),
     }
 }

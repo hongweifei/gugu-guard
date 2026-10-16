@@ -33,17 +33,28 @@ fn init_logging(log_base: &Path) -> Option<WorkerGuard> {
         Ok(appender) => {
             let (nb, guard) = tracing_appender::non_blocking(appender);
             worker_guard = Some(guard);
-            Some(tracing_subscriber::fmt::layer().with_writer(nb).with_ansi(false))
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(nb)
+                    .with_ansi(false),
+            )
         }
         Err(e) => {
-            eprintln!("初始化文件日志失败 ({}): {e}，仅按现有方式输出", log_base.display());
+            eprintln!(
+                "初始化文件日志失败 ({}): {e}，仅按现有方式输出",
+                log_base.display()
+            );
             None
         }
     };
-    let console = std::io::stdout().is_terminal()
+    let console = std::io::stdout()
+        .is_terminal()
         .then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stdout));
 
-    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer).with(console);
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .with(console);
     if tracing::subscriber::set_global_default(subscriber).is_err() {
         return None;
     }
@@ -144,7 +155,9 @@ fn is_pid_running(pid: u32) -> bool {
         }
     }
     #[cfg(unix)]
-    { std::path::Path::new(&format!("/proc/{pid}")).exists() }
+    {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
 }
 
 fn write_pid_file(path: &Path) -> Result<()> {
@@ -160,12 +173,18 @@ fn write_pid_file(path: &Path) -> Result<()> {
         }
     }
     std::fs::write(path, current_pid().to_string())?;
-    tracing::debug!("PID 文件已写入: {} (PID: {})", path.display(), current_pid());
+    tracing::debug!(
+        "PID 文件已写入: {} (PID: {})",
+        path.display(),
+        current_pid()
+    );
     Ok(())
 }
 
 fn remove_pid_file(path: &Path) {
-    if path.exists() { let _ = std::fs::remove_file(path); }
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result<CoreHandles> {
@@ -179,7 +198,10 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
     let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let log_base = config.daemon.log_dir.as_ref()
+    let log_base = config
+        .daemon
+        .log_dir
+        .as_ref()
         .map(|d| gugu_core::config::resolve_relative_path(d, &config_dir))
         .unwrap_or_else(|| config_dir.clone());
     let log_guard = init_logging(&log_base);
@@ -198,7 +220,10 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .or_else(|| std::env::var("GUGU_API_KEY").ok());
 
     tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
-    tracing::info!("配置文件: {}", gugu_core::config::canonicalize_clean(config_path).display());
+    tracing::info!(
+        "配置文件: {}",
+        gugu_core::config::canonicalize_clean(config_path).display()
+    );
     tracing::info!("进程 PID: {}", current_pid());
 
     if api_key.is_some() {
@@ -227,7 +252,9 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
             server_cors_origins,
             shutdown_rx,
             Some(api_shutdown_tx),
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Web 服务错误: {e}");
         }
     });

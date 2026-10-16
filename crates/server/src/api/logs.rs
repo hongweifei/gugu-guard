@@ -10,8 +10,8 @@ use gugu_core::process::LogStream;
 
 use crate::state::AppState;
 
-use super::types::{ApiError, LogQuery};
 use super::api_res;
+use super::types::{ApiError, LogQuery};
 
 pub(super) async fn get_logs(
     State(state): State<AppState>,
@@ -20,11 +20,7 @@ pub(super) async fn get_logs(
 ) -> Response {
     match state.manager.get_process_logs(&name, query.lines).await {
         Ok(logs) => Json(logs).into_response(),
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new(e.to_string())),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }
 
@@ -66,10 +62,6 @@ pub(super) async fn download_logs(
             )
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new(e.to_string())),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(ApiError::new(e.to_string()))).into_response(),
     }
 }

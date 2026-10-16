@@ -1,9 +1,4 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, response::IntoResponse, routing::get, Router};
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -116,7 +111,11 @@ async fn subscribe_all(state: &AppState) -> LogRx {
 }
 
 /// 根据当前进程名列表更新日志订阅。
-async fn update_subscriptions(state: &AppState, current_rx: LogRx, current_names: &[String]) -> LogRx {
+async fn update_subscriptions(
+    state: &AppState,
+    current_rx: LogRx,
+    current_names: &[String],
+) -> LogRx {
     let mut new_rx = Vec::with_capacity(current_names.len());
     for (name, rx) in current_rx.into_iter() {
         if current_names.contains(&name) {
@@ -146,7 +145,9 @@ fn drain_log_entries(log_rx: &mut LogRx, buf: &mut Vec<gugu_core::process::LogEn
                 Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     tracing::debug!("[{}] 日志广播落后 {} 条，已跳过", name, n);
                 }
-                Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => break,
             }
         }
     }

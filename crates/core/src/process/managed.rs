@@ -95,7 +95,10 @@ impl ManagedProcess {
 
     #[must_use]
     pub fn is_running(&self) -> bool {
-        matches!(self.status, ProcessStatus::Running | ProcessStatus::Starting)
+        matches!(
+            self.status,
+            ProcessStatus::Running | ProcessStatus::Starting
+        )
     }
 
     pub fn abort_log_tasks(&mut self) {
@@ -172,7 +175,11 @@ impl ManagedProcess {
             return (0, false);
         }
         self.health_failures += 1;
-        let threshold = self.config.health_check.as_ref().map_or(1, |hc| hc.fail_threshold);
+        let threshold = self
+            .config
+            .health_check
+            .as_ref()
+            .map_or(1, |hc| hc.fail_threshold);
         (self.health_failures, self.health_failures >= threshold)
     }
 
@@ -225,7 +232,10 @@ impl ManagedProcess {
             let (exe, mut argv) = split_command_words(&self.config.command);
             if exe.is_empty() {
                 self.status = ProcessStatus::Failed("command 为空，无法启动".into());
-                return Err(GuguError::StartFailed(self.name.clone(), "command 为空".into()));
+                return Err(GuguError::StartFailed(
+                    self.name.clone(),
+                    "command 为空".into(),
+                ));
             }
             argv.extend(self.config.args.iter().cloned());
             #[cfg(windows)]
@@ -276,7 +286,9 @@ impl ManagedProcess {
                                 if let Err(e) = job.assign_process(pid) {
                                     tracing::warn!(
                                         "[{}] 无法将进程 {} 分配到 Job Object: {}",
-                                        self.name, pid, e
+                                        self.name,
+                                        pid,
+                                        e
                                     );
                                 }
                             }
@@ -298,7 +310,16 @@ impl ManagedProcess {
                     let buffer = self.stdout_lines.clone();
                     let log_tx = self.log_tx.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stdout, log_file, buffer, log_tx, LogStream::Stdout, &name, max_log_size).await;
+                        read_stream(
+                            stdout,
+                            log_file,
+                            buffer,
+                            log_tx,
+                            LogStream::Stdout,
+                            &name,
+                            max_log_size,
+                        )
+                        .await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -309,7 +330,16 @@ impl ManagedProcess {
                     let buffer = self.stderr_lines.clone();
                     let log_tx = self.log_tx.clone();
                     let handle = tokio::spawn(async move {
-                        read_stream(stderr, log_file, buffer, log_tx, LogStream::Stderr, &name, max_log_size).await;
+                        read_stream(
+                            stderr,
+                            log_file,
+                            buffer,
+                            log_tx,
+                            LogStream::Stderr,
+                            &name,
+                            max_log_size,
+                        )
+                        .await;
                     });
                     self.log_tasks.push(handle);
                 }
@@ -368,11 +398,7 @@ impl ManagedProcess {
             let timeout = std::time::Duration::from_secs(timeout_secs);
             if let Ok(Ok(status)) = tokio::time::timeout(timeout, child.wait()).await {
                 stopped_code = Some(status.code());
-                tracing::info!(
-                    "[{}] 进程已停止 (退出码: {:?})",
-                    name,
-                    status.code()
-                );
+                tracing::info!("[{}] 进程已停止 (退出码: {:?})", name, status.code());
             } else {
                 // Windows: Job Object 已经终止了进程树，force_kill 作为兜底
                 force_kill(child).await;
@@ -411,11 +437,7 @@ impl ManagedProcess {
         if let Some(ref mut child) = self.child {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    tracing::info!(
-                        "[{}] 进程已退出 (退出码: {:?})",
-                        self.name,
-                        status.code()
-                    );
+                    tracing::info!("[{}] 进程已退出 (退出码: {:?})", self.name, status.code());
                     self.record_exit(status.code());
                     self.usage = None;
                     self.abort_log_tasks();

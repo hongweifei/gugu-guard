@@ -30,22 +30,43 @@ pub fn routes() -> Router<AppState> {
                 .put(processes::update_process)
                 .delete(processes::delete_process),
         )
-        .route("/api/v1/processes/{name}/config", get(processes::get_process_config))
-        .route("/api/v1/processes/{name}/start", post(processes::start_process))
-        .route("/api/v1/processes/{name}/stop", post(processes::stop_process))
-        .route("/api/v1/processes/{name}/restart", post(processes::restart_process))
+        .route(
+            "/api/v1/processes/{name}/config",
+            get(processes::get_process_config),
+        )
+        .route(
+            "/api/v1/processes/{name}/start",
+            post(processes::start_process),
+        )
+        .route(
+            "/api/v1/processes/{name}/stop",
+            post(processes::stop_process),
+        )
+        .route(
+            "/api/v1/processes/{name}/restart",
+            post(processes::restart_process),
+        )
         .route(
             "/api/v1/processes/{name}/logs",
             get(logs::get_logs).delete(logs::clear_logs),
         )
-        .route("/api/v1/processes/{name}/logs/download", get(logs::download_logs))
-        .route("/api/v1/processes/{name}/health", post(processes::check_health))
+        .route(
+            "/api/v1/processes/{name}/logs/download",
+            get(logs::download_logs),
+        )
+        .route(
+            "/api/v1/processes/{name}/health",
+            post(processes::check_health),
+        )
         .route("/api/v1/stats", get(misc::get_stats))
         .route("/api/v1/groups", get(groups::list_groups))
         .route("/api/v1/groups/{group}", get(groups::get_group))
         .route("/api/v1/groups/{group}/start", post(groups::start_group))
         .route("/api/v1/groups/{group}/stop", post(groups::stop_group))
-        .route("/api/v1/groups/{group}/restart", post(groups::restart_group))
+        .route(
+            "/api/v1/groups/{group}/restart",
+            post(groups::restart_group),
+        )
         .route("/api/v1/fs/browse", get(fs::browse_fs))
         .route("/api/v1/reload", post(misc::reload_config))
         .route("/api/v1/shutdown", post(misc::shutdown))

@@ -56,8 +56,7 @@ pub(crate) fn uninstall_service(mode: &str) -> Result<()> {
 }
 
 fn install_boot_task(config_path: &Path) -> Result<()> {
-    let exe = std::env::current_exe()
-        .context("无法获取当前可执行文件路径")?;
+    let exe = std::env::current_exe().context("无法获取当前可执行文件路径")?;
     let config_abs = gugu_core::config::canonicalize_clean(config_path);
 
     #[cfg(windows)]
@@ -67,11 +66,16 @@ fn install_boot_task(config_path: &Path) -> Result<()> {
         let status = std::process::Command::new("schtasks")
             .args([
                 "/create",
-                "/tn", SERVICE_NAME,
-                "/tr", &tr,
-                "/sc", "onstart",
-                "/ru", "SYSTEM",
-                "/rl", "HIGHEST",
+                "/tn",
+                SERVICE_NAME,
+                "/tr",
+                &tr,
+                "/sc",
+                "onstart",
+                "/ru",
+                "SYSTEM",
+                "/rl",
+                "HIGHEST",
                 "/f",
             ])
             .status()
@@ -159,7 +163,11 @@ fn systemctl(args: &[&str], fatal: bool) -> Result<()> {
         .status()
         .with_context(|| format!("无法执行 systemctl {}", args.join(" ")))?;
     if fatal && !status.success() {
-        anyhow::bail!("systemctl {} 失败 (退出码 {:?})", args.join(" "), status.code());
+        anyhow::bail!(
+            "systemctl {} 失败 (退出码 {:?})",
+            args.join(" "),
+            status.code()
+        );
     }
     Ok(())
 }

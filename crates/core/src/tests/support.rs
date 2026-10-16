@@ -31,8 +31,7 @@ pub(crate) fn tempdir() -> TempDir {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir()
-        .join(format!("gugu-test-{}-{nanos}-{seq}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("gugu-test-{}-{nanos}-{seq}", std::process::id()));
     std::fs::create_dir_all(&path).expect("创建测试临时目录失败");
     TempDir { path }
 }

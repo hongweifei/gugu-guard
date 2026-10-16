@@ -33,7 +33,12 @@ pub(super) struct StatsResponse {
 
 impl StatsResponse {
     pub(super) fn new(total: usize, running: usize, stopped: usize, failed: usize) -> Self {
-        Self { total, running, stopped, failed }
+        Self {
+            total,
+            running,
+            stopped,
+            failed,
+        }
     }
 }
 
@@ -46,7 +51,11 @@ pub(super) struct BrowseResponse {
 
 impl BrowseResponse {
     pub(super) fn new(path: String, parent: Option<String>, entries: Vec<FsEntry>) -> Self {
-        Self { path, parent, entries }
+        Self {
+            path,
+            parent,
+            entries,
+        }
     }
 }
 

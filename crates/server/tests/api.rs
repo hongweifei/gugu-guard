@@ -35,8 +35,10 @@ fn tempdir() -> TempDir {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir()
-        .join(format!("gugu-api-test-{}-{nanos}-{seq}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "gugu-api-test-{}-{nanos}-{seq}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&path).expect("创建测试临时目录失败");
     TempDir { path }
 }
@@ -100,7 +102,11 @@ fn create_process_body(command: &str, start_now: bool) -> serde_json::Value {
     create_process_body_with_group(command, start_now, None)
 }
 
-fn create_process_body_with_group(command: &str, start_now: bool, group: Option<&str>) -> serde_json::Value {
+fn create_process_body_with_group(
+    command: &str,
+    start_now: bool,
+    group: Option<&str>,
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "command": command,
         "auto_start": false,
@@ -113,14 +119,9 @@ fn create_process_body_with_group(command: &str, start_now: bool, group: Option<
 }
 
 async fn send_get(app: axum::Router, uri: &str) -> axum::http::Response<Body> {
-    app.oneshot(
-        Request::builder()
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await
-    .unwrap()
+    app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
 }
 
 async fn send_post(app: axum::Router, uri: &str) -> axum::http::Response<Body> {
@@ -147,7 +148,12 @@ async fn send_delete(app: axum::Router, uri: &str) -> axum::http::Response<Body>
     .unwrap()
 }
 
-async fn create_process(app: axum::Router, name: &str, command: &str, start_now: bool) -> axum::http::Response<Body> {
+async fn create_process(
+    app: axum::Router,
+    name: &str,
+    command: &str,
+    start_now: bool,
+) -> axum::http::Response<Body> {
     let body = create_process_body(command, start_now);
     app.oneshot(
         Request::builder()
@@ -181,7 +187,11 @@ mod get_process {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_get(make_app(), "/api/v1/processes/nonexistent").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -242,7 +252,11 @@ mod start_process {
     #[tokio::test]
     async fn returns_bad_request_for_unknown() {
         let resp = send_post(make_app(), "/api/v1/processes/nonexistent/start").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "不存在的进程应返回 400");
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "不存在的进程应返回 400"
+        );
     }
 }
 
@@ -254,7 +268,11 @@ mod stop_process {
     #[tokio::test]
     async fn returns_bad_request_for_unknown() {
         let resp = send_post(make_app(), "/api/v1/processes/nonexistent/stop").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "不存在的进程应返回 400");
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "不存在的进程应返回 400"
+        );
     }
 }
 
@@ -266,7 +284,11 @@ mod restart_process {
     #[tokio::test]
     async fn returns_bad_request_for_unknown() {
         let resp = send_post(make_app(), "/api/v1/processes/nonexistent/restart").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "不存在的进程应返回 400");
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "不存在的进程应返回 400"
+        );
     }
 }
 
@@ -278,7 +300,11 @@ mod delete_process {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_delete(make_app(), "/api/v1/processes/nonexistent").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -290,7 +316,11 @@ mod get_process_config {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_get(make_app(), "/api/v1/processes/nonexistent/config").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -302,7 +332,11 @@ mod get_logs {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_get(make_app(), "/api/v1/processes/nonexistent/logs?lines=50").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -314,7 +348,11 @@ mod clear_logs {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_delete(make_app(), "/api/v1/processes/nonexistent/logs").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -326,7 +364,11 @@ mod download_logs {
     #[tokio::test]
     async fn returns_not_found_for_unknown() {
         let resp = send_get(make_app(), "/api/v1/processes/nonexistent/logs/download").await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的进程应返回 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "不存在的进程应返回 404"
+        );
     }
 }
 
@@ -444,7 +486,11 @@ mod auth_middleware {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "错误 Bearer 应返回 401");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "错误 Bearer 应返回 401"
+        );
     }
 
     #[tokio::test]
@@ -469,8 +515,16 @@ mod fs_browse {
 
     #[tokio::test]
     async fn returns_bad_request_for_nonexistent_path() {
-        let resp = send_get(make_app(), "/api/v1/fs/browse?path=/nonexistent/path/that/does/not/exist").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "不存在的路径应返回 400");
+        let resp = send_get(
+            make_app(),
+            "/api/v1/fs/browse?path=/nonexistent/path/that/does/not/exist",
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "不存在的路径应返回 400"
+        );
     }
 }
 
@@ -489,12 +543,16 @@ mod metrics_endpoint {
     #[tokio::test]
     async fn contains_gugu_processes_metric() {
         let resp = send_get(make_app(), "/metrics").await;
-        let body = axum::body::to_bytes(resp.into_body(), 4096)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains("gugu_processes "), "/metrics 应包含 gugu_processes 聚合指标");
-        assert!(text.contains("gugu_processes_running"), "/metrics 应包含 gugu_processes_running");
+        assert!(
+            text.contains("gugu_processes "),
+            "/metrics 应包含 gugu_processes 聚合指标"
+        );
+        assert!(
+            text.contains("gugu_processes_running"),
+            "/metrics 应包含 gugu_processes_running"
+        );
         assert!(
             text.contains("gugu_process_status") || text.contains("gugu_processes 0"),
             "/metrics 应包含 gugu_process_status 或显示 0 个进程"
@@ -521,17 +579,29 @@ mod list_groups {
         let dir = tempdir();
         let app = make_app_with_dir(dir.path());
         let body = create_process_body_with_group("echo a", false, Some("web"));
-        app.clone().oneshot(
-            Request::builder().method("POST").uri("/api/v1/processes/svc-a")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
-        ).await.unwrap();
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/processes/svc-a")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         let body = create_process_body_with_group("echo b", false, Some("web"));
-        app.clone().oneshot(
-            Request::builder().method("POST").uri("/api/v1/processes/svc-b")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
-        ).await.unwrap();
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/processes/svc-b")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         let resp = send_get(app, "/api/v1/groups").await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -558,18 +628,28 @@ mod get_group {
         let dir = tempdir();
         let app = make_app_with_dir(dir.path());
         let body = create_process_body_with_group("echo x", false, Some("api"));
-        app.clone().oneshot(
-            Request::builder().method("POST").uri("/api/v1/processes/my-api")
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_string(&body).unwrap())).unwrap(),
-        ).await.unwrap();
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/processes/my-api")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         let resp = send_get(app, "/api/v1/groups/api").await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let group: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(group["name"], "api");
-        assert!(group["processes"].as_array().unwrap().iter().any(|p| p == "my-api"));
+        assert!(group["processes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "my-api"));
     }
 }
 

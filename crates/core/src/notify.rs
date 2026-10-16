@@ -100,7 +100,10 @@ mod tests {
         assert_eq!(body["event"], "process_down");
         assert_eq!(body["process"], "web");
         assert_eq!(body["source"], "gugu-guard");
-        assert!(body["time"].as_str().is_some_and(|t| t.contains('T')), "应带 RFC3339 时间");
+        assert!(
+            body["time"].as_str().is_some_and(|t| t.contains('T')),
+            "应带 RFC3339 时间"
+        );
     }
 
     #[test]

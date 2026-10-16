@@ -23,7 +23,10 @@ pub fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Ve
                 tracing::warn!("[{}] 依赖的 '{}' 不存在，忽略", name, dep);
                 continue;
             }
-            dependents.entry(dep.as_str()).or_default().push(name.as_str());
+            dependents
+                .entry(dep.as_str())
+                .or_default()
+                .push(name.as_str());
             // SAFETY: 所有 processes 的 key 已在上方初始化到 in_degree
             *in_degree.get_mut(name.as_str()).unwrap() += 1;
         }
@@ -52,13 +55,15 @@ pub fn topological_sort(processes: &HashMap<String, ProcessConfig>) -> Result<Ve
 
     if result.len() != processes.len() {
         let result_set: HashSet<&str> = result.iter().map(String::as_str).collect();
-        let remaining: Vec<&str> = processes.keys()
+        let remaining: Vec<&str> = processes
+            .keys()
             .filter(|k| !result_set.contains(k.as_str()))
             .map(String::as_str)
             .collect();
-        return Err(GuguError::CyclicDependency(
-            format!("检测到循环依赖: {}", remaining.join(", "))
-        ));
+        return Err(GuguError::CyclicDependency(format!(
+            "检测到循环依赖: {}",
+            remaining.join(", ")
+        )));
     }
 
     Ok(result)

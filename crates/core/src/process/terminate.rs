@@ -5,7 +5,12 @@ use tokio::process::Child;
 #[cfg(windows)]
 use super::command::CREATE_NO_WINDOW;
 
-pub(super) async fn run_stop_command(name: &str, stop_cmd: &str, working_dir: Option<&std::path::Path>, env: &std::collections::HashMap<String, String>) {
+pub(super) async fn run_stop_command(
+    name: &str,
+    stop_cmd: &str,
+    working_dir: Option<&std::path::Path>,
+    env: &std::collections::HashMap<String, String>,
+) {
     let mut cmd;
     #[cfg(windows)]
     {
@@ -67,7 +72,12 @@ pub(super) async fn force_kill(child: &mut Child) {
     {
         // force_kill 是兜底，直接用 taskkill /F 确保进程终止
         let _ = tokio::process::Command::new("taskkill")
-            .args(["/PID", &child.id().unwrap_or_default().to_string(), "/T", "/F"])
+            .args([
+                "/PID",
+                &child.id().unwrap_or_default().to_string(),
+                "/T",
+                "/F",
+            ])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

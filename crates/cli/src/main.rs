@@ -6,14 +6,14 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-mod windows_service;
 mod check;
 mod client;
 mod daemon;
 mod install;
 mod lifecycle;
 mod service;
+#[cfg(windows)]
+mod windows_service;
 
 #[derive(Parser)]
 #[command(name = "gugu", about = "咕咕鸽进程守护 - 跨平台进程管理工具", version)]
@@ -189,12 +189,10 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
 
     #[cfg(unix)]
     {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        ).expect("无法注册 SIGTERM 处理器");
-        let mut sighup = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::hangup()
-        ).expect("无法注册 SIGHUP 处理器");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("无法注册 SIGTERM 处理器");
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("无法注册 SIGHUP 处理器");
 
         loop {
             tokio::select! {

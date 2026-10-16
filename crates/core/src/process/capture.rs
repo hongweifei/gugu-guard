@@ -71,7 +71,11 @@ pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 line_count += 1;
                 if max_bytes > 0 && line_count.is_multiple_of(256) {
                     let should_rotate = match file.as_ref() {
-                        Some(f) => f.metadata().await.map(|m| m.len() > max_bytes).unwrap_or(false),
+                        Some(f) => f
+                            .metadata()
+                            .await
+                            .map(|m| m.len() > max_bytes)
+                            .unwrap_or(false),
                         None => false,
                     };
                     if should_rotate {
@@ -135,8 +139,13 @@ fn stream_type(stream: &LogStream) -> &'static str {
 }
 
 fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
-    let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy()));
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()));
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     match ext {
         Some(ext) => parent.join(format!("{stem}.{n}{ext}")),

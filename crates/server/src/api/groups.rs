@@ -10,24 +10,24 @@ use gugu_core::process::ProcessInfo;
 
 use crate::state::AppState;
 
-use super::types::{ApiError, BatchResult, BatchResponse, GroupInfo};
+use super::types::{ApiError, BatchResponse, BatchResult, GroupInfo};
 
 fn group_members<'a>(processes: &'a [ProcessInfo], group: &str) -> Vec<&'a ProcessInfo> {
-    processes.iter().filter(|p| p.group.as_deref() == Some(group)).collect()
+    processes
+        .iter()
+        .filter(|p| p.group.as_deref() == Some(group))
+        .collect()
 }
 
 /// 组不存在（无成员）时的统一响应。
 fn group_not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiError::new("进程组未找到")),
-    )
-        .into_response()
+    (StatusCode::NOT_FOUND, Json(ApiError::new("进程组未找到"))).into_response()
 }
 
 pub(super) async fn list_groups(State(state): State<AppState>) -> impl IntoResponse {
     let processes = state.manager.list_processes();
-    let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for p in &processes {
         if let Some(ref g) = p.group {
             groups.entry(g.clone()).or_default().push(p.name.clone());
@@ -58,7 +58,10 @@ pub(super) async fn start_group(
     Path(group): Path<String>,
 ) -> Response {
     let processes = state.manager.list_processes();
-    let members: Vec<String> = group_members(&processes, &group).iter().map(|p| p.name.clone()).collect();
+    let members: Vec<String> = group_members(&processes, &group)
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     if members.is_empty() {
         return group_not_found();
     }
@@ -67,7 +70,11 @@ pub(super) async fn start_group(
         let outcome = state.manager.start_process(&name).await;
         results.push(BatchResult::new(name, outcome));
     }
-    Json(BatchResponse::new(format!("进程组 '{group}' 启动完成"), results)).into_response()
+    Json(BatchResponse::new(
+        format!("进程组 '{group}' 启动完成"),
+        results,
+    ))
+    .into_response()
 }
 
 pub(super) async fn stop_group(
@@ -76,7 +83,10 @@ pub(super) async fn stop_group(
 ) -> Response {
     let processes = state.manager.list_processes();
     // 停止按成员逆序，与全局 stop_all 的依赖逆序语义一致
-    let mut members: Vec<String> = group_members(&processes, &group).iter().map(|p| p.name.clone()).collect();
+    let mut members: Vec<String> = group_members(&processes, &group)
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     if members.is_empty() {
         return group_not_found();
     }
@@ -86,7 +96,11 @@ pub(super) async fn stop_group(
         let outcome = state.manager.stop_process(&name).await;
         results.push(BatchResult::new(name, outcome));
     }
-    Json(BatchResponse::new(format!("进程组 '{group}' 停止完成"), results)).into_response()
+    Json(BatchResponse::new(
+        format!("进程组 '{group}' 停止完成"),
+        results,
+    ))
+    .into_response()
 }
 
 pub(super) async fn restart_group(
@@ -94,7 +108,10 @@ pub(super) async fn restart_group(
     Path(group): Path<String>,
 ) -> Response {
     let processes = state.manager.list_processes();
-    let members: Vec<String> = group_members(&processes, &group).iter().map(|p| p.name.clone()).collect();
+    let members: Vec<String> = group_members(&processes, &group)
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     if members.is_empty() {
         return group_not_found();
     }
@@ -103,5 +120,9 @@ pub(super) async fn restart_group(
         let outcome = state.manager.restart_process(&name).await;
         results.push(BatchResult::new(name, outcome));
     }
-    Json(BatchResponse::new(format!("进程组 '{group}' 重启完成"), results)).into_response()
+    Json(BatchResponse::new(
+        format!("进程组 '{group}' 重启完成"),
+        results,
+    ))
+    .into_response()
 }

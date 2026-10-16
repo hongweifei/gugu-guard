@@ -57,7 +57,9 @@ pub(super) async fn shutdown(State(state): State<AppState>) -> Response {
         }
         None => (
             StatusCode::NOT_IMPLEMENTED,
-            Json(ApiError::new("当前进程未启用 API 停止（请直接终止进程或停止服务）")),
+            Json(ApiError::new(
+                "当前进程未启用 API 停止（请直接终止进程或停止服务）",
+            )),
         )
             .into_response(),
     }

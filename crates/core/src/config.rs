@@ -54,16 +54,19 @@ impl AppConfig {
         normalized.normalize_paths();
         let fresh = toml::to_string_pretty(&normalized)
             .map_err(|e| crate::error::GuguError::ConfigError(format!("序列化配置失败: {e}")))?;
-        let base: Option<DocumentMut> = std::fs::read_to_string(path).ok()
+        let base: Option<DocumentMut> = std::fs::read_to_string(path)
+            .ok()
             .and_then(|s| s.parse::<DocumentMut>().ok());
         let doc: DocumentMut = match base {
             Some(mut base_doc) => {
-                let fresh_doc = fresh.parse::<DocumentMut>()
-                    .map_err(|e| crate::error::GuguError::ConfigError(format!("解析配置失败: {e}")))?;
+                let fresh_doc = fresh.parse::<DocumentMut>().map_err(|e| {
+                    crate::error::GuguError::ConfigError(format!("解析配置失败: {e}"))
+                })?;
                 merge_tables(base_doc.as_table_mut(), fresh_doc.as_table());
                 base_doc
             }
-            None => fresh.parse::<DocumentMut>()
+            None => fresh
+                .parse::<DocumentMut>()
                 .map_err(|e| crate::error::GuguError::ConfigError(format!("解析配置失败: {e}")))?,
         };
         std::fs::write(path, doc.to_string())
@@ -359,7 +362,8 @@ pub fn select_config_path(
 /// 解析默认配置文件路径（绝对路径）。
 #[must_use]
 pub fn default_config_path() -> PathBuf {
-    let exe_dir = std::env::current_exe().ok()
+    let exe_dir = std::env::current_exe()
+        .ok()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     select_config_path(exe_dir.as_deref(), &cwd, &|p| p.is_file())
@@ -425,7 +429,8 @@ pub fn relativize_path(path: &std::path::Path, base: &std::path::Path) -> PathBu
 /// - 其余情况 (新增/类型变化)：整体替换
 /// - `dst` 中 `src` 不再包含的键：移除 (配置模型是唯一事实，删除的进程/字段不残留)
 fn merge_tables(dst: &mut Table, src: &Table) {
-    let stale: Vec<String> = dst.iter()
+    let stale: Vec<String> = dst
+        .iter()
         .filter(|(k, _)| src.get(k).is_none())
         .map(|(k, _)| k.to_string())
         .collect();
@@ -434,13 +439,17 @@ fn merge_tables(dst: &mut Table, src: &Table) {
     }
     for (k, sv) in src.iter() {
         if sv.is_table() && dst.get(k).is_some_and(Item::is_table) {
-            if let (Some(dt), Some(st)) = (dst.get_mut(k).and_then(|i| i.as_table_mut()), sv.as_table()) {
+            if let (Some(dt), Some(st)) =
+                (dst.get_mut(k).and_then(|i| i.as_table_mut()), sv.as_table())
+            {
                 merge_tables(dt, st);
             }
             continue;
         }
         let old_key_decor = dst.key(k).map(|key| key.leaf_decor().clone());
-        let old_val_decor = dst.get(k).and_then(|i| i.as_value())
+        let old_val_decor = dst
+            .get(k)
+            .and_then(|i| i.as_value())
             .map(|v| (v.decor().prefix().cloned(), v.decor().suffix().cloned()));
         let mut new_item = sv.clone();
         if let (Some((p, s)), Some(nv)) = (old_val_decor, new_item.as_value_mut()) {

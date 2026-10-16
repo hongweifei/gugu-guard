@@ -17,14 +17,20 @@ pub(crate) fn split_command_words(s: &str) -> (String, Vec<String>) {
     let mut has_token = false;
     for ch in s.chars() {
         match ch {
-            '"' => { in_quote = !in_quote; has_token = true; }
+            '"' => {
+                in_quote = !in_quote;
+                has_token = true;
+            }
             c if (c == ' ' || c == '\t') && !in_quote => {
                 if has_token {
                     tokens.push(std::mem::take(&mut cur));
                     has_token = false;
                 }
             }
-            c => { cur.push(c); has_token = true; }
+            c => {
+                cur.push(c);
+                has_token = true;
+            }
         }
     }
     if has_token {

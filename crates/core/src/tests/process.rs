@@ -175,10 +175,7 @@ mod managed_process_restart_count {
         assert!(!proc.should_auto_restart());
 
         proc.reset_crash_restart_count();
-        assert!(
-            proc.should_auto_restart(),
-            "重置后应允许重启"
-        );
+        assert!(proc.should_auto_restart(), "重置后应允许重启");
     }
 
     #[test]
@@ -186,10 +183,7 @@ mod managed_process_restart_count {
         let mut config = test_config();
         config.auto_restart = false;
         let proc = ManagedProcess::new("test".to_string(), config);
-        assert!(
-            !proc.should_auto_restart(),
-            "禁用自动重启时永不允许重启"
-        );
+        assert!(!proc.should_auto_restart(), "禁用自动重启时永不允许重启");
     }
 }
 
@@ -204,7 +198,10 @@ mod managed_process_info {
         config.command = "node".to_string();
         config.args = vec!["app.js".to_string()];
         config.health_check = Some(crate::config::HealthCheckConfig {
-            check_type: crate::config::HealthCheckType::Tcp { host: None, port: 3000 },
+            check_type: crate::config::HealthCheckType::Tcp {
+                host: None,
+                port: 3000,
+            },
             interval_secs: 10,
             timeout_secs: 3,
             fail_threshold: 3,
@@ -319,7 +316,10 @@ mod health_fail_threshold {
         let mut c = test_config();
         c.unhealthy_restart = true;
         c.health_check = Some(crate::config::HealthCheckConfig {
-            check_type: crate::config::HealthCheckType::Tcp { host: None, port: 80 },
+            check_type: crate::config::HealthCheckType::Tcp {
+                host: None,
+                port: 80,
+            },
             interval_secs: 10,
             timeout_secs: 3,
             fail_threshold: 3,
@@ -371,7 +371,10 @@ mod crash_count_decay {
         assert!(!p.maybe_decay_crash_count(30), "未达稳定时长不应衰减");
         assert!(p.should_auto_restart(), "崩溃 1 次且未到衰减点，计数应为 1");
         assert!(p.maybe_decay_crash_count(61), "达到稳定运行阈值应衰减");
-        assert!(!p.maybe_decay_crash_count(999), "计数已为 0，重复调用应返回 false");
+        assert!(
+            !p.maybe_decay_crash_count(999),
+            "计数已为 0，重复调用应返回 false"
+        );
     }
 
     #[test]
@@ -427,14 +430,21 @@ mod read_stream_non_utf8 {
         // 三行：有效 / 非法 UTF-8 (0xFF 0xFE) / 有效
         // 旧实现遇非法行 read_line 返回 Err 后 break，"last" 永远进不了缓冲
         let bytes: Vec<u8> = vec![
-            b'f', b'i', b'r', b's', b't', b'\n',
-            0xFF, 0xFE, b'\n',
-            b'l', b'a', b's', b't', b'\n',
+            b'f', b'i', b'r', b's', b't', b'\n', 0xFF, 0xFE, b'\n', b'l', b'a', b's', b't', b'\n',
         ];
         let reader = std::io::Cursor::new(bytes);
         let buffer: Arc<Mutex<VecDeque<LogEntry>>> = Arc::new(Mutex::new(VecDeque::new()));
         let (tx, _rx) = broadcast::channel(16);
-        read_stream(reader, None, buffer.clone(), tx, LogStream::Stdout, "t", None).await;
+        read_stream(
+            reader,
+            None,
+            buffer.clone(),
+            tx,
+            LogStream::Stdout,
+            "t",
+            None,
+        )
+        .await;
 
         let buf = buffer.lock().await;
         let lines: Vec<String> = buf.iter().map(|e| e.line.clone()).collect();

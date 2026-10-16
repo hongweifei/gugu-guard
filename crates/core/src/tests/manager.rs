@@ -79,11 +79,13 @@ mod topological_sort {
 
         let result = topological_sort(&map).unwrap();
         assert!(
-            result.iter().position(|n| n == "a").unwrap() < result.iter().position(|n| n == "b").unwrap(),
+            result.iter().position(|n| n == "a").unwrap()
+                < result.iter().position(|n| n == "b").unwrap(),
             "a 应排在 b 之前，实际顺序: {result:?}"
         );
         assert!(
-            result.iter().position(|n| n == "b").unwrap() < result.iter().position(|n| n == "c").unwrap(),
+            result.iter().position(|n| n == "b").unwrap()
+                < result.iter().position(|n| n == "c").unwrap(),
             "b 应排在 c 之前，实际顺序: {result:?}"
         );
     }
@@ -204,7 +206,9 @@ mod add_process {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
 
-        mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("test".to_string(), test_config(), false)
+            .await
+            .unwrap();
         let info = mgr.get_process_info("test");
         assert!(info.is_some(), "添加后应能查询到进程 'test'");
     }
@@ -213,9 +217,14 @@ mod add_process {
     async fn returns_error_on_duplicate_name() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("test".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
-        let err = mgr.add_process("test".to_string(), test_config(), false).await.unwrap_err();
+        let err = mgr
+            .add_process("test".to_string(), test_config(), false)
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("已存在"),
             "重复添加应报错已存在，实际: {err}"
@@ -228,11 +237,11 @@ mod add_process {
         let mut pc = test_config();
         pc.command = "   ".to_string();
 
-        let err = mgr.add_process("bad".to_string(), pc, false).await.unwrap_err();
-        assert!(
-            !err.to_string().is_empty(),
-            "空命令应返回有意义的错误信息"
-        );
+        let err = mgr
+            .add_process("bad".to_string(), pc, false)
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().is_empty(), "空命令应返回有意义的错误信息");
     }
 }
 
@@ -243,7 +252,9 @@ mod remove_process {
     async fn succeeds_and_removes_from_snapshot() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("test".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         mgr.remove_process("test").await.unwrap();
         assert!(mgr.get_process_info("test").is_none(), "移除后不应再查询到");
@@ -271,7 +282,9 @@ mod list_processes {
         let mgr = spawn_test_manager_with_path(dir.path());
 
         for name in &["a", "b", "c"] {
-            mgr.add_process(name.to_string(), test_config(), false).await.unwrap();
+            mgr.add_process(name.to_string(), test_config(), false)
+                .await
+                .unwrap();
         }
 
         let list = mgr.list_processes();
@@ -286,8 +299,12 @@ mod all_process_names {
     async fn returns_names_of_all_processes() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("x".to_string(), test_config(), false).await.unwrap();
-        mgr.add_process("y".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("x".to_string(), test_config(), false)
+            .await
+            .unwrap();
+        mgr.add_process("y".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let names = mgr.all_process_names();
         assert_eq!(names.len(), 2, "应有 2 个进程名");
@@ -305,7 +322,9 @@ mod snapshot {
         let mgr = spawn_test_manager_with_path(dir.path());
         assert!(mgr.list_processes().is_empty(), "初始应为空");
 
-        mgr.add_process("snap".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("snap".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let list = mgr.list_processes();
         assert_eq!(list.len(), 1, "添加后应有 1 个进程");
@@ -316,7 +335,9 @@ mod snapshot {
     async fn reflects_removed_process() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("rm".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("rm".to_string(), test_config(), false)
+            .await
+            .unwrap();
         assert!(mgr.get_process_info("rm").is_some());
 
         mgr.remove_process("rm").await.unwrap();
@@ -336,7 +357,9 @@ mod get_process_config {
         let mgr = spawn_test_manager_with_path(dir.path());
         let mut cfg = test_config();
         cfg.command = "python".to_string();
-        mgr.add_process("cfg".to_string(), cfg, false).await.unwrap();
+        mgr.add_process("cfg".to_string(), cfg, false)
+            .await
+            .unwrap();
 
         let fetched = mgr.get_process_config("cfg").await.unwrap().unwrap();
         assert_eq!(fetched.command, "python", "命令应为 'python'");
@@ -353,7 +376,9 @@ mod get_process_config {
     async fn returns_declared_paths_and_all_fields() {
         let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 [daemon]
 log_dir = "logs"
 
@@ -369,13 +394,20 @@ depends_on = ["db"]
 type = "tcp"
 port = 8080
 fail_threshold = 5
-"#)
+"#,
+        )
         .unwrap();
         let config = AppConfig::load(&path).unwrap();
         let mgr = crate::manager::start(&config, Some(path));
-        let cfg = mgr.get_process_config("web").await.unwrap().expect("应存在");
+        let cfg = mgr
+            .get_process_config("web")
+            .await
+            .unwrap()
+            .expect("应存在");
         assert_eq!(
-            cfg.stdout_log.as_ref().map(|p| p.to_string_lossy().replace('\\', "/")),
+            cfg.stdout_log
+                .as_ref()
+                .map(|p| p.to_string_lossy().replace('\\', "/")),
             Some("logs/web.log".to_string()),
             "应返回配置文件里的声明式相对路径，而非解析后的绝对路径"
         );
@@ -383,8 +415,16 @@ fail_threshold = 5
         let abs = dir.path().display().to_string().replace('\\', "/");
         assert!(!s.contains(&abs), "返回的配置不应泄漏本机绝对路径");
         assert_eq!(cfg.max_log_size_mb, Some(10), "max_log_size_mb 应完整返回");
-        assert_eq!(cfg.depends_on, vec!["db".to_string()], "depends_on 应完整返回");
-        assert_eq!(cfg.health_check.as_ref().unwrap().fail_threshold, 5, "fail_threshold 应完整返回");
+        assert_eq!(
+            cfg.depends_on,
+            vec!["db".to_string()],
+            "depends_on 应完整返回"
+        );
+        assert_eq!(
+            cfg.health_check.as_ref().unwrap().fail_threshold,
+            5,
+            "fail_threshold 应完整返回"
+        );
         mgr.shutdown();
     }
 }
@@ -396,7 +436,9 @@ mod clear_process_logs {
     async fn succeeds_for_existing_process() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("logs".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("logs".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         mgr.clear_process_logs("logs").await.unwrap();
     }
@@ -447,7 +489,9 @@ mod check_process_health {
     async fn returns_error_when_no_health_config() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("svc".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("svc".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let err = mgr.check_process_health("svc").await.unwrap_err();
         assert!(
@@ -474,7 +518,9 @@ mod reload_from_file {
     async fn reloads_processes_from_file() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("orig".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("orig".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let new_toml = r#"
 [processes.fresh]
@@ -497,7 +543,9 @@ mod reload_config {
     async fn replaces_all_processes() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("old".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("old".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let mut new_config = AppConfig::default();
         let mut cfg = test_config();
@@ -517,11 +565,15 @@ mod update_process {
     async fn updates_config_for_existing_process() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("upd".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("upd".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
         let mut new_cfg = test_config();
         new_cfg.command = "updated_cmd".to_string();
-        mgr.update_process("upd", new_cfg, None, false).await.unwrap();
+        mgr.update_process("upd", new_cfg, None, false)
+            .await
+            .unwrap();
 
         let info = mgr.get_process_info("upd").unwrap();
         assert_eq!(info.command, "updated_cmd", "命令应已更新");
@@ -530,7 +582,10 @@ mod update_process {
     #[tokio::test]
     async fn returns_error_for_nonexistent() {
         let mgr = spawn_test_manager();
-        let err = mgr.update_process("nope", test_config(), None, false).await.unwrap_err();
+        let err = mgr
+            .update_process("nope", test_config(), None, false)
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("nope"),
             "错误应包含进程名，实际: {err}"
@@ -541,9 +596,18 @@ mod update_process {
     async fn renames_process() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("old_name".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("old_name".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
-        mgr.update_process("old_name", test_config(), Some("new_name".to_string()), false).await.unwrap();
+        mgr.update_process(
+            "old_name",
+            test_config(),
+            Some("new_name".to_string()),
+            false,
+        )
+        .await
+        .unwrap();
 
         assert!(mgr.get_process_info("old_name").is_none(), "旧名应不存在");
         assert!(mgr.get_process_info("new_name").is_some(), "新名应存在");
@@ -553,10 +617,17 @@ mod update_process {
     async fn rejects_rename_to_existing_name() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("a".to_string(), test_config(), false).await.unwrap();
-        mgr.add_process("b".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("a".to_string(), test_config(), false)
+            .await
+            .unwrap();
+        mgr.add_process("b".to_string(), test_config(), false)
+            .await
+            .unwrap();
 
-        let err = mgr.update_process("a", test_config(), Some("b".to_string()), false).await.unwrap_err();
+        let err = mgr
+            .update_process("a", test_config(), Some("b".to_string()), false)
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("已存在"),
             "应报已存在，实际: {err}"
@@ -571,7 +642,9 @@ mod shutdown {
     async fn stops_actor_and_rejects_subsequent_commands() {
         let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
-        mgr.add_process("svc".to_string(), test_config(), false).await.unwrap();
+        mgr.add_process("svc".to_string(), test_config(), false)
+            .await
+            .unwrap();
         assert!(mgr.get_process_info("svc").is_some());
 
         mgr.shutdown();
@@ -593,7 +666,9 @@ mod save_fidelity {
     async fn add_process_preserves_comments_and_relative_paths() {
         let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
-        std::fs::write(&path, r#"# 顶部注释
+        std::fs::write(
+            &path,
+            r#"# 顶部注释
 [daemon]
 log_dir = "logs"  # 目录注释
 
@@ -602,7 +677,8 @@ command = "ping"
 args = ["127.0.0.1", "-n", "2"]
 auto_start = false
 stdout_log = "logs/web.log"  # 日志路径注释
-"#)
+"#,
+        )
         .unwrap();
 
         let config = AppConfig::load(&path).unwrap();
@@ -613,17 +689,13 @@ stdout_log = "logs/web.log"  # 日志路径注释
 
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("顶部注释"), "文件注释应保留");
-        assert!(saved.contains("日志路径注释"),
-            "进程字段注释应保留");
+        assert!(saved.contains("日志路径注释"), "进程字段注释应保留");
         assert!(
             saved.contains("\"logs/web.log\""),
             "相对日志路径应保持相对，不应被回写成绝对路径，实际:\n{saved}"
         );
         let abs_dir = dir.path().display().to_string().replace('\\', "/");
-        assert!(
-            !saved.contains(&abs_dir),
-            "不应把本机绝对路径写进配置"
-        );
+        assert!(!saved.contains(&abs_dir), "不应把本机绝对路径写进配置");
         mgr.shutdown();
     }
 }

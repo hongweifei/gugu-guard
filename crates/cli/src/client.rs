@@ -169,7 +169,11 @@ pub(crate) async fn run_client(command: &Commands, server_url: &str, api_key: Op
             print_api_response(resp).await?;
         }
 
-        Commands::Run | Commands::Install { .. } | Commands::Uninstall { .. } | Commands::Check => {
+        Commands::Run
+        | Commands::Install { .. }
+        | Commands::Uninstall { .. }
+        | Commands::Check
+        | Commands::Daemon { .. } => {
             unreachable!()
         }
     }

@@ -12,6 +12,7 @@ mod check;
 mod client;
 mod daemon;
 mod install;
+mod lifecycle;
 mod service;
 
 #[derive(Parser)]
@@ -59,6 +60,12 @@ enum Commands {
 
     #[command(about = "校验配置文件 (只读，不启动进程)")]
     Check,
+
+    #[command(about = "守护进程自身生命周期 (后台启动 / 优雅停止)")]
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
 
     #[command(about = "显示所有进程状态")]
     Status {
@@ -126,6 +133,15 @@ enum Commands {
     Reload,
 }
 
+#[derive(Subcommand)]
+enum DaemonAction {
+    #[command(about = "后台启动守护进程（分离运行，日志进文件）")]
+    Start,
+
+    #[command(about = "优雅停止守护进程（POST /api/v1/shutdown）")]
+    Stop,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -148,6 +164,12 @@ async fn main() -> Result<()> {
         Commands::Install { mode } => install::install_service(&config_path, mode),
         Commands::Uninstall { mode } => install::uninstall_service(mode),
         Commands::Check => check::run(&config_path),
+        Commands::Daemon { action } => match action {
+            DaemonAction::Start => lifecycle::start(&config_path).await,
+            DaemonAction::Stop => {
+                lifecycle::stop(&config_path, cli.server.as_deref(), cli.api_key.as_deref()).await
+            }
+        },
         _ => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;
@@ -158,7 +180,8 @@ async fn main() -> Result<()> {
 
 async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<()> {
     // 日志初始化 (控制台 + 文件) 统一在 daemon::run_core 内完成
-    let handles = daemon::run_core(config_path, cli_api_key).await?;
+    let mut handles = daemon::run_core(config_path, cli_api_key).await?;
+    let mut api_shutdown_rx = handles.api_shutdown_rx.take();
     #[cfg(unix)]
     let shared = handles.shared.clone();
     #[cfg(unix)]
@@ -183,6 +206,10 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                     tracing::info!("收到 SIGTERM");
                     break;
                 }
+                _ = wait_api_shutdown(&mut api_shutdown_rx) => {
+                    tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+                    break;
+                }
                 _ = sighup.recv() => {
                     tracing::info!("收到 SIGHUP，重新加载配置...");
                     let reload_config = match gugu_core::config::AppConfig::load(&config_path_owned) {
@@ -203,10 +230,27 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await.expect("无法注册 Ctrl+C 处理器");
-        tracing::info!("收到 Ctrl+C 信号");
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => {
+                r.expect("无法注册 Ctrl+C 处理器");
+                tracing::info!("收到 Ctrl+C 信号");
+            }
+            _ = wait_api_shutdown(&mut api_shutdown_rx) => {
+                tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+            }
+        }
     }
 
     daemon::graceful_shutdown(handles).await;
     Ok(())
+}
+
+/// 等待 `POST /api/v1/shutdown` 的停止信号；未接线时永不返回。
+async fn wait_api_shutdown(rx: &mut Option<tokio::sync::mpsc::Receiver<()>>) {
+    match rx {
+        Some(rx) => {
+            let _ = rx.recv().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
 }

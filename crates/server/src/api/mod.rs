@@ -48,6 +48,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/groups/{group}/restart", post(groups::restart_group))
         .route("/api/v1/fs/browse", get(fs::browse_fs))
         .route("/api/v1/reload", post(misc::reload_config))
+        .route("/api/v1/shutdown", post(misc::shutdown))
 }
 
 // ── 共享辅助 ──────────────────────────────────────────────

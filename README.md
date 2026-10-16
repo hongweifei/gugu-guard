@@ -143,7 +143,9 @@ curl -X POST http://localhost:9090/api/v1/reload
 ## CLI 用法
 
 ```bash
-gugu run                          # 启动守护进程
+gugu run                          # 启动守护进程 (前台)
+gugu daemon start                 # 后台启动守护进程 (分离运行，日志进文件)
+gugu daemon stop                  # 优雅停止守护进程 (停子进程 → 关服务 → 清 pid)
 gugu status                       # 查看所有进程状态
 gugu list                         # 列出已配置进程
 gugu start <name>                 # 启动进程
@@ -197,6 +199,7 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/stats` | 统计信息 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
 | POST | `/api/v1/reload` | 重新加载配置 |
+| POST | `/api/v1/shutdown` | 优雅停止守护进程（先停所有子进程） |
 | WS | `/api/v1/ws` | 实时状态推送 |
 
 > 设置 `api_key` 后，所有 API 请求需携带 `Authorization: Bearer <key>` 请求头，WebSocket 连接需添加 `?token=<key>` 查询参数。

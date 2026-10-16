@@ -44,8 +44,9 @@ pub async fn run_server(
     api_key: Option<String>,
     cors_origins: Vec<String>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    api_shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> anyhow::Result<()> {
-    let state = AppState::new(manager, api_key, cors_origins);
+    let state = AppState::new(manager, api_key, cors_origins).with_shutdown(api_shutdown_tx);
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()

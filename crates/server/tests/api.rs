@@ -71,7 +71,15 @@ fn spawn_app_with_shared(dir: &std::path::Path) -> (axum::Router, SharedManager)
 }
 
 fn build_router(shared: SharedManager, api_key: Option<String>) -> axum::Router {
-    let state = AppState::new(shared, api_key, Vec::new());
+    build_router_with_shutdown(shared, api_key, None)
+}
+
+fn build_router_with_shutdown(
+    shared: SharedManager,
+    api_key: Option<String>,
+    shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
+) -> axum::Router {
+    let state = AppState::new(shared, api_key, Vec::new()).with_shutdown(shutdown_tx);
     let cors_layer = tower_http::cors::CorsLayer::permissive();
 
     let protected = gugu_server::api::routes()
@@ -355,6 +363,28 @@ mod get_stats {
 }
 
 // ── POST /api/v1/reload ──────────────────────────────────────
+
+mod shutdown_endpoint {
+    use super::*;
+
+    #[tokio::test]
+    async fn signals_daemon_shutdown_when_wired() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let shared = gugu_core::manager::start(&AppConfig::default(), None);
+        let app = build_router_with_shutdown(shared, None, Some(tx));
+
+        let resp = send_post(app, "/api/v1/shutdown").await;
+        assert_eq!(resp.status(), StatusCode::OK, "接线时应返回 200");
+        assert!(rx.try_recv().is_ok(), "应真的发出停止信号");
+    }
+
+    #[tokio::test]
+    async fn reports_not_implemented_without_wiring() {
+        // 未注入信号通道时不许假装成功（否则调用方会一直等进程退出）
+        let resp = send_post(make_app(), "/api/v1/shutdown").await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+}
 
 mod reload_config {
     use super::*;

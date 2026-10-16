@@ -12,6 +12,8 @@ pub struct CoreHandles {
     pub pid_path: PathBuf,
     /// 文件日志的非阻塞写线程句柄，随 CoreHandles 存活。
     pub _log_guard: Option<WorkerGuard>,
+    /// `POST /api/v1/shutdown` 的停止信号接收端（由 CLI 的信号循环消费）。
+    pub api_shutdown_rx: Option<tokio::sync::mpsc::Receiver<()>>,
 }
 
 /// 初始化日志：控制台 (仅在终端) + 按天滚动的文件层。
@@ -210,6 +212,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .context(format!("解析地址失败: {addr_str}"))?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
     let server_shared = shared.clone();
     let server_api_key = api_key;
@@ -221,6 +224,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
             server_api_key,
             server_cors_origins,
             shutdown_rx,
+            Some(api_shutdown_tx),
         ).await {
             tracing::error!("Web 服务错误: {e}");
         }
@@ -232,6 +236,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         server_handle,
         pid_path: pid,
         _log_guard: log_guard,
+        api_shutdown_rx: Some(api_shutdown_rx),
     })
 }
 

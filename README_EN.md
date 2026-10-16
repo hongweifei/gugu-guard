@@ -143,7 +143,9 @@ curl -X POST http://localhost:9090/api/v1/reload
 ## CLI Usage
 
 ```bash
-gugu run                          # Start the daemon
+gugu run                          # Start the daemon (foreground)
+gugu daemon start                 # Start detached in background (logs to file)
+gugu daemon stop                  # Graceful stop (children → server → pid file)
 gugu status                       # Show process status
 gugu list                         # List configured processes
 gugu start <name>                 # Start a process
@@ -197,6 +199,7 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
 | POST | `/api/v1/reload` | Reload config |
+| POST | `/api/v1/shutdown` | Graceful daemon shutdown (stops all children first) |
 | WS | `/api/v1/ws` | Real-time status |
 
 > When `api_key` is set, all API requests require the `Authorization: Bearer <key>` header. WebSocket connections require `?token=<key>` query parameter.

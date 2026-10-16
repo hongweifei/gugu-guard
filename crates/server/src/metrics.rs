@@ -1,3 +1,9 @@
+//! `/metrics` 端点：自拼 Prometheus 文本格式（0.0.4）。
+//!
+//! 不引 `prometheus` crate —— 它经 protobuf 带来一整套只用到零头的传递依赖
+//! （protobuf / protobuf-support / thiserror 1 …），而我们只用几个 gauge，
+//! 文本格式本身是稳定且几十行就能写对的。
+
 use std::sync::Mutex;
 
 use axum::{
@@ -8,192 +14,142 @@ use axum::{
     Router,
 };
 use gugu_core::process::{ProcessInfo, ProcessStatus};
-use prometheus::{Encoder, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 
 use crate::state::AppState;
 
+/// 最近一次快照（update 时由 WebSocket 状态循环写入，render 时拼文本）。
+#[derive(Default)]
 pub struct Metrics {
-    registry: Registry,
-    processes_total: IntGauge,
-    processes_running: IntGauge,
-    processes_stopped: IntGauge,
-    processes_failed: IntGauge,
-    process_status: IntGaugeVec,
-    process_restarts: IntGaugeVec,
-    process_uptime: IntGaugeVec,
-    process_health: IntGaugeVec,
-    prev_names: Mutex<Vec<String>>,
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::new()
-    }
+    last: Mutex<Vec<ProcessInfo>>,
 }
 
 impl Metrics {
     pub fn new() -> Self {
-        let registry = Registry::new();
-
-        let processes_total = IntGauge::new(
-            "gugu_processes",
-            "Total number of managed processes",
-        )
-        .unwrap();
-        let processes_running = IntGauge::new(
-            "gugu_processes_running",
-            "Number of running processes",
-        )
-        .unwrap();
-        let processes_stopped = IntGauge::new(
-            "gugu_processes_stopped",
-            "Number of stopped processes",
-        )
-        .unwrap();
-        let processes_failed = IntGauge::new(
-            "gugu_processes_failed",
-            "Number of failed processes",
-        )
-        .unwrap();
-        let process_status = IntGaugeVec::new(
-            Opts::new(
-                "gugu_process_status",
-                "Process status: 1=running, 0=stopped, 2=starting, 3=restarting, 4=failed",
-            ),
-            &["process"],
-        )
-        .unwrap();
-        let process_restarts = IntGaugeVec::new(
-            Opts::new(
-                "gugu_process_restarts_total",
-                "Number of crash restarts for the process",
-            ),
-            &["process"],
-        )
-        .unwrap();
-        let process_uptime = IntGaugeVec::new(
-            Opts::new(
-                "gugu_process_uptime_seconds",
-                "Process uptime in seconds",
-            ),
-            &["process"],
-        )
-        .unwrap();
-        let process_health = IntGaugeVec::new(
-            Opts::new(
-                "gugu_process_health_status",
-                "Health check result: 1=healthy, 0=unhealthy",
-            ),
-            &["process"],
-        )
-        .unwrap();
-
-        registry
-            .register(Box::new(processes_total.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(processes_running.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(processes_stopped.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(processes_failed.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(process_status.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(process_restarts.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(process_uptime.clone()))
-            .unwrap();
-        registry
-            .register(Box::new(process_health.clone()))
-            .unwrap();
-
-        Self {
-            registry,
-            processes_total,
-            processes_running,
-            processes_stopped,
-            processes_failed,
-            process_status,
-            process_restarts,
-            process_uptime,
-            process_health,
-            prev_names: Mutex::new(Vec::new()),
-        }
+        Self { last: Mutex::new(Vec::new()) }
     }
 
     pub fn update(&self, processes: &[ProcessInfo]) {
-        let current_names: Vec<String> = processes.iter().map(|p| p.name.clone()).collect();
-
-        {
-            let prev = self.prev_names.lock().unwrap();
-            for name in prev.iter() {
-                if !current_names.contains(name) {
-                    let _ = self.process_status.remove_label_values(&[name]);
-                    let _ = self.process_restarts.remove_label_values(&[name]);
-                    let _ = self.process_uptime.remove_label_values(&[name]);
-                    let _ = self.process_health.remove_label_values(&[name]);
-                }
-            }
-        }
-
-        let mut running = 0i64;
-        let mut stopped = 0i64;
-        let mut failed = 0i64;
-
-        for p in processes {
-            let status_val = match &p.status {
-                ProcessStatus::Running => 1,
-                ProcessStatus::Starting => 2,
-                ProcessStatus::Restarting => 3,
-                ProcessStatus::Failed(_) => 4,
-                ProcessStatus::Stopped | _ => 0,
-            };
-
-            self.process_status
-                .with_label_values(&[&p.name])
-                .set(status_val);
-            self.process_restarts
-                .with_label_values(&[&p.name])
-                .set(p.restart_count as i64);
-            self.process_uptime
-                .with_label_values(&[&p.name])
-                .set(p.uptime_secs.unwrap_or(0));
-
-            if let Some(healthy) = p.healthy {
-                self.process_health
-                    .with_label_values(&[&p.name])
-                    .set(if healthy { 1 } else { 0 });
-            }
-
-            match &p.status {
-                ProcessStatus::Running => running += 1,
-                ProcessStatus::Stopped => stopped += 1,
-                ProcessStatus::Failed(_) => failed += 1,
-                _ => {}
-            }
-        }
-
-        self.processes_total.set(processes.len() as i64);
-        self.processes_running.set(running);
-        self.processes_stopped.set(stopped);
-        self.processes_failed.set(failed);
-
-        *self.prev_names.lock().unwrap() = current_names;
+        *self.last.lock().unwrap() = processes.to_vec();
     }
 
     pub fn render(&self) -> String {
-        let encoder = TextEncoder::new();
-        let metric_families = self.registry.gather();
-        let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).unwrap();
-        String::from_utf8(buffer).unwrap()
+        let processes = self.last.lock().unwrap();
+        render_exposition(&processes)
     }
+}
+
+fn status_value(status: &ProcessStatus) -> i64 {
+    match status {
+        ProcessStatus::Running => 1,
+        ProcessStatus::Starting => 2,
+        ProcessStatus::Restarting => 3,
+        ProcessStatus::Failed(_) => 4,
+        ProcessStatus::Stopped | _ => 0,
+    }
+}
+
+/// Prometheus 标签值转义：反斜杠、双引号、换行。
+fn escape_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn header(out: &mut String, name: &str, help: &str) {
+    out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
+}
+
+/// 输出按指标族名字典序，且与旧实现一致：无样本的族不输出。
+fn render_exposition(processes: &[ProcessInfo]) -> String {
+    let mut sorted: Vec<&ProcessInfo> = processes.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut running = 0i64;
+    let mut stopped = 0i64;
+    let mut failed = 0i64;
+    for p in &sorted {
+        match &p.status {
+            ProcessStatus::Running => running += 1,
+            ProcessStatus::Stopped => stopped += 1,
+            ProcessStatus::Failed(_) => failed += 1,
+            _ => {}
+        }
+    }
+
+    let mut out = String::with_capacity(1024);
+
+    if sorted.iter().any(|p| p.healthy.is_some()) {
+        header(
+            &mut out,
+            "gugu_process_health_status",
+            "Health check result: 1=healthy, 0=unhealthy",
+        );
+        for p in &sorted {
+            if let Some(healthy) = p.healthy {
+                out.push_str(&format!(
+                    "gugu_process_health_status{{process=\"{}\"}} {}\n",
+                    escape_label(&p.name),
+                    i64::from(healthy)
+                ));
+            }
+        }
+    }
+
+    if !sorted.is_empty() {
+        header(
+            &mut out,
+            "gugu_process_restarts_total",
+            "Number of crash restarts for the process",
+        );
+        for p in &sorted {
+            out.push_str(&format!(
+                "gugu_process_restarts_total{{process=\"{}\"}} {}\n",
+                escape_label(&p.name),
+                p.restart_count
+            ));
+        }
+
+        header(
+            &mut out,
+            "gugu_process_status",
+            "Process status: 1=running, 0=stopped, 2=starting, 3=restarting, 4=failed",
+        );
+        for p in &sorted {
+            out.push_str(&format!(
+                "gugu_process_status{{process=\"{}\"}} {}\n",
+                escape_label(&p.name),
+                status_value(&p.status)
+            ));
+        }
+
+        header(
+            &mut out,
+            "gugu_process_uptime_seconds",
+            "Process uptime in seconds",
+        );
+        for p in &sorted {
+            out.push_str(&format!(
+                "gugu_process_uptime_seconds{{process=\"{}\"}} {}\n",
+                escape_label(&p.name),
+                p.uptime_secs.unwrap_or(0)
+            ));
+        }
+    }
+
+    header(&mut out, "gugu_processes", "Total number of managed processes");
+    out.push_str(&format!("gugu_processes {}\n", sorted.len()));
+
+    header(&mut out, "gugu_processes_failed", "Number of failed processes");
+    out.push_str(&format!("gugu_processes_failed {failed}\n"));
+
+    header(&mut out, "gugu_processes_running", "Number of running processes");
+    out.push_str(&format!("gugu_processes_running {running}\n"));
+
+    header(&mut out, "gugu_processes_stopped", "Number of stopped processes");
+    out.push_str(&format!("gugu_processes_stopped {stopped}\n"));
+
+    out
 }
 
 pub fn routes() -> Router<AppState> {
@@ -209,4 +165,64 @@ async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
         output,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(name: &str, status: ProcessStatus) -> ProcessInfo {
+        ProcessInfo {
+            name: name.to_string(),
+            command: "cmd".to_string(),
+            args: Vec::new(),
+            status,
+            pid: None,
+            restart_count: 2,
+            auto_start: false,
+            auto_restart: false,
+            has_health_check: false,
+            unhealthy_restart: false,
+            healthy: None,
+            group: None,
+            started_at: None,
+            uptime_secs: Some(7),
+            recent_exits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn renders_aggregates_and_per_process_lines() {
+        let text = render_exposition(&[
+            info("b", ProcessStatus::Stopped),
+            info("a", ProcessStatus::Running),
+        ]);
+        assert!(text.contains("# TYPE gugu_processes gauge"), "{text}");
+        assert!(text.contains("gugu_processes 2"), "{text}");
+        assert!(text.contains("gugu_processes_running 1"), "{text}");
+        assert!(text.contains("gugu_processes_stopped 1"), "{text}");
+        assert!(text.contains("gugu_processes_failed 0"), "{text}");
+        assert!(text.contains("gugu_process_status{process=\"a\"} 1"), "{text}");
+        assert!(text.contains("gugu_process_status{process=\"b\"} 0"), "{text}");
+        assert!(text.contains("gugu_process_uptime_seconds{process=\"a\"} 7"), "{text}");
+        assert!(text.contains("gugu_process_restarts_total{process=\"a\"} 2"), "{text}");
+        // 按名字排序：a 在 b 之前
+        assert!(text.find("process=\"a\"").unwrap() < text.find("process=\"b\"").unwrap());
+        // 无健康数据时不输出该族
+        assert!(!text.contains("gugu_process_health_status"), "{text}");
+    }
+
+    #[test]
+    fn omits_per_process_families_when_empty_and_escapes_labels() {
+        let text = render_exposition(&[]);
+        assert!(text.contains("gugu_processes 0"), "{text}");
+        assert!(!text.contains("gugu_process_status"), "{text}");
+
+        let mut p = info("with\"quote\\and\nnewline", ProcessStatus::Running);
+        p.healthy = Some(false);
+        let text = render_exposition(&[p]);
+        assert!(!text.contains("with\"quote"), "双引号必须被转义: {text}");
+        assert!(text.contains("with\\\"quote\\\\and\\nnewline"), "{text}");
+        assert!(text.contains("gugu_process_health_status{process=\"with\\\"quote\\\\and\\nnewline\"} 0"), "{text}");
+    }
 }

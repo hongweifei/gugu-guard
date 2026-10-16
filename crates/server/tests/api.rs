@@ -8,6 +8,39 @@ use tower::ServiceExt;
 
 // ── 测试辅助 ──────────────────────────────────────────────
 
+/// 测试用临时目录：Drop 时递归删除。不用 tempfile 依赖
+/// （它会把 getrandom 等一串传递依赖带进依赖树）。
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn tempdir() -> TempDir {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("gugu-api-test-{}-{nanos}-{seq}", std::process::id()));
+    std::fs::create_dir_all(&path).expect("创建测试临时目录失败");
+    TempDir { path }
+}
+
 fn make_app() -> axum::Router {
     make_app_with_key(None)
 }
@@ -151,7 +184,7 @@ mod create_process {
 
     #[tokio::test]
     async fn returns_created_for_valid_input() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
 
         let resp = create_process(app, "test-svc", "echo hello", false).await;
@@ -160,7 +193,7 @@ mod create_process {
 
     #[tokio::test]
     async fn returns_bad_request_for_empty_command() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
 
         let resp = create_process(app, "bad", "   ", false).await;
@@ -169,7 +202,7 @@ mod create_process {
 
     #[tokio::test]
     async fn returns_bad_request_for_duplicate() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
 
         let resp = create_process(app.clone(), "dup", "echo hello", false).await;
@@ -181,7 +214,7 @@ mod create_process {
 
     #[tokio::test]
     async fn process_appears_in_snapshot_after_creation() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let (app, shared) = spawn_app_with_shared(dir.path());
 
         let resp = create_process(app, "my-svc", "echo hello", false).await;
@@ -296,7 +329,7 @@ mod health_check {
 
     #[tokio::test]
     async fn returns_bad_request_when_not_configured() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
         create_process(app.clone(), "test-svc", "echo hello", false).await;
 
@@ -455,7 +488,7 @@ mod list_groups {
 
     #[tokio::test]
     async fn returns_groups_with_members() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
         let body = create_process_body_with_group("echo a", false, Some("web"));
         app.clone().oneshot(
@@ -492,7 +525,7 @@ mod get_group {
 
     #[tokio::test]
     async fn returns_group_with_member_names() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir();
         let app = make_app_with_dir(dir.path());
         let body = create_process_body_with_group("echo x", false, Some("api"));
         app.clone().oneshot(

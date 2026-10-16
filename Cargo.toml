@@ -25,7 +25,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 tower = "0.5"
 futures = "0.3"
@@ -34,7 +34,6 @@ reqwest = { version = "0.12", features = ["json"] }
 comfy-table = "7"
 rust-embed = "8"
 windows-service = "0.8"
-prometheus = "0.14"
 
 [workspace.lints.clippy]
 redundant_clone = "warn"

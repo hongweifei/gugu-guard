@@ -534,7 +534,7 @@ mod direct_spawn_windows {
 
     #[tokio::test]
     async fn space_in_arg_survives_direct_spawn_via_bat() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let bat = dir.path().join("echoarg.bat");
         std::fs::write(&bat, "@echo [%~1]\r\n@ping -n 5 127.0.0.1 > nul\r\n").unwrap();
         let mut c = test_config();

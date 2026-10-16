@@ -44,7 +44,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 });
 
                 if let Ok(text) = serde_json::to_string(&msg) {
-                    if socket.send(axum::extract::ws::Message::Text(text)).await.is_err() {
+                    if socket.send(axum::extract::ws::Message::Text(text.into())).await.is_err() {
                         break;
                     }
                 }
@@ -57,7 +57,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     let entries: Vec<_> = std::mem::take(&mut log_buf);
                     let msg = json!({ "type": "logs", "entries": entries });
                     if let Ok(text) = serde_json::to_string(&msg) {
-                        if socket.send(axum::extract::ws::Message::Text(text)).await.is_err() {
+                        if socket.send(axum::extract::ws::Message::Text(text.into())).await.is_err() {
                             break;
                         }
                     }
@@ -65,7 +65,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
             }
             _ = heartbeat_interval.tick() => {
                 // 发送 Ping，如果发送失败则断开
-                if socket.send(axum::extract::ws::Message::Ping(vec![])).await.is_err() {
+                if socket.send(axum::extract::ws::Message::Ping(Vec::new().into())).await.is_err() {
                     break;
                 }
                 missed_heartbeats += 1;

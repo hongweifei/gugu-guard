@@ -289,7 +289,7 @@ mod save_and_load {
 
     #[test]
     fn roundtrips_config_to_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let path = dir.path().join("test.toml");
 
         let mut processes = HashMap::new();
@@ -336,7 +336,7 @@ mod save_and_load {
 
     #[test]
     fn save_preserves_comments_and_layout() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
         std::fs::write(&path, r#"# 文件顶注释
 [daemon]

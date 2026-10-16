@@ -13,4 +13,5 @@ mod tests {
     mod config;
     mod manager;
     mod process;
+    mod support;
 }

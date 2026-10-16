@@ -200,7 +200,7 @@ mod add_process {
 
     #[tokio::test]
     async fn succeeds_with_valid_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
 
         mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
@@ -210,7 +210,7 @@ mod add_process {
 
     #[tokio::test]
     async fn returns_error_on_duplicate_name() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
 
@@ -240,7 +240,7 @@ mod remove_process {
 
     #[tokio::test]
     async fn succeeds_and_removes_from_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("test".to_string(), test_config(), false).await.unwrap();
 
@@ -266,7 +266,7 @@ mod list_processes {
 
     #[tokio::test]
     async fn returns_all_added_processes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
 
         for name in &["a", "b", "c"] {
@@ -283,7 +283,7 @@ mod all_process_names {
 
     #[tokio::test]
     async fn returns_names_of_all_processes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("x".to_string(), test_config(), false).await.unwrap();
         mgr.add_process("y".to_string(), test_config(), false).await.unwrap();
@@ -300,7 +300,7 @@ mod snapshot {
 
     #[tokio::test]
     async fn reflects_added_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         assert!(mgr.list_processes().is_empty(), "初始应为空");
 
@@ -313,7 +313,7 @@ mod snapshot {
 
     #[tokio::test]
     async fn reflects_removed_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("rm".to_string(), test_config(), false).await.unwrap();
         assert!(mgr.get_process_info("rm").is_some());
@@ -331,7 +331,7 @@ mod get_process_config {
 
     #[tokio::test]
     async fn returns_config_for_existing_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         let mut cfg = test_config();
         cfg.command = "python".to_string();
@@ -350,7 +350,7 @@ mod get_process_config {
 
     #[tokio::test]
     async fn returns_declared_paths_and_all_fields() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
         std::fs::write(&path, r#"
 [daemon]
@@ -393,7 +393,7 @@ mod clear_process_logs {
 
     #[tokio::test]
     async fn succeeds_for_existing_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("logs".to_string(), test_config(), false).await.unwrap();
 
@@ -444,7 +444,7 @@ mod check_process_health {
 
     #[tokio::test]
     async fn returns_error_when_no_health_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("svc".to_string(), test_config(), false).await.unwrap();
 
@@ -471,7 +471,7 @@ mod reload_from_file {
 
     #[tokio::test]
     async fn reloads_processes_from_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("orig".to_string(), test_config(), false).await.unwrap();
 
@@ -494,7 +494,7 @@ mod reload_config {
 
     #[tokio::test]
     async fn replaces_all_processes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("old".to_string(), test_config(), false).await.unwrap();
 
@@ -514,7 +514,7 @@ mod update_process {
 
     #[tokio::test]
     async fn updates_config_for_existing_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("upd".to_string(), test_config(), false).await.unwrap();
 
@@ -538,7 +538,7 @@ mod update_process {
 
     #[tokio::test]
     async fn renames_process() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("old_name".to_string(), test_config(), false).await.unwrap();
 
@@ -550,7 +550,7 @@ mod update_process {
 
     #[tokio::test]
     async fn rejects_rename_to_existing_name() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("a".to_string(), test_config(), false).await.unwrap();
         mgr.add_process("b".to_string(), test_config(), false).await.unwrap();
@@ -568,7 +568,7 @@ mod shutdown {
 
     #[tokio::test]
     async fn stops_actor_and_rejects_subsequent_commands() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let mgr = spawn_test_manager_with_path(dir.path());
         mgr.add_process("svc".to_string(), test_config(), false).await.unwrap();
         assert!(mgr.get_process_info("svc").is_some());
@@ -590,7 +590,7 @@ mod save_fidelity {
 
     #[tokio::test]
     async fn add_process_preserves_comments_and_relative_paths() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::tests::support::tempdir();
         let path = dir.path().join("gugu.toml");
         std::fs::write(&path, r#"# 顶部注释
 [daemon]

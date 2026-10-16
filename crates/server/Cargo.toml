@@ -14,12 +14,11 @@ tower-http = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 rust-embed = { workspace = true }
-prometheus = { workspace = true }
 mime_guess = "2"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
-tempfile = "3"
+# 无 tempfile：集成测试自带临时目录助手（见 tests/api.rs）
 
 [lints]
 workspace = true

@@ -1,0 +1,11 @@
+# 统一文本文件行尾：检出与提交都用 LF。
+# 本机 core.autocrlf=true 时，没有这份约定每次 checkout 都会把行尾改成
+# CRLF，别人 clone 后改一行就产生整文件 diff；提交 Cargo.lock 时反复出现的
+# "LF will be replaced by CRLF" 警告也是同一件事。
+* text=auto eol=lf
+
+# 二进制内容永不转换。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary

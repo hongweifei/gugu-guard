@@ -49,19 +49,21 @@ fn init_logging(log_base: &Path) -> Option<WorkerGuard> {
 }
 
 /// 内置配置模板：首次运行且找不到配置时写入，让配置永远出现在程序旁边。
-pub const DEFAULT_CONFIG_TEMPLATE: &str = "\
+/// 端口/文件名等从 core 的默认常量拼装，保证「模板即默认值」单一来源。
+pub fn default_config_template() -> String {
+    format!("\
 # 咕咕鸽进程守护 配置文件
 # 其中的相对路径 (日志、PID、工作目录) 都相对于本文件所在目录 (即程序目录)，
 # 把整个文件夹搬到任何机器、任何位置都不需要改配置。
 
 [daemon]
-pid_file = \"gugu.pid\"
+pid_file = \"{pid}\"
 log_dir = \"logs\"
 # api_key = \"your-secret-key\"
 
 [daemon.web]
-addr = \"0.0.0.0\"
-port = 9090
+addr = \"{addr}\"
+port = {port}
 # cors_origins = [\"http://localhost:3000\"]
 
 # 守护进程自身的运行日志按天写入 log_dir 下的 gugu-daemon.<日期>.log (保留最近 30 份)。
@@ -86,7 +88,12 @@ port = 9090
 # type = \"tcp\"
 # port = 8080
 # fail_threshold = 3
-";
+",
+        pid = gugu_core::config::PID_FILE_NAME,
+        addr = gugu_core::config::DEFAULT_BIND_ADDR,
+        port = gugu_core::config::DEFAULT_PORT,
+    )
+}
 
 /// 配置文件不存在时，在目标位置生成内置模板。返回是否新建。
 ///
@@ -100,7 +107,7 @@ pub fn ensure_config_template(path: &Path) -> Result<bool> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("创建配置目录失败: {}", parent.display()))?;
     }
-    std::fs::write(path, DEFAULT_CONFIG_TEMPLATE)
+    std::fs::write(path, default_config_template())
         .with_context(|| format!("写入配置模板失败: {}", path.display()))?;
     Ok(true)
 }
@@ -109,7 +116,7 @@ fn pid_path(config: &AppConfig, config_path: &Path) -> PathBuf {
     let config_dir = config_path.parent().unwrap_or(Path::new("."));
     match config.daemon.pid_file {
         Some(ref pid_file) => gugu_core::config::resolve_relative_path(pid_file, config_dir),
-        None => config_dir.join("gugu.pid"),
+        None => config_dir.join(gugu_core::config::PID_FILE_NAME),
     }
 }
 

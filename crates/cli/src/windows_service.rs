@@ -10,7 +10,8 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::{define_windows_service, service_dispatcher};
 
-const SERVICE_NAME: &str = "GuguGuard";
+use crate::service::{SERVICE_DISPLAY, SERVICE_NAME};
+
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
 define_windows_service!(ffi_service_main, my_service_main);
@@ -122,7 +123,7 @@ pub fn install(config_path: &std::path::Path) -> anyhow::Result<()> {
 
     let service_info = ServiceInfo {
         name: OsString::from(SERVICE_NAME),
-        display_name: OsString::from("咕咕鸽进程守护 (GuguGuard)"),
+        display_name: OsString::from(SERVICE_DISPLAY),
         service_type: SERVICE_TYPE,
         start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,

@@ -3,6 +3,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, Item, Table};
 
+/// Web/API 默认监听地址（配置缺省时的服务端语义）。
+pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0";
+/// 本机回环地址（客户端连接与 addr 为监听通配时的替身）。
+pub const LOCALHOST: &str = "127.0.0.1";
+/// 默认监听端口。
+pub const DEFAULT_PORT: u16 = 9090;
+/// 默认 PID 文件名（生成在配置文件同目录）。
+pub const PID_FILE_NAME: &str = "gugu.pid";
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -70,8 +79,8 @@ impl AppConfig {
 
     #[must_use]
     pub fn server_addr(&self) -> String {
-        let addr = self.daemon.web.addr.as_deref().unwrap_or("127.0.0.1");
-        let port = self.daemon.web.port.unwrap_or(9090);
+        let addr = self.daemon.web.addr.as_deref().unwrap_or(LOCALHOST);
+        let port = self.daemon.web.port.unwrap_or(DEFAULT_PORT);
         format!("{addr}:{port}")
     }
 }
@@ -99,8 +108,8 @@ pub struct WebConfig {
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            addr: Some("0.0.0.0".into()),
-            port: Some(9090),
+            addr: Some(DEFAULT_BIND_ADDR.into()),
+            port: Some(DEFAULT_PORT),
             cors_origins: Vec::new(),
         }
     }

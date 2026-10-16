@@ -317,6 +317,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+## 更新日志
+
+版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## License
 
 MIT — 见 [LICENSE](./LICENSE)

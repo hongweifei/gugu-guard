@@ -1,5 +1,8 @@
 //! 命令构造：分词、Windows PATH/PATHEXT 解析、创建标志。
 
+// Path/PathBuf 只在 Windows 的解析逻辑里用到：unix 下若留在模块顶部会触发
+// `unused_imports`（CI 以 -D warnings 编译 ⇒ 直接失败）。
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 
 // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP

@@ -45,11 +45,14 @@ impl Mode {
 // ── 纯构造函数（可在任意平台单测）─────────────────────────────
 
 /// Windows：任务计划 / Run 项 / 服务共用的启动命令。路径一律加引号，含空格也安全。
+/// （unix 下用不到，故仅在 Windows 与测试构建里编译，避免 dead_code 在 CI 上变成错误。）
+#[cfg(any(windows, test))]
 fn run_command(exe: &Path, config: &Path) -> String {
     format!("\"{}\" run -c \"{}\"", exe.display(), config.display())
 }
 
 /// Windows：用户级自启命令 —— 追加 `--detach`，登录时由自己转入后台而非弹控制台。
+#[cfg(any(windows, test))]
 fn run_command_detached(exe: &Path, config: &Path) -> String {
     format!("{} --detach", run_command(exe, config))
 }

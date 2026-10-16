@@ -15,9 +15,11 @@ mod job;
 mod managed;
 mod terminate;
 mod types;
+mod usage;
 
 pub use managed::ManagedProcess;
 pub use types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
+pub use usage::{format_bytes, UsageSample, UsageSampler};
 
 /// 每个进程保留的退出历史条数。
 pub const MAX_EXIT_HISTORY: usize = 5;

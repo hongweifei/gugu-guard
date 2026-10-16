@@ -79,6 +79,23 @@ fn render_exposition(processes: &[ProcessInfo]) -> String {
 
     let mut out = String::with_capacity(1024);
 
+    if sorted.iter().any(|p| p.usage.is_some()) {
+        header(
+            &mut out,
+            "gugu_process_cpu_percent",
+            "Process tree CPU usage as a percentage of one core",
+        );
+        for p in &sorted {
+            if let Some(usage) = p.usage {
+                out.push_str(&format!(
+                    "gugu_process_cpu_percent{{process=\"{}\"}} {:.2}\n",
+                    escape_label(&p.name),
+                    usage.cpu_percent
+                ));
+            }
+        }
+    }
+
     if sorted.iter().any(|p| p.healthy.is_some()) {
         header(
             &mut out,
@@ -91,6 +108,23 @@ fn render_exposition(processes: &[ProcessInfo]) -> String {
                     "gugu_process_health_status{{process=\"{}\"}} {}\n",
                     escape_label(&p.name),
                     i64::from(healthy)
+                ));
+            }
+        }
+    }
+
+    if sorted.iter().any(|p| p.usage.is_some()) {
+        header(
+            &mut out,
+            "gugu_process_memory_bytes",
+            "Process tree resident memory in bytes",
+        );
+        for p in &sorted {
+            if let Some(usage) = p.usage {
+                out.push_str(&format!(
+                    "gugu_process_memory_bytes{{process=\"{}\"}} {}\n",
+                    escape_label(&p.name),
+                    usage.memory_bytes
                 ));
             }
         }
@@ -188,6 +222,7 @@ mod tests {
             started_at: None,
             uptime_secs: Some(7),
             recent_exits: Vec::new(),
+            usage: None,
         }
     }
 
@@ -210,6 +245,23 @@ mod tests {
         assert!(text.find("process=\"a\"").unwrap() < text.find("process=\"b\"").unwrap());
         // 无健康数据时不输出该族
         assert!(!text.contains("gugu_process_health_status"), "{text}");
+    }
+
+    #[test]
+    fn renders_resource_usage_families() {
+        let mut p = info("svc", ProcessStatus::Running);
+        p.usage = Some(gugu_core::process::UsageSample {
+            cpu_percent: 12.5,
+            memory_bytes: 1024 * 1024,
+            process_count: 2,
+        });
+        let text = render_exposition(&[p]);
+        assert!(text.contains("gugu_process_cpu_percent{process=\"svc\"} 12.50"), "{text}");
+        assert!(text.contains("gugu_process_memory_bytes{process=\"svc\"} 1048576"), "{text}");
+        // 没有采样数据时不输出这两族
+        let text = render_exposition(&[info("idle", ProcessStatus::Stopped)]);
+        assert!(!text.contains("gugu_process_cpu_percent"), "{text}");
+        assert!(!text.contains("gugu_process_memory_bytes"), "{text}");
     }
 
     #[test]

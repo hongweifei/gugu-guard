@@ -23,6 +23,7 @@ max_restarts = 3
 restart_delay_secs = 5
 # restart_reset_secs = 60   # 稳定运行达该秒数后崩溃计数归零 (默认 60，守护长期有效)
 # shell = false             # true 时 command/args 拼接后经 shell 执行 (支持管道等)
+# max_memory_mb = 512       # 进程树内存超限则自动重启 (防内存泄漏)
 # stop_command = "kill $(lsof -t -i:8080)"  # 自定义停止命令 (可选，留空则使用默认信号终止)
 max_log_size_mb = 10
 stdout_log = "logs/example-web-stdout.log"

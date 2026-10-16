@@ -1,7 +1,7 @@
 //! 2 秒监控循环：崩溃计数衰减、探活自动重启、健康检查连续失败判定。
 
 use crate::config::HealthCheckConfig;
-use crate::process::ProcessStatus;
+use crate::process::{format_bytes, ProcessStatus};
 
 use super::state::State;
 
@@ -11,6 +11,48 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         let uptime = proc.info().uptime_secs.unwrap_or(0);
         if proc.maybe_decay_crash_count(uptime) {
             tracing::info!("[{name}] 已稳定运行 {uptime}s，崩溃重启计数已归零");
+        }
+    }
+
+    // 资源采样：运行中的进程刷新进程树 CPU/内存（非运行态会清空）
+    for proc in state.processes.values_mut() {
+        proc.sample_usage();
+    }
+
+    // 内存超限：按自动重启路径处理（计入崩溃重启计数，避免重启风暴）
+    let mut over_limit: Vec<(String, u64, u64)> = Vec::new();
+    for (name, proc) in &state.processes {
+        let (Some(limit_mb), Some(usage)) = (proc.config().max_memory_mb, proc.usage()) else {
+            continue;
+        };
+        if limit_mb == 0 {
+            continue;
+        }
+        let limit_bytes = limit_mb.saturating_mul(1024 * 1024);
+        if usage.memory_bytes > limit_bytes {
+            over_limit.push((name.clone(), usage.memory_bytes, limit_bytes));
+        }
+    }
+    for (name, used, limit) in over_limit {
+        tracing::warn!(
+            "[{name}] 进程树内存 {} 超过上限 {}，准备重启",
+            format_bytes(used),
+            format_bytes(limit)
+        );
+        if let Some(proc) = state.processes.get_mut(&name) {
+            if !proc.should_auto_restart() {
+                tracing::warn!("[{name}] 已达崩溃重启上限，不再自动重启（内存仍超限）");
+                continue;
+            }
+            proc.mark_crash_restart();
+            // 先 stop() 再改状态：stop() 的前置条件是 is_running()，
+            // 提前置 Restarting 会让它直接返回 NotRunning ⇒ 旧进程变孤儿。
+            let _ = proc.stop().await;
+            proc.set_status(ProcessStatus::Restarting);
+            match proc.start().await {
+                Ok(()) => proc.mark_last_exit_auto_restarted(),
+                Err(e) => tracing::error!("[{name}] 内存超限重启失败: {e}"),
+            }
         }
     }
 

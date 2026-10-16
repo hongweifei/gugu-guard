@@ -80,6 +80,7 @@ port = {port}
 # restart_delay_secs = 5
 # restart_reset_secs = 60
 # shell = false
+# max_memory_mb = 512
 # max_log_size_mb = 10
 # stdout_log = \"logs/my-app-stdout.log\"
 # stderr_log = \"logs/my-app-stderr.log\"

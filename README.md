@@ -12,6 +12,7 @@
 - **日志捕获** — stdout/stderr 自动捕获，内存环形缓冲区 + 文件持久化 + 自动轮转
 - **健康检查** — TCP 端口 / HTTP 请求检测，连续失败达到阈值才判定重启，瞬时抖动不误伤
 - **崩溃历史** — 保留每个进程最近 5 次退出（时间、退出码、是否被自动拉起），WebUI 卡片与 API 都能看到
+- **资源监控** — 按进程树采样 CPU/内存（含 conhost 等子进程），卡片与 `/metrics` 可见；`max_memory_mb` 超限自动重启，防内存泄漏
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
@@ -248,6 +249,7 @@ gugu-guard/
 | `shell` | bool | `false` | true 时将 command+args 拼接后经 shell 执行（支持管道等）；默认直接启动可执行文件 |
 | `stop_timeout_secs` | u64 | `10` | 停止超时（秒） |
 | `depends_on` | string[] | `[]` | 依赖的进程名，按依赖顺序启动 |
+| `max_memory_mb` | u64 | — | 进程树内存上限，超限按自动重启路径重启（防泄漏） |
 | `max_log_size_mb` | u64 | — | 日志文件大小上限 (MB)，超限自动轮转 |
 | `unhealthy_restart` | bool | `false` | 健康检查失败时自动重启 |
 | `stdout_log` | string | — | stdout 日志文件路径 |

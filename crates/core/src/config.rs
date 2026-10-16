@@ -151,6 +151,9 @@ pub struct ProcessConfig {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub group: Option<String>,
+    /// 进程树内存上限 (MB)：超过则按自动重启路径重启（防泄漏）。
+    #[serde(default)]
+    pub max_memory_mb: Option<u64>,
     #[serde(default)]
     pub max_log_size_mb: Option<u64>,
     #[serde(default)]

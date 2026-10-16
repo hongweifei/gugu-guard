@@ -18,7 +18,7 @@ use super::capture::read_stream;
 use super::command::split_command_words;
 use super::terminate::{force_kill, run_stop_command, send_default_stop_signal};
 use super::types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
-use super::MAX_EXIT_HISTORY;
+use super::{UsageSample, UsageSampler, MAX_EXIT_HISTORY};
 
 #[cfg(windows)]
 use super::command::{is_bat_cmd, resolve_program, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
@@ -45,6 +45,9 @@ pub struct ManagedProcess {
     last_health_check: Option<std::time::Instant>,
     /// 最近退出历史（新的在后，上限 MAX_EXIT_HISTORY）。
     exit_history: VecDeque<ExitRecord>,
+    /// 进程树资源占用（由监控循环按节拍刷新）。
+    usage: Option<UsageSample>,
+    usage_sampler: UsageSampler,
 }
 
 impl ManagedProcess {
@@ -67,6 +70,8 @@ impl ManagedProcess {
             log_tasks: Vec::new(),
             last_health_check: None,
             exit_history: VecDeque::new(),
+            usage: None,
+            usage_sampler: UsageSampler::new(),
         }
     }
 
@@ -141,6 +146,22 @@ impl ManagedProcess {
     #[must_use]
     pub fn recent_exits(&self) -> Vec<ExitRecord> {
         self.exit_history.iter().cloned().collect()
+    }
+
+    /// 采样进程树资源占用（监控循环按节拍调用；非运行态清空）。
+    pub fn sample_usage(&mut self) {
+        let Some(pid) = self.child.as_ref().and_then(Child::id) else {
+            self.usage = None;
+            return;
+        };
+        if let Some(sample) = self.usage_sampler.sample(pid) {
+            self.usage = Some(sample);
+        }
+    }
+
+    #[must_use]
+    pub fn usage(&self) -> Option<UsageSample> {
+        self.usage
     }
 
     /// 记录一次健康检查结果，返回 (当前连续失败次数, 是否达到判定阈值)。
@@ -298,6 +319,7 @@ impl ManagedProcess {
                 self.status = ProcessStatus::Running;
                 self.last_health_check = None;
                 self.health_failures = 0;
+                self.usage = None;
 
                 tracing::info!("[{}] 进程已启动 (PID: {:?})", self.name, pid);
                 Ok(())
@@ -364,6 +386,7 @@ impl ManagedProcess {
         if let Some(code) = stopped_code {
             self.record_exit(code);
         }
+        self.usage = None;
         self.abort_log_tasks();
         #[cfg(windows)]
         {
@@ -394,6 +417,7 @@ impl ManagedProcess {
                         status.code()
                     );
                     self.record_exit(status.code());
+                    self.usage = None;
                     self.abort_log_tasks();
                     self.child = None;
                     #[cfg(windows)]
@@ -439,6 +463,7 @@ impl ManagedProcess {
             started_at: self.started_at,
             uptime_secs,
             recent_exits: self.recent_exits(),
+            usage: self.usage,
         }
     }
 

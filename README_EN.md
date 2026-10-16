@@ -12,6 +12,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence + auto rotation
 - **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
 - **Exit History** — keeps the last 5 exits per process (time, exit code, whether it was auto-restarted), visible in the WebUI card and the API
+- **Resource Monitoring** — samples CPU/memory for the whole process tree (including helpers like conhost), shown on the card and in `/metrics`; `max_memory_mb` restarts a process that exceeds its memory cap
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
@@ -247,6 +248,7 @@ gugu-guard/
 | `shell` | bool | `false` | When true, command+args are concatenated and run through a shell (pipes, etc.); default launches the executable directly |
 | `stop_timeout_secs` | u64 | `10` | Stop timeout in seconds |
 | `depends_on` | string[] | `[]` | Process dependencies, start in dependency order |
+| `max_memory_mb` | u64 | — | Process tree memory cap; exceeding it restarts via the auto-restart path |
 | `max_log_size_mb` | u64 | — | Log file size limit (MB), auto-rotate when exceeded |
 | `unhealthy_restart` | bool | `false` | Auto-restart on health check failure |
 | `stdout_log` | string | — | stdout log file path |

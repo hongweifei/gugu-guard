@@ -164,6 +164,8 @@ pub(super) struct CreateProcessRequest {
     #[serde(default)]
     group: Option<String>,
     #[serde(default)]
+    max_memory_mb: Option<u64>,
+    #[serde(default)]
     max_log_size_mb: Option<u64>,
     stdout_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
@@ -193,6 +195,7 @@ impl CreateProcessRequest {
             unhealthy_restart: self.unhealthy_restart,
             depends_on: self.depends_on,
             group: self.group,
+            max_memory_mb: self.max_memory_mb,
             max_log_size_mb: self.max_log_size_mb,
             stdout_log: self.stdout_log,
             stderr_log: self.stderr_log,

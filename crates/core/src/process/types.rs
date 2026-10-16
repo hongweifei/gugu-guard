@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::usage::UsageSample;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -45,6 +47,9 @@ pub struct ProcessInfo {
     /// 最近几次退出的历史（新的在后，最多 [`crate::process::MAX_EXIT_HISTORY`] 条）。
     #[serde(default)]
     pub recent_exits: Vec<ExitRecord>,
+    /// 进程树资源占用（CPU 占单核百分比 + 内存），未运行时为 None。
+    #[serde(default)]
+    pub usage: Option<UsageSample>,
 }
 
 /// 一次进程退出的记录：用于排障（「昨晚崩了 4 次，每次退出码 137」）。

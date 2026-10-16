@@ -98,6 +98,26 @@ function render(force) {
     grid.innerHTML = filtered.map((p, i) => buildCard(p, i === 0)).join('');
 }
 
+function fmtBytes(n) {
+    const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+    if (n >= GB) return (n / GB).toFixed(2) + ' GB';
+    if (n >= MB) return (n / MB).toFixed(1) + ' MB';
+    if (n >= KB) return (n / KB).toFixed(1) + ' KB';
+    return n + ' B';
+}
+
+function usageInfo(p) {
+    const u = p.usage;
+    if (!u) return { label: '—', title: '暂无采样（进程未运行）' };
+    const mem = fmtBytes(u.memory_bytes);
+    const cpu = `${u.cpu_percent.toFixed(1)}%`;
+    const extra = u.process_count > 1 ? ` · 进程树 ${u.process_count} 个进程` : '';
+    return {
+        label: `${mem} · ${cpu}`,
+        title: `进程树常驻内存 ${mem}，CPU 占单核 ${cpu}${extra}`,
+    };
+}
+
 function lastExitInfo(p) {
     const list = p.recent_exits || [];
     if (!list.length) return { label: '—', title: '暂无退出记录' };
@@ -126,6 +146,7 @@ function buildCard(p, isNew) {
     const groupTag = p.group ? `<span class="pcard-tag group" data-action="filter-group" data-group="${esc(p.group)}" title="筛选组: ${esc(p.group)}">${esc(p.group)}</span>` : '';
     const hcBtn = p.has_health_check ? `<button class="btn btn-hc" data-action="health" data-name="${esc(p.name)}" title="手动健康检查">检查</button>` : '';
     const exit = lastExitInfo(p);
+    const usage = usageInfo(p);
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
@@ -136,6 +157,7 @@ function buildCard(p, isNew) {
             <div class="pcard-meta-item"><span class="pcard-meta-label">运行时间</span><span class="pcard-meta-val">${fmtTime(p.uptime_secs)}</span></div>
             <div class="pcard-meta-item pcard-cmd"><span class="pcard-meta-label">命令</span><span class="pcard-meta-val" title="${esc(cmd)}">${esc(cmd)}</span></div>
             <div class="pcard-meta-item pcard-exit"><span class="pcard-meta-label">上次退出</span><span class="pcard-meta-val" title="${esc(exit.title)}">${esc(exit.label)}</span></div>
+            <div class="pcard-meta-item pcard-usage"><span class="pcard-meta-label">资源</span><span class="pcard-meta-val" title="${esc(usage.title)}">${esc(usage.label)}</span></div>
         </div>
         <div class="pcard-actions">
             <button class="btn act-start" data-action="start" data-name="${esc(p.name)}" ${run?'disabled':''}>启动</button>
@@ -167,6 +189,11 @@ function patchCard(card, p) {
         const exit = lastExitInfo(p);
         metas[3].textContent = exit.label;
         metas[3].title = exit.title;
+    }
+    if (metas[4]) {
+        const usage = usageInfo(p);
+        metas[4].textContent = usage.label;
+        metas[4].title = usage.title;
     }
 
     const btns = card.querySelectorAll('.pcard-actions .btn');

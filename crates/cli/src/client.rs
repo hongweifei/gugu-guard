@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Attribute, Cell, Color, Table,
 };
+use gugu_core::audit::AuditEntry;
 use gugu_core::config::{AppConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT, LOCALHOST};
 use gugu_core::history::{ExitEvent, ExitStats, MetricPoint, TrafficPoint};
 use gugu_core::logs::{LogLevel, LogSearchReport, ParsedLine};
@@ -73,7 +74,10 @@ pub(crate) async fn run_client(
     server_url: &str,
     api_key: Option<&str>,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("gugu-cli/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("初始化 HTTP 客户端失败")?;
     let api = ApiHelper {
         client: &client,
         base: server_url,
@@ -331,6 +335,33 @@ pub(crate) async fn run_client(
             } else {
                 let data: SystemResponse = serde_json::from_value(body)?;
                 print_net_table(&data.points, data.latest.as_ref());
+            }
+        }
+
+        Commands::Audit {
+            limit,
+            action,
+            failed,
+            since,
+            json,
+        } => {
+            let mut params: Vec<(&str, String)> = vec![("limit", limit.to_string())];
+            if let Some(action) = action {
+                params.push(("action", action.clone()));
+            }
+            if *failed {
+                params.push(("ok", "false".to_string()));
+            }
+            if *since > 0 {
+                params.push(("since_minutes", since.to_string()));
+            }
+            let body =
+                fetch_json(&api, &format!("/api/v1/audit?{}", encode_query(&params))).await?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                let data: AuditResponse = serde_json::from_value(body)?;
+                print_audit(&data.entries, data.retention_days);
             }
         }
 
@@ -676,6 +707,79 @@ struct SystemResponse {
     latest: Option<TrafficPoint>,
     #[serde(default)]
     points: Vec<TrafficPoint>,
+}
+
+#[derive(serde::Deserialize)]
+struct AuditResponse {
+    #[serde(default)]
+    entries: Vec<AuditEntry>,
+    #[serde(default)]
+    retention_days: i64,
+}
+
+fn print_audit(entries: &[AuditEntry], retention_days: i64) {
+    if entries.is_empty() {
+        println!("暂无操作记录（只记录会改变状态的写操作）");
+        return;
+    }
+    let show_detail = entries.iter().any(|entry| entry.detail.is_some());
+    let mut header = vec!["时间", "操作", "对象", "结果", "来源", "客户端", "耗时"];
+    if show_detail {
+        header.push("备注");
+    }
+    let mut table = new_table(header);
+    for entry in entries {
+        let at = entry.at.with_timezone(&chrono::Local);
+        let mut row = vec![
+            Cell::new(at.format("%m-%d %H:%M:%S")),
+            Cell::new(format!("{} ({})", entry.label, entry.action)),
+            Cell::new(entry.target.as_deref().unwrap_or("-")),
+            if entry.ok {
+                Cell::new("成功").fg(Color::Green)
+            } else {
+                Cell::new(format!("失败 {}", entry.status)).fg(Color::Red)
+            },
+            Cell::new(&entry.client),
+            Cell::new(actor_of(entry)),
+            Cell::new(format_duration(entry.duration_ms)),
+        ];
+        if show_detail {
+            row.push(Cell::new(entry.detail.as_deref().unwrap_or("")));
+        }
+        table.add_row(row);
+    }
+    println!("{table}");
+    println!(
+        "共 {} 条（新的在前），保留最近 {retention_days} 天",
+        entries.len()
+    );
+}
+
+/// 客户端类型：CLI 自带 UA，浏览器带 Mozilla，其余原样展示。
+fn actor_of(entry: &AuditEntry) -> String {
+    let Some(user_agent) = entry.user_agent.as_deref() else {
+        return "-".to_string();
+    };
+    if user_agent.starts_with("gugu-cli/") {
+        return format!("CLI ({})", user_agent.trim_start_matches("gugu-cli/"));
+    }
+    if user_agent.contains("PowerShell") {
+        return "PowerShell".to_string();
+    }
+    if user_agent.contains("Mozilla") {
+        return "WebUI".to_string();
+    }
+    user_agent.chars().take(24).collect()
+}
+
+fn format_duration(millis: u64) -> String {
+    if millis == 0 {
+        "<1 ms".to_string()
+    } else if millis < 1000 {
+        format!("{millis} ms")
+    } else {
+        format!("{:.1} s", millis as f64 / 1000.0)
+    }
 }
 
 async fn print_api_response(resp: reqwest::Response) -> Result<()> {

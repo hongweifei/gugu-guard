@@ -110,6 +110,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
         else if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
+        else if (document.getElementById('audit-overlay').classList.contains('open')) document.getElementById('audit-overlay').classList.remove('open');
         else if (document.getElementById('fs-backdrop').classList.contains('open')) { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); }
         else if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
         else if (document.getElementById('confirm-backdrop').classList.contains('open')) { pendingRemove = null; document.getElementById('confirm-backdrop').classList.remove('open'); }

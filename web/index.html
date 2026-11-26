@@ -21,6 +21,10 @@
                 <svg viewBox="0 0 20 20" fill="currentColor" class="search-icon"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"/></svg>
                 <input type="text" id="search-input" placeholder="搜索进程..." autocomplete="off">
             </div>
+            <button class="btn" id="btn-audit" title="查看谁在何时对哪个进程做了什么（写操作才记录）">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm0 2h12v10H4V5zm2 2a1 1 0 000 2h5a1 1 0 100-2H6zm0 4a1 1 0 100 2h8a1 1 0 100-2H6z"/></svg>
+                操作审计
+            </button>
             <button class="btn btn-primary" id="btn-add">
                 <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
                 添加进程
@@ -116,6 +120,43 @@
                 </div>
             </div>
             <div class="metric-body" id="metrics-body"></div>
+        </div>
+    </div>
+
+    <div class="log-overlay" id="audit-overlay">
+        <div class="log-container audit-container">
+            <div class="log-toolbar">
+                <div class="log-title"><span class="log-dot audit-dot"></span>操作审计<span class="audit-note" id="audit-note">记录保留 90 天</span></div>
+                <div class="log-controls">
+                    <select id="audit-action-filter" class="log-stream-select">
+                        <option value="">全部操作</option>
+                        <option value="process.create">添加进程</option>
+                        <option value="process.update">更新进程</option>
+                        <option value="process.delete">删除进程</option>
+                        <option value="process.start">启动进程</option>
+                        <option value="process.stop">停止进程</option>
+                        <option value="process.restart">重启进程</option>
+                        <option value="process.health">健康检查</option>
+                        <option value="logs.clear">清空日志</option>
+                        <option value="group.start">启动分组</option>
+                        <option value="group.stop">停止分组</option>
+                        <option value="group.restart">重启分组</option>
+                        <option value="config.reload">重新加载配置</option>
+                        <option value="daemon.shutdown">停止守护进程</option>
+                    </select>
+                    <select id="audit-range-filter" class="log-stream-select">
+                        <option value="60">最近 60 分钟</option>
+                        <option value="1440">最近 24 小时</option>
+                        <option value="0">全部</option>
+                    </select>
+                    <input type="text" id="audit-search" class="log-search-input" placeholder="对象 / 来源 / 原因" autocomplete="off">
+                    <label class="log-autoscroll"><input type="checkbox" id="audit-failed"> 只看失败</label>
+                    <button class="btn btn-sm" id="btn-refresh-audit">刷新</button>
+                    <button class="btn btn-sm btn-close-log" id="btn-close-audit">关闭</button>
+                </div>
+            </div>
+            <div class="log-status" id="audit-status" hidden></div>
+            <div class="audit-body" id="audit-body"></div>
         </div>
     </div>
 
@@ -356,6 +397,7 @@
 <script src="/js/render.js"></script>
 <script src="/js/history.js"></script>
 <script src="/js/logs.js"></script>
+<script src="/js/audit.js"></script>
 <script src="/js/form.js"></script>
 <script src="/js/app.js"></script>
 </body>

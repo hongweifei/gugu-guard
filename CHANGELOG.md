@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-服务可观测性、日志结构化与 cgroup v2 硬限三批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
+服务可观测性、日志结构化、cgroup v2 硬限与操作审计四批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
 
 ### 新增
 
@@ -50,6 +50,14 @@
 - **内存语义** —— `memory.max` 由内核执行，越过即整组 OOM（`memory.oom.group = 1`），并写 `memory.swap.max = 0` 防止靠换页绕过上限；守护进程只观测到进程退出，`auto_restart` 照常生效
 - **继承与清理** —— 子进程与孙进程留在同一 cgroup；进程退出、停止或启动失败时对整个 cgroup 执行 `cgroup.kill`、等其清空后删目录；上次运行留下的同名目录在下次启动前先清空
 - **接口** —— 进程配置新增 `cpu_max` / `memory_max` / `pids_max`，守护进程配置新增 `cgroup_root`；POST/PUT 进程接口接受这三个字段，`gugu add` 增加 `--cpu-max` / `--memory-max` / `--pids-max`，WebUI 表单新增「资源硬限」区块。非 Linux 平台配置硬限会在启动时明确失败，不静默忽略
+
+### 操作审计
+
+- **审计中间件** —— 只拦 POST / PUT / DELETE，按方法 + 路径映射成稳定动作码与中文名（`process.start` / `group.restart` / `config.reload` / `daemon.shutdown` 等），目标名从路径取出；未知写接口记为 `http.write`，新增端点不会静默漏记
+- **一条记录** —— 时间、动作码与中文名、对象、方法与路径、状态码、耗时、来源地址、客户端 User-Agent、认证结果（`none` / `key` / `denied`）与失败原因。401 也留痕，来源与目标都在
+- **落盘与保留** —— 追加到 `<log_dir>/audit.jsonl`，保留 90 天：每天首次写入时按保留期清理一次，文件超过 8MB 再立即压缩（仍过大就只留较新的半份）。内存另留最近 500 条供接口直接查
+- **来源口径** —— 优先 `X-Forwarded-For` 第一跳，其次 `X-Real-IP`，否则用连接对端地址；CLI 请求带 `gugu-cli/<版本>` UA，审计里能区分 CLI 与 WebUI
+- **接口与工具** —— `GET /api/v1/audit` 支持 `limit` / `action` / `ok` / `q` / `since_minutes`；`gugu audit` 支持 `--limit` / `--action` / `--failed` / `--since` / `--json`；WebUI 顶栏新增「操作审计」面板，可按动作、时间范围、结果与关键字筛选
 
 ## [0.1.0] - 2026-10-16
 

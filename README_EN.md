@@ -19,6 +19,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Readiness Probe** — `depends_on` now waits for the upstream to actually serve (health check passing or ports listening), up to `ready_timeout_secs`
 - **Log Alerts** — keyword hits and short bursts of output raise notifications with a cooldown, so a retry storm can't flood the bot
 - **Structured Logs & Search** — each line is parsed into level, message, structured fields and an in-line timestamp (JSON / logfmt / text heuristics), so the log panel shows level badges and field chips; logs on disk are searchable by level, keyword and stream, with hit and scan-range counts
+- **Operation Audit** — who did what to which process and when: write operations (start/stop, add/update/delete, reload, daemon shutdown) are appended to `logs/audit.jsonl` with result, source, client and duration, kept for 90 days; the WebUI "Operation Audit" panel and `gugu audit` filter by action, result, time and keyword
 - **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
@@ -192,6 +193,7 @@ gugu logs <name> --file -q timeout   # Search the on-disk log file (last 4MB by 
 gugu history <name> [-m 60]       # Metric time series (CPU/memory/connections, one bucket per minute)
 gugu exits <name> [-m 60]         # Exit history and availability (persisted journal)
 gugu net [-m 60]                  # Host bandwidth time series
+gugu audit [-l 100] [--failed]    # Operation audit (newest first; --action by code, --since in minutes)
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
@@ -249,6 +251,7 @@ cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-l
 | GET | `/api/v1/processes/:name/history?minutes=60` | Metric time series (one bucket per minute, up to 24h) |
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | Exit events and availability stats |
 | GET | `/api/v1/system?minutes=60` | Host bandwidth time series and current rate |
+| GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=keyword&since_minutes=60` | Operation audit records (write operations, newest first) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
 | POST | `/api/v1/reload` | Reload config |
@@ -379,6 +382,32 @@ log_format = "auto"       # auto: try JSON → logfmt → text per line; pin it 
   lines/bytes and a truncation flag. Only the current path is read, not the `.1`…`.5` rotations
 - **No invented timestamps** — a history line without its own timestamp is never given the capture
   time; a time filter simply excludes such lines
+
+### Operation Audit
+
+```bash
+gugu audit                        # last 100 control-plane operations, newest first
+gugu audit --failed --since 60    # failed operations in the last hour
+gugu audit --action process.start --json
+```
+
+- **What is recorded** — every write request that changes state: create/update/delete, start/stop/restart,
+  health check, log clear, group start/stop/restart, config reload and daemon shutdown. Read-only GET
+  requests are not audited, so the audit panel's own query cannot loop into itself
+- **One record** — time, action code and human-readable name, target, HTTP method and path, status,
+  duration, source address, client (`gugu-cli/<version>` / WebUI / other User-Agent), auth outcome
+  (`none` / `key` / `denied`), plus the failure reason (truncated to 300 characters)
+- **Persistence** — appended to `<log_dir>/audit.jsonl` (default `logs/audit.jsonl`) and kept for 90 days:
+  the retention window is applied on the first write of each day, and again immediately whenever the file
+  passes 8 MB (newest half kept if still oversized). The newest 500 entries stay in memory for fast queries
+- **Denied auth is recorded too** — a 401 lands as `denied` with source, target and path, so unauthorised
+  attempts leave a trail
+- **Source resolution** — the first hop of `X-Forwarded-For`, then `X-Real-IP`, else the peer address.
+  Behind a reverse proxy, have it set those headers or you will see the proxy address. Those headers are
+  client-controlled when the API is exposed directly, so only trust them behind a trusted proxy
+- **Query** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`:
+  `action` is the action code, `ok=true/false` keeps successes or failures only, `q` matches target,
+  path, source and reason, and `since_minutes` bounds the time window
 
 ### cgroup v2 Hard Limits
 

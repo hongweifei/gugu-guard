@@ -1,6 +1,7 @@
 //! REST API：路由注册与共享辅助。子模块按资源划分 handler，
 //! 类型集中在 [`types`]，认证在 [`auth`]；对外仅暴露 [`routes`] 与 [`auth_middleware`]。
 
+mod audit;
 mod auth;
 mod fs;
 mod groups;
@@ -84,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/fs/browse", get(fs::browse_fs))
         .route("/api/v1/reload", post(misc::reload_config))
         .route("/api/v1/shutdown", post(misc::shutdown))
+        .route("/api/v1/audit", get(audit::list_audit))
 }
 
 // ── 共享辅助 ──────────────────────────────────────────────

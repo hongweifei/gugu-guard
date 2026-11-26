@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use gugu_core::audit::AuditStore;
 use gugu_core::manager::SharedManager;
 use tokio::sync::mpsc;
 
@@ -9,6 +10,7 @@ use crate::metrics::Metrics;
 pub struct AppState {
     pub manager: SharedManager,
     pub metrics: Arc<Metrics>,
+    pub audit: Arc<AuditStore>,
     pub api_key: Option<String>,
     pub cors_origins: Vec<String>,
     /// `POST /api/v1/shutdown` 用以请求守护进程优雅停止；
@@ -21,10 +23,18 @@ impl AppState {
         Self {
             manager,
             metrics: Arc::new(Metrics::new()),
+            audit: Arc::new(AuditStore::disabled()),
             api_key,
             cors_origins,
             shutdown_tx: None,
         }
+    }
+
+    /// 注入审计仓库；不接时审计只留内存。
+    #[must_use]
+    pub fn with_audit(mut self, audit: Arc<AuditStore>) -> Self {
+        self.audit = audit;
+        self
     }
 
     /// 注入守护进程停止信号的发送端。

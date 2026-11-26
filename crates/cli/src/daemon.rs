@@ -82,6 +82,7 @@ port = {port}
 # cors_origins = [\"http://localhost:3000\"]
 
 # 守护进程自身的运行日志按天写入 log_dir 下的 gugu-daemon.<日期>.log (保留最近 30 份)。
+# 操作审计写入 log_dir/audit.jsonl（保留 90 天，只记写操作，GET 不记）。
 
 # 进程可以通过 WebUI 或 gugu add 添加 (会自动写回本文件，注释与相对路径都会保留)，也可以手动在此声明。
 # 修改后执行 gugu reload 或重启守护进程生效。示例：
@@ -246,14 +247,17 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
     let server_shared = shared.clone();
-    let server_api_key = api_key;
-    let server_cors_origins = config.daemon.web.cors_origins;
+    let server_options = gugu_server::ServerOptions {
+        api_key,
+        cors_origins: config.daemon.web.cors_origins,
+        // 审计与守护日志同处 log_dir，便于一并备份/清理
+        audit_dir: Some(log_base),
+    };
     let server_handle = tokio::spawn(async move {
         if let Err(e) = gugu_server::run_server(
             addr,
             server_shared,
-            server_api_key,
-            server_cors_origins,
+            server_options,
             shutdown_rx,
             Some(api_shutdown_tx),
         )

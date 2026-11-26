@@ -211,6 +211,25 @@ enum Commands {
         json: bool,
     },
 
+    #[command(about = "查看操作审计（谁在何时对哪个进程做了什么，落盘记录）")]
+    Audit {
+        /// 最多返回的条数
+        #[arg(short, long, default_value_t = 100)]
+        limit: usize,
+        /// 只看某个动作码：process.create / process.start / process.stop / group.restart ...
+        #[arg(long)]
+        action: Option<String>,
+        /// 只看失败的操作
+        #[arg(long)]
+        failed: bool,
+        /// 只看最近 N 分钟（0 表示不限）
+        #[arg(long, default_value_t = 0)]
+        since: u64,
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
+
     #[command(about = "重新加载配置文件")]
     Reload,
 }

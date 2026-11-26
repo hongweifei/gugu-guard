@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod cgroup;
 pub mod config;
 pub mod error;

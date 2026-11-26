@@ -187,6 +187,26 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 #btn-download-logs { color: var(--sky) !important; border-color: rgba(56,189,248,.3) !important; }
 #btn-download-logs:hover { background: var(--sky-dim) !important; }
 
+/* ── Audit ── */
+.audit-container { max-width: 1120px; }
+.audit-dot { background: var(--amber); }
+.audit-note { font-size: .72rem; color: var(--text-3); font-weight: 400; }
+.audit-body { flex: 1; overflow: auto; min-height: 300px; padding-bottom: 8px; }
+.audit-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.audit-table th { position: sticky; top: 0; z-index: 1; background: var(--bg-2); color: var(--text-2); text-align: left; font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.audit-table td { padding: 7px 12px; border-bottom: 1px solid rgba(30,42,64,.6); color: var(--text-2); vertical-align: middle; }
+.audit-row-fail td { background: rgba(239,68,68,.05); }
+.audit-time, .audit-duration { font-family: var(--mono); color: var(--text-3); white-space: nowrap; }
+.audit-action { white-space: nowrap; }
+.audit-action-label { color: var(--text); font-weight: 600; margin-right: 6px; }
+.audit-action code { font-family: var(--mono); font-size: .68rem; color: var(--text-3); background: var(--bg-2); padding: 1px 5px; border-radius: 3px; }
+.audit-target { color: var(--text); font-family: var(--mono); }
+.audit-result { font-weight: 600; padding: 1px 7px; border-radius: 3px; font-size: .72rem; white-space: nowrap; }
+.audit-result.ok { color: var(--green); background: var(--green-dim); }
+.audit-result.fail { color: var(--red); background: var(--red-dim); }
+.audit-client, .audit-actor { font-size: .74rem; color: var(--text-2); white-space: nowrap; }
+.audit-detail { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: .72rem; }
+
 /* ── Modal ── */
 .modal-backdrop, .confirm-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; z-index: 300; opacity: 0; pointer-events: none; transition: opacity .2s; }
 .modal-backdrop.open, .confirm-backdrop.open, #login-backdrop.open { opacity: 1; pointer-events: auto; }

@@ -19,6 +19,7 @@
 - **就绪探针** — `depends_on` 现在等上游真的可用（健康检查通过或端口进入监听）再拉起下游，最多等 `ready_timeout_secs`
 - **日志告警** — 命中关键字、或短时间内输出刷屏，按冷却时间推送通知，避免重试风暴刷爆机器人
 - **日志结构化与检索** — 每行解析出级别、正文、结构化字段与行内时间（JSON / logfmt / 文本启发式），日志面板带级别徽标与字段胶囊；按级别、关键字、输出流检索落盘的日志文件，返回命中与扫描范围
+- **操作审计** — 谁在何时对哪个进程做了什么：写操作（启停、增删改、重载、停止守护）连同结果、来源、客户端与耗时追加到 `logs/audit.jsonl`，保留 90 天；WebUI「操作审计」与 `gugu audit` 可按动作、结果、时间、关键字筛选
 - **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
@@ -193,6 +194,7 @@ gugu logs <name> --file -q 超时   # 检索落盘的历史日志（默认倒读
 gugu history <name> [-m 60]       # 指标时序（CPU/内存/连接数，每分钟一桶）
 gugu exits <name> [-m 60]         # 退出历史与可用率（落盘记录）
 gugu net [-m 60]                  # 整机带宽时序
+gugu audit [-l 100] [--failed]    # 操作审计（新的在前；--action 按动作码，--since 按分钟）
 gugu add <name> -x "node app.js"  # 添加进程
 gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
@@ -249,6 +251,7 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/processes/:name/history?minutes=60` | 指标时序（每分钟一桶，最长 24 小时） |
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | 退出事件与可用率统计 |
 | GET | `/api/v1/system?minutes=60` | 整机带宽时序与当前速率 |
+| GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=关键字&since_minutes=60` | 操作审计（写操作记录，新的在前） |
 | GET | `/api/v1/stats` | 统计信息 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
 | POST | `/api/v1/reload` | 重新加载配置 |
@@ -376,6 +379,29 @@ log_format = "auto"       # auto: 逐行按 JSON → logfmt → 文本 回退；
   用同一解析器逐行结构化后过滤；返回命中条数、扫描行数/字节数，以及是否因预算或条数上限被截断。
   只读当前路径的文件，不读 `.1`…`.5` 轮转备份
 - **时间不冒充** — 历史行如果解析不出自己的时间戳，就不填采集时间：按时间过滤时这类行会被排除
+
+### 操作审计
+
+```bash
+gugu audit                        # 最近 100 条控制面操作，新的在前
+gugu audit --failed --since 60    # 最近一小时失败的操作
+gugu audit --action process.start --json
+```
+
+- **记什么** — 所有会改变状态的写请求：进程增删改、启停重启、健康检查、清空日志、分组启停重启、
+  重载配置、停止守护。GET 只读接口不进审计，所以审计面板自己的查询不会自我循环
+- **一条记录** — 时间、动作码与中文名、对象、HTTP 方法与路径、状态码、耗时、来源地址、
+  客户端（`gugu-cli/<版本>` / WebUI / 其他 User-Agent）、认证结果（`none` / `key` / `denied`），
+  失败时附错误原因（截断到 300 字）
+- **落盘** — 追加到 `<log_dir>/audit.jsonl`（默认 `logs/audit.jsonl`），保留 90 天：
+  每天首次写入时按保留期清理一次，文件超过 8MB 再立即压缩，压缩后仍过大就只留较新的半份。
+  进程内存里另留最近 500 条供接口直接读
+- **认证失败也记** — 401 记为 `denied`，来源、目标、路径都在，便于排查未授权尝试
+- **来源判定** — 优先 `X-Forwarded-For` 的第一跳，其次 `X-Real-IP`，否则用连接的对端地址；
+  反向代理后面请让代理补这两个头，否则记到的是代理地址。直连暴露时这两个头可被伪造，只应在可信代理后面使用
+- **查询** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`：
+  `action` 为动作码，`ok=true/false` 只看成功或失败，`q` 匹配对象、路径、来源与原因，
+  `since_minutes` 限定时间窗口
 
 ### cgroup v2 硬限
 

@@ -1,6 +1,6 @@
 [daemon]
 pid_file = "gugu.pid"
-log_dir = "logs"
+log_dir = "logs"              # 进程日志与操作审计 audit.jsonl 都落在这里
 
 # API Key 认证 (可选，设置后所有 API 和 WebSocket 请求需要携带此 Key)
 # api_key = "your-secret-key"

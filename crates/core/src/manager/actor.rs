@@ -315,6 +315,7 @@ fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntr
 
 async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
     state.daemon_config = new_config.daemon.clone();
+    state.nodes = new_config.nodes.clone();
 
     let (config_dir, log_base) = State::bases(new_config, state.config_path.as_deref());
     state.config_dir = config_dir.clone();

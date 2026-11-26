@@ -2,6 +2,9 @@
 // 其余文件只读写，不再重复声明。加载顺序见 index.html 底部的 <script> 链。
 
 const API = '/api/v1';
+/// 当前查看的节点：`local` 是本机，其余为中心节点配置里的从节点标识。
+/// 切换入口在 nodes.js，REST 与实时推送都跟随这个值。
+let currentNode = localStorage.getItem('gugu_node') || 'local';
 let ws = null;
 let selectedProcess = null;
 let editingName = null;
@@ -23,7 +26,12 @@ let logScrollTop = 0;
 /// 最近一次整机带宽读数，由 WS status 消息的 system 字段更新。
 let systemTraffic = null;
 
-async function api(method, path, body) {
+/// 把接口路径拼上当前节点前缀；本机不加前缀，从节点走中心节点的代理路径。
+function apiPath(path) {
+    return currentNode === 'local' ? path : `/n/${encodeURIComponent(currentNode)}${path}`;
+}
+
+async function request(method, path, body) {
     const opts = { method };
     if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
     if (API_KEY) {
@@ -36,6 +44,16 @@ async function api(method, path, body) {
         throw new Error('Unauthorized');
     }
     return resp.json();
+}
+
+/// 业务接口：自动跟随当前节点。
+async function api(method, path, body) {
+    return request(method, apiPath(path), body);
+}
+
+/// 只发给中心节点自身的接口（节点表），不跟随所选节点。
+async function hubApi(method, path, body) {
+    return request(method, path, body);
 }
 
 function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -59,10 +77,21 @@ function toast(msg, type = 'info') {
 }
 
 function connectWS() {
+    // 切节点时先摘掉旧连接的回调，避免它按旧节点重连出一串幽灵连接。
+    if (ws) {
+        ws.onclose = null;
+        ws.onmessage = null;
+        ws.close();
+    }
+    const node = currentNode;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const tokenParam = API_KEY ? `?token=${encodeURIComponent(API_KEY)}` : '';
-    ws = new WebSocket(`${proto}//${location.host}${API}/ws${tokenParam}`);
-    ws.onmessage = (ev) => {
+    const params = new URLSearchParams();
+    if (API_KEY) params.set('token', API_KEY);
+    if (node !== 'local') params.set('node', node);
+    const query = params.toString() ? `?${params}` : '';
+    const socket = new WebSocket(`${proto}//${location.host}${API}/ws${query}`);
+    ws = socket;
+    socket.onmessage = (ev) => {
         try {
             const d = JSON.parse(ev.data);
             if (d.type === 'status') {
@@ -77,8 +106,10 @@ function connectWS() {
             }
         } catch {}
     };
-    ws.onclose = () => setTimeout(connectWS, 3000);
-    ws.onerror = () => ws.close();
+    socket.onclose = () => {
+        if (ws === socket && currentNode === node) setTimeout(connectWS, 3000);
+    };
+    socket.onerror = () => socket.close();
 }
 
 function showLogin() {

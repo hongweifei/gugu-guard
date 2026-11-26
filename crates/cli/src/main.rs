@@ -30,6 +30,10 @@ struct Cli {
     #[arg(long, global = true)]
     api_key: Option<String>,
 
+    /// 操作哪台节点：`gugu nodes` 里的标识，缺省为本机 local
+    #[arg(long, global = true)]
+    node: Option<String>,
+
     #[arg(long, global = true, hide = true)]
     mode: Option<String>,
 
@@ -86,6 +90,13 @@ enum Commands {
 
     #[command(about = "列出已配置的进程")]
     List {
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[command(about = "列出中心节点纳管的节点与在线状态")]
+    Nodes {
         /// 以 JSON 输出，便于脚本消费
         #[arg(long)]
         json: bool,
@@ -280,7 +291,13 @@ async fn main() -> Result<()> {
         _ => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;
-            client::run_client(&cli.command, &server_url, api_key.as_deref()).await
+            client::run_client(
+                &cli.command,
+                &server_url,
+                api_key.as_deref(),
+                cli.node.as_deref(),
+            )
+            .await
         }
     }
 }

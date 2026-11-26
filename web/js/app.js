@@ -58,7 +58,8 @@ document.getElementById('btn-clear-logs').onclick = async () => {
 document.getElementById('btn-download-logs').onclick = () => {
     if (!selectedProcess) return;
     const tokenParam = API_KEY ? `&token=${encodeURIComponent(API_KEY)}` : '';
-    const url = `${API}/processes/${encodeURIComponent(selectedProcess)}/logs/download?lines=1000${tokenParam}`;
+    const path = apiPath(`/processes/${encodeURIComponent(selectedProcess)}/logs/download`);
+    const url = `${API}${path}?lines=1000${tokenParam}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = `${selectedProcess}.log`;
@@ -130,7 +131,7 @@ document.getElementById('btn-login').onclick = async () => {
     btn.disabled = true;
     btn.textContent = '验证中...';
     try {
-        const resp = await fetch(`${API}/processes`, {
+        const resp = await fetch(`${API}${apiPath('/processes')}`, {
             headers: { 'Authorization': `Bearer ${key}` }
         });
         if (!resp.ok) {
@@ -146,6 +147,7 @@ document.getElementById('btn-login').onclick = async () => {
         render(true);
         connectWS();
         initTerminal();
+        loadNodes();
     } catch {
         API_KEY = '';
         errEl.textContent = '无法连接到服务';
@@ -160,10 +162,12 @@ document.getElementById('login-key').addEventListener('keydown', (e) => {
 });
 
 async function init() {
+    // 先确定当前节点，后面的请求才带对前缀；节点表取不到时按本机继续。
+    await initNodes();
     try {
         const opts = {};
         if (API_KEY) opts.headers = { 'Authorization': `Bearer ${API_KEY}` };
-        const resp = await fetch(`${API}/processes`, opts);
+        const resp = await fetch(`${API}${apiPath('/processes')}`, opts);
         if (resp.status === 401) {
             showLogin();
             return;

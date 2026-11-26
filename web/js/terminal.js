@@ -34,6 +34,11 @@ const TERMINAL_THEME = {
 
 async function initTerminal() {
     const button = document.getElementById('btn-terminal');
+    if (currentNode !== 'local') {
+        // 终端的 PTY 只存在于本机，选中从节点时不提供入口。
+        button.hidden = true;
+        return;
+    }
     try {
         const info = await api('GET', '/terminal');
         terminalInfo = info;

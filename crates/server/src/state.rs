@@ -6,12 +6,15 @@ use gugu_core::manager::SharedManager;
 use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
+use crate::nodes::NodeRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
     pub manager: SharedManager,
     pub metrics: Arc<Metrics>,
     pub audit: Arc<AuditStore>,
+    /// 节点表：本机身份 + 从节点与探测结果。
+    pub nodes: Arc<NodeRegistry>,
     pub api_key: Option<String>,
     pub cors_origins: Vec<String>,
     /// 是否开放 WebUI 内置终端。
@@ -29,12 +32,20 @@ impl AppState {
             manager,
             metrics: Arc::new(Metrics::new()),
             audit: Arc::new(AuditStore::disabled()),
+            nodes: Arc::new(NodeRegistry::local_only()),
             api_key,
             cors_origins,
             terminal_enabled: false,
             terminal_cwd: None,
             shutdown_tx: None,
         }
+    }
+
+    /// 注入节点表；不调用时只有本机 `local`。
+    #[must_use]
+    pub fn with_nodes(mut self, nodes: Arc<NodeRegistry>) -> Self {
+        self.nodes = nodes;
+        self
     }
 
     /// 注入审计仓库；不接时审计只留内存。

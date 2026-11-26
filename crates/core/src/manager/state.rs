@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::{AppConfig, DaemonConfig, ProcessConfig};
+use crate::config::{AppConfig, DaemonConfig, NodeConfig, ProcessConfig};
 use crate::error::Result;
 use crate::history::History;
 use crate::process::ManagedProcess;
@@ -14,6 +14,8 @@ use super::{topological_sort, ProcessSnapshot};
 pub(super) struct State {
     pub(super) processes: HashMap<String, ManagedProcess>,
     pub(super) daemon_config: DaemonConfig,
+    /// 从节点表：本模块只负责原样写回，代理与探测在 server 侧。
+    pub(super) nodes: Vec<NodeConfig>,
     pub(super) config_path: Option<PathBuf>,
     pub(super) config_dir: PathBuf,
     pub(super) log_base: PathBuf,
@@ -46,6 +48,7 @@ impl State {
         Self {
             processes,
             daemon_config: config.daemon.clone(),
+            nodes: config.nodes.clone(),
             config_path,
             config_dir,
             log_base,
@@ -131,6 +134,8 @@ impl State {
                 .iter()
                 .map(|(n, p)| (n.clone(), self.declared_paths(p.config())))
                 .collect(),
+            // 从节点由人工维护，写回时原样保留，不能在增删进程时被抹掉。
+            nodes: self.nodes.clone(),
         };
         config.save(path)?;
         tracing::debug!("配置已保存到 {}", path.display());

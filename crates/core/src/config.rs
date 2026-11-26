@@ -11,6 +11,8 @@ pub const LOCALHOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 9090;
 /// 默认 PID 文件名（生成在配置文件同目录）。
 pub const PID_FILE_NAME: &str = "gugu.pid";
+/// 本机在节点表里的固定标识；从节点不能占用这个名字。
+pub const LOCAL_NODE_NAME: &str = "local";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -18,6 +20,9 @@ pub struct AppConfig {
     pub daemon: DaemonConfig,
     #[serde(default)]
     pub processes: HashMap<String, ProcessConfig>,
+    /// 中心节点纳管的从节点；空表示只有本机。
+    #[serde(default)]
+    pub nodes: Vec<NodeConfig>,
 }
 
 impl AppConfig {
@@ -86,6 +91,23 @@ impl AppConfig {
         let port = self.daemon.web.port.unwrap_or(DEFAULT_PORT);
         format!("{addr}:{port}")
     }
+
+    /// 节点表的问题列表（空表示通过）。
+    #[must_use]
+    pub fn node_problems(&self) -> Vec<String> {
+        validate_nodes(&self.nodes)
+    }
+
+    /// 本机在节点列表里的显示名：`daemon.node_name` 优先，缺省用主机名。
+    #[must_use]
+    pub fn local_node_name(&self) -> Option<String> {
+        self.daemon
+            .node_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
 }
 
 /// webhook 载荷格式。
@@ -107,6 +129,9 @@ pub struct DaemonConfig {
     pub pid_file: Option<PathBuf>,
     #[serde(default)]
     pub log_dir: Option<PathBuf>,
+    /// 本机在节点列表里的显示名；缺省用主机名。只影响展示，节点标识始终是 `local`。
+    #[serde(default)]
+    pub node_name: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
     /// 崩溃 / 不健康 / 恢复 通知的 webhook 地址（钉钉、企微、飞书自定义机器人或自建端）。
@@ -157,6 +182,150 @@ impl Default for WebConfig {
             terminal: false,
         }
     }
+}
+
+/// 中心节点纳管的一台从节点。本机不写在这里，始终以 [`LOCAL_NODE_NAME`] 存在。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeConfig {
+    /// 节点标识：用作 `/api/v1/n/{name}/...` 的路径段与 `--node` 参数。
+    pub name: String,
+    /// 界面上显示的名字，缺省用 `name`。
+    #[serde(default)]
+    pub label: Option<String>,
+    /// 从节点的服务地址，如 `http://10.0.0.12:9090`。
+    pub url: String,
+    /// 访问从节点的 API Key；从节点未开认证时留空。
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+impl NodeConfig {
+    /// 去掉末尾斜杠的地址，拼接 `/api/v1/...` 时不会出现双斜杠。
+    #[must_use]
+    pub fn base_url(&self) -> String {
+        self.url.trim().trim_end_matches('/').to_string()
+    }
+
+    /// 界面显示名：`label` 优先，缺省回到 `name`。
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .unwrap_or(&self.name)
+    }
+
+    /// 校验单个节点：名称能安全放进 URL 路径，地址是 http(s)，对外地址必须带 Key。
+    ///
+    /// # Errors
+    /// 名称、地址或 Key 不满足要求时返回 `GuguError::ConfigError`。
+    pub fn validate(&self) -> crate::error::Result<()> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(crate::error::GuguError::ConfigError(
+                "节点名称不能为空".into(),
+            ));
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点名称 '{name}' 只能用字母、数字、'.'、'_'、'-'"
+            )));
+        }
+        if name.eq_ignore_ascii_case(LOCAL_NODE_NAME) {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点名称 '{name}' 保留给本机"
+            )));
+        }
+        let base = self.base_url();
+        if !(base.starts_with("http://") || base.starts_with("https://")) {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点 '{name}' 的地址必须以 http:// 或 https:// 开头"
+            )));
+        }
+        let Some(host) = url_host(&base) else {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点 '{name}' 的地址缺少主机名"
+            )));
+        };
+        if host.is_empty() {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点 '{name}' 的地址缺少主机名"
+            )));
+        }
+        let has_key = self
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty());
+        if !host_is_loopback(host) && !has_key {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点 '{name}' 指向非回环地址 {host}，必须配置 api_key：代理会用这把 Key 操作从节点"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// 校验节点表，返回人类可读的问题列表（空表示通过）。
+#[must_use]
+pub fn validate_nodes(nodes: &[NodeConfig]) -> Vec<String> {
+    let mut problems: Vec<String> = nodes
+        .iter()
+        .filter_map(|node| node.validate().err())
+        .map(|e| e.to_string())
+        .collect();
+    problems.extend(
+        duplicate_node_names(nodes)
+            .into_iter()
+            .map(|name| format!("节点名称重复: {name}")),
+    );
+    problems
+}
+
+/// 重复的节点名称（忽略大小写，返回首次出现时的写法）。
+#[must_use]
+pub fn duplicate_node_names(nodes: &[NodeConfig]) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::with_capacity(nodes.len());
+    let mut duplicates: Vec<String> = Vec::new();
+    for node in nodes {
+        let name = node.name.trim();
+        let key = name.to_ascii_lowercase();
+        if seen.contains(&key) {
+            if !duplicates.iter().any(|d| d.eq_ignore_ascii_case(name)) {
+                duplicates.push(name.to_string());
+            }
+        } else {
+            seen.push(key);
+        }
+    }
+    duplicates
+}
+
+/// 从 `http(s)://host[:port][/path]` 里取主机名（去端口、去 IPv6 方括号）。
+#[must_use]
+pub fn url_host(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if let Some(stripped) = host.strip_prefix('[') {
+        return stripped.split_once(']').map(|(host, _)| host);
+    }
+    Some(host.split(':').next().unwrap_or(""))
+}
+
+/// 主机是否为本机回环地址（`localhost`、`127.0.0.0/8`、`::1`）。
+#[must_use]
+pub fn host_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

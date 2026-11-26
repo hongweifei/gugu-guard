@@ -328,6 +328,7 @@ mod save_and_load {
                 ..DaemonConfig::default()
             },
             processes,
+            nodes: Vec::new(),
         };
 
         original.save(&path).unwrap();
@@ -658,5 +659,118 @@ mod select_config_path {
             PathBuf::from("/home/user/gugu.toml"),
             "拿不到程序目录时应退回当前目录"
         );
+    }
+}
+
+// ── 多节点配置 ──────────────────────────────────────────────
+
+mod nodes {
+    use super::*;
+
+    fn node(name: &str, url: &str, key: Option<&str>) -> NodeConfig {
+        NodeConfig {
+            name: name.to_string(),
+            label: None,
+            url: url.to_string(),
+            api_key: key.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn parses_nodes_section() {
+        let toml = r#"
+[daemon]
+node_name = "中心机"
+
+[[nodes]]
+name = "web1"
+label = "上海 Web"
+url = "http://10.0.0.12:9090/"
+api_key = "k1"
+
+[[nodes]]
+name = "db1"
+url = "http://127.0.0.1:9092"
+"#;
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.nodes.len(), 2);
+        assert_eq!(config.nodes[0].display_name(), "上海 Web");
+        assert_eq!(config.nodes[0].base_url(), "http://10.0.0.12:9090");
+        assert_eq!(config.nodes[1].display_name(), "db1");
+        assert_eq!(config.local_node_name().as_deref(), Some("中心机"));
+    }
+
+    #[test]
+    fn blank_node_name_falls_back_to_hostname() {
+        let config: AppConfig = toml::from_str("[daemon]\nnode_name = \"   \"\n").unwrap();
+        assert_eq!(config.local_node_name(), None);
+    }
+
+    #[test]
+    fn loopback_node_needs_no_key() {
+        assert!(node("db1", "http://127.0.0.1:9092", None)
+            .validate()
+            .is_ok());
+        assert!(node("db1", "http://localhost:9092", None)
+            .validate()
+            .is_ok());
+        assert!(node("db1", "http://[::1]:9092", None).validate().is_ok());
+    }
+
+    #[test]
+    fn remote_node_requires_key() {
+        let err = node("web1", "http://10.0.0.12:9090", None)
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("api_key"), "应指出缺少 Key: {err}");
+        assert!(node("web1", "https://gugu.example.com", Some("k"))
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_name_and_url() {
+        assert!(node("local", "http://127.0.0.1:1", None)
+            .validate()
+            .is_err());
+        assert!(node("web/1", "http://127.0.0.1:1", None)
+            .validate()
+            .is_err());
+        assert!(node("   ", "http://127.0.0.1:1", None).validate().is_err());
+        assert!(node("web1", "10.0.0.12:9090", None).validate().is_err());
+        assert!(node("web1", "http://", None).validate().is_err());
+    }
+
+    #[test]
+    fn duplicate_names_are_reported() {
+        let problems = validate_nodes(&[
+            node("web1", "http://127.0.0.1:1", None),
+            node("WEB1", "http://127.0.0.1:2", None),
+        ]);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("重复"), "{problems:?}");
+    }
+
+    #[test]
+    fn url_host_strips_port_and_brackets() {
+        assert_eq!(url_host("http://10.0.0.12:9090/api"), Some("10.0.0.12"));
+        assert_eq!(url_host("http://[::1]:9090"), Some("::1"));
+        assert_eq!(
+            url_host("https://user:pw@example.com/x"),
+            Some("example.com")
+        );
+        assert_eq!(url_host("http://"), Some(""));
+        assert_eq!(url_host("example.com"), None);
+    }
+
+    #[test]
+    fn loopback_detection_covers_ipv6_and_localhost() {
+        assert!(host_is_loopback("localhost"));
+        assert!(host_is_loopback("127.0.0.1"));
+        assert!(host_is_loopback("127.9.9.9"));
+        assert!(host_is_loopback("::1"));
+        assert!(!host_is_loopback("10.0.0.12"));
+        assert!(!host_is_loopback("example.com"));
     }
 }

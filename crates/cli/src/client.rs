@@ -18,11 +18,27 @@ struct ApiHelper<'a> {
     client: &'a reqwest::Client,
     base: &'a str,
     key: Option<&'a str>,
+    /// 目标节点；None 或 `local` 时直连本机守护进程。
+    node: Option<&'a str>,
 }
 
 impl<'a> ApiHelper<'a> {
+    /// 实际请求地址：指定从节点时改走中心节点的代理路径 `/api/v1/n/{node}/...`。
+    fn url(&self, path: &str) -> String {
+        match self
+            .node
+            .filter(|node| *node != gugu_core::config::LOCAL_NODE_NAME)
+        {
+            Some(node) => {
+                let rest = path.strip_prefix("/api/v1").unwrap_or(path);
+                format!("{}/api/v1/n/{}{rest}", self.base, node)
+            }
+            None => format!("{}{path}", self.base),
+        }
+    }
+
     fn get(&self, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.client.get(format!("{}{path}", self.base));
+        let mut r = self.client.get(self.url(path));
         if let Some(key) = self.key {
             r = r.header("Authorization", format!("Bearer {key}"));
         }
@@ -30,7 +46,7 @@ impl<'a> ApiHelper<'a> {
     }
 
     fn post(&self, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.client.post(format!("{}{path}", self.base));
+        let mut r = self.client.post(self.url(path));
         if let Some(key) = self.key {
             r = r.header("Authorization", format!("Bearer {key}"));
         }
@@ -38,7 +54,7 @@ impl<'a> ApiHelper<'a> {
     }
 
     fn delete(&self, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.client.delete(format!("{}{path}", self.base));
+        let mut r = self.client.delete(self.url(path));
         if let Some(key) = self.key {
             r = r.header("Authorization", format!("Bearer {key}"));
         }
@@ -73,6 +89,7 @@ pub(crate) async fn run_client(
     command: &Commands,
     server_url: &str,
     api_key: Option<&str>,
+    node: Option<&str>,
 ) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("gugu-cli/", env!("CARGO_PKG_VERSION")))
@@ -82,16 +99,29 @@ pub(crate) async fn run_client(
         client: &client,
         base: server_url,
         key: api_key,
+        node,
     };
 
     match command {
+        Commands::Nodes { json } => {
+            // 节点表是中心节点自己的概念，不受 --node 影响。
+            let hub = ApiHelper {
+                client: &client,
+                base: server_url,
+                key: api_key,
+                node: None,
+            };
+            let body = fetch_json(&hub, "/api/v1/nodes").await?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                print_nodes_table(&body);
+            }
+        }
+
         Commands::Status { json } => {
-            let resp = api
-                .get("/api/v1/processes")
-                .send()
-                .await
-                .context("无法连接到守护进程，请确认是否已启动")?;
-            let processes: Vec<gugu_core::process::ProcessInfo> = resp.json().await?;
+            let processes: Vec<gugu_core::process::ProcessInfo> =
+                get_json(&api, "/api/v1/processes").await?;
             if *json {
                 println!("{}", serde_json::to_string_pretty(&processes)?);
             } else {
@@ -100,12 +130,8 @@ pub(crate) async fn run_client(
         }
 
         Commands::List { json } => {
-            let resp = api
-                .get("/api/v1/processes")
-                .send()
-                .await
-                .context("无法连接到守护进程")?;
-            let processes: Vec<gugu_core::process::ProcessInfo> = resp.json().await?;
+            let processes: Vec<gugu_core::process::ProcessInfo> =
+                get_json(&api, "/api/v1/processes").await?;
             if *json {
                 println!("{}", serde_json::to_string_pretty(&processes)?);
             } else {
@@ -236,8 +262,9 @@ pub(crate) async fn run_client(
                 );
                 let resp = api.get(&url).send().await?;
                 if !resp.status().is_success() {
+                    let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
-                    anyhow::bail!("检索历史日志失败: {text}");
+                    return Err(api_error(status, &text));
                 }
                 let report: LogSearchReport = resp.json().await?;
                 for hit in &report.hits {
@@ -273,8 +300,9 @@ pub(crate) async fn run_client(
                 let url = format!("/api/v1/processes/{name}/logs?{}", encode_query(&params));
                 let resp = api.get(&url).send().await?;
                 if !resp.status().is_success() {
+                    let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
-                    anyhow::bail!("获取日志失败: {text}");
+                    return Err(api_error(status, &text));
                 }
                 let logs: Vec<LogEntry> = resp.json().await?;
                 for entry in &logs {
@@ -479,6 +507,58 @@ fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
     println!("{table}");
 }
 
+/// `gugu nodes`：本机与从节点的在线状态、延迟与负载概览。
+fn print_nodes_table(body: &serde_json::Value) {
+    let Some(nodes) = body.get("nodes").and_then(|n| n.as_array()) else {
+        println!("节点表为空");
+        return;
+    };
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_header(vec![
+        Cell::new("节点").add_attribute(Attribute::Bold),
+        Cell::new("显示名").add_attribute(Attribute::Bold),
+        Cell::new("地址").add_attribute(Attribute::Bold),
+        Cell::new("状态").add_attribute(Attribute::Bold),
+        Cell::new("延迟").add_attribute(Attribute::Bold),
+        Cell::new("版本").add_attribute(Attribute::Bold),
+        Cell::new("进程").add_attribute(Attribute::Bold),
+        Cell::new("备注").add_attribute(Attribute::Bold),
+    ]);
+
+    for node in nodes {
+        let online = node["online"].as_bool().unwrap_or(false);
+        let state = if online {
+            Cell::new("在线").fg(Color::Green)
+        } else {
+            Cell::new("离线").fg(Color::Red)
+        };
+        let url = node["url"].as_str().unwrap_or("本机");
+        let latency = node["latency_ms"]
+            .as_u64()
+            .map_or_else(|| "-".to_string(), |ms| format!("{ms} ms"));
+        let version = node["version"].as_str().unwrap_or("-");
+        let processes = node["processes"].as_u64().unwrap_or(0);
+        let running = node["running"].as_u64().unwrap_or(0);
+        let note = node["last_error"].as_str().unwrap_or("");
+        table.add_row(vec![
+            Cell::new(node["id"].as_str().unwrap_or("-")),
+            Cell::new(node["name"].as_str().unwrap_or("-")),
+            Cell::new(url),
+            state,
+            Cell::new(latency),
+            Cell::new(version),
+            Cell::new(format!("{running}/{processes}")),
+            Cell::new(note),
+        ]);
+    }
+
+    println!("{table}");
+    println!("共 {} 个节点；用 --node <节点> 操作从节点", nodes.len());
+}
+
 fn parse_log_format(raw: &str) -> Result<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "auto" => Ok("auto"),
@@ -540,19 +620,34 @@ fn print_log_line(
     println!("[{time}] [{stream_tag}] {level_tag} {text}");
 }
 
-/// 取一个 JSON 接口的响应体；非 2xx 时把错误信息带出来。
-async fn fetch_json(api: &ApiHelper<'_>, path: &str) -> Result<serde_json::Value> {
+/// 取一个 JSON 接口的响应体；非 2xx 时把服务端的一句话错误带出来
+/// （代理到从节点时这里会显示「节点 web1 不可达」这类原因，而不是解析失败）。
+async fn get_json<T: serde::de::DeserializeOwned>(api: &ApiHelper<'_>, path: &str) -> Result<T> {
     let resp = api.get(path).send().await.context("无法连接到守护进程")?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        let msg = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.as_str().map(str::to_string)))
-            .unwrap_or(text);
-        anyhow::bail!("请求失败 ({status}): {msg}");
+        return Err(api_error(status, &text));
     }
-    Ok(serde_json::from_str(&text)?)
+    serde_json::from_str(&text).with_context(|| format!("解析 {path} 的响应失败"))
+}
+
+/// 服务端错误响应统一取 `error` 字段；没有 JSON 就退回原文。
+fn api_error(status: reqwest::StatusCode, text: &str) -> anyhow::Error {
+    let message = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| text.trim().to_string());
+    anyhow::anyhow!("请求失败 ({status}): {message}")
+}
+
+/// 取一个 JSON 接口的响应体；非 2xx 时把错误信息带出来。
+async fn fetch_json(api: &ApiHelper<'_>, path: &str) -> Result<serde_json::Value> {
+    get_json(api, path).await
 }
 
 fn new_table(header: Vec<&str>) -> Table {

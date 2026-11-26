@@ -688,3 +688,46 @@ mod restart_group {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "不存在的组应返回 404");
     }
 }
+
+// ── POST /api/v1/processes/:name：可选字段显式传 null ─────────
+
+mod create_process_nullable_fields {
+    use super::*;
+
+    #[tokio::test]
+    async fn accepts_explicit_nulls_from_cli_clients() {
+        let dir = tempdir();
+        let app = make_app_with_dir(dir.path());
+        let body = serde_json::json!({
+            "command": "ping",
+            "args": [],
+            "auto_start": false,
+            "start_now": false,
+            "log_format": null,
+            "stdout_log": null,
+            "stderr_log": null,
+            "cpu_max": null,
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/processes/nullable")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "log_format: null 应按默认值处理，CLI 未传格式时就是这种请求"
+        );
+        let saved = std::fs::read_to_string(dir.path().join("gugu.toml")).unwrap();
+        assert!(
+            saved.contains("log_format = \"auto\""),
+            "落盘配置应写入默认的 auto 格式，实际:\n{saved}"
+        );
+    }
+}

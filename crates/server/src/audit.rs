@@ -140,32 +140,64 @@ fn truncate(text: &str, max_chars: usize) -> String {
 }
 
 /// 把方法 + 路径映射成审计动作。GET / HEAD / OPTIONS 返回 None（不审计）。
+///
+/// 代理路径 `/api/v1/n/{node}/...` 剥掉节点前缀后按同一张表分类，
+/// 对象前面带上节点名（`web1/api`），从节点的写操作在审计里不会和本机混在一起。
 fn classify(method: &Method, path: &str) -> Option<Action> {
     if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
         return None;
     }
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
 
-    let action = match (method.as_str(), segments.as_slice()) {
-        ("POST", ["api", "v1", "processes", _]) => Some(("process.create", "添加进程")),
-        ("PUT", ["api", "v1", "processes", _]) => Some(("process.update", "更新进程")),
-        ("DELETE", ["api", "v1", "processes", _]) => Some(("process.delete", "删除进程")),
-        ("POST", ["api", "v1", "processes", _, "start"]) => Some(("process.start", "启动进程")),
-        ("POST", ["api", "v1", "processes", _, "stop"]) => Some(("process.stop", "停止进程")),
-        ("POST", ["api", "v1", "processes", _, "restart"]) => Some(("process.restart", "重启进程")),
-        ("POST", ["api", "v1", "processes", _, "health"]) => Some(("process.health", "健康检查")),
-        ("DELETE", ["api", "v1", "processes", _, "logs"]) => Some(("logs.clear", "清空日志")),
-        ("POST", ["api", "v1", "groups", _, "start"]) => Some(("group.start", "启动分组")),
-        ("POST", ["api", "v1", "groups", _, "stop"]) => Some(("group.stop", "停止分组")),
-        ("POST", ["api", "v1", "groups", _, "restart"]) => Some(("group.restart", "重启分组")),
-        ("POST", ["api", "v1", "reload"]) => Some(("config.reload", "重新加载配置")),
-        ("POST", ["api", "v1", "shutdown"]) => Some(("daemon.shutdown", "停止守护进程")),
+    if let Some(rest) = segments.strip_prefix(&["api", "v1", "n"][..]) {
+        let Some((node, inner)) = rest.split_first() else {
+            return Some(Action {
+                code: "http.write",
+                label: "写操作",
+                target: None,
+            });
+        };
+        let action = classify_segments(method, inner)?;
+        let target = Some(match action.target {
+            Some(target) => format!("{node}/{target}"),
+            None => (*node).to_string(),
+        });
+        return Some(Action {
+            code: action.code,
+            label: action.label,
+            target,
+        });
+    }
+
+    classify_segments(method, &segments)
+}
+
+/// 按资源段分类；`segments` 可以带也可以不带 `/api/v1` 前缀。
+fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
+    let rest = segments
+        .strip_prefix(&["api", "v1"][..])
+        .unwrap_or(segments);
+
+    let action = match (method.as_str(), rest) {
+        ("POST", ["processes", _]) => Some(("process.create", "添加进程")),
+        ("PUT", ["processes", _]) => Some(("process.update", "更新进程")),
+        ("DELETE", ["processes", _]) => Some(("process.delete", "删除进程")),
+        ("POST", ["processes", _, "start"]) => Some(("process.start", "启动进程")),
+        ("POST", ["processes", _, "stop"]) => Some(("process.stop", "停止进程")),
+        ("POST", ["processes", _, "restart"]) => Some(("process.restart", "重启进程")),
+        ("POST", ["processes", _, "health"]) => Some(("process.health", "健康检查")),
+        ("DELETE", ["processes", _, "logs"]) => Some(("logs.clear", "清空日志")),
+        ("POST", ["groups", _, "start"]) => Some(("group.start", "启动分组")),
+        ("POST", ["groups", _, "stop"]) => Some(("group.stop", "停止分组")),
+        ("POST", ["groups", _, "restart"]) => Some(("group.restart", "重启分组")),
+        ("POST", ["reload"]) => Some(("config.reload", "重新加载配置")),
+        ("POST", ["shutdown"]) => Some(("daemon.shutdown", "停止守护进程")),
         // 以后新增的写接口至少会留下痕迹，不会静默漏记。
         _ => Some(("http.write", "写操作")),
     }?;
 
-    let target = match segments.as_slice() {
-        ["api", "v1", "processes" | "groups", _, ..] => segments.get(3).map(ToString::to_string),
+    let target = match rest {
+        ["processes" | "groups", _, ..] => rest.get(1).map(ToString::to_string),
         _ => None,
     };
     Some(Action {
@@ -252,6 +284,20 @@ mod tests {
         assert!(classify(&Method::GET, "/api/v1/processes").is_none());
         assert!(classify(&Method::OPTIONS, "/api/v1/processes/web").is_none());
         assert!(classify(&Method::HEAD, "/api/v1/processes").is_none());
+    }
+
+    #[test]
+    fn node_prefixed_writes_carry_the_node_in_target() {
+        let action = classify(&Method::POST, "/api/v1/n/web1/processes/api/start")
+            .expect("代理写操作应被审计");
+        assert_eq!(action.code, "process.start");
+        assert_eq!(action.target.as_deref(), Some("web1/api"));
+
+        let reload = classify(&Method::POST, "/api/v1/n/web1/reload").expect("代理重载应被审计");
+        assert_eq!(reload.code, "config.reload");
+        assert_eq!(reload.target.as_deref(), Some("web1"));
+
+        assert!(classify(&Method::GET, "/api/v1/n/web1/processes").is_none());
     }
 
     #[test]

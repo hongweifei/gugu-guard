@@ -1,18 +1,54 @@
-use axum::{extract::State, response::IntoResponse, routing::get, Router};
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json, Router};
+use gugu_core::config::LOCAL_NODE_NAME;
+use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::state::AppState;
 
+#[derive(Debug, Deserialize)]
+struct WsQuery {
+    /// 选中从节点时带上节点标识；缺省或 `local` 走本机。
+    #[serde(default)]
+    node: Option<String>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/v1/ws", get(ws_handler))
 }
 
+/// 本机直接推流；选了从节点就与它的 `/api/v1/ws` 建一条中继，
+/// 浏览器端看到的仍是同一种 `status` / `logs` 消息。
 async fn ws_handler(
-    ws: axum::extract::ws::WebSocketUpgrade,
+    ws: WebSocketUpgrade,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    Query(query): Query<WsQuery>,
+) -> Response {
+    let node = query
+        .node
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty() && *node != LOCAL_NODE_NAME);
+    let Some(node) = node else {
+        return ws
+            .on_upgrade(move |socket| handle_socket(socket, state))
+            .into_response();
+    };
+    let Some(remote) = state.nodes.remote(node) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("未知节点: {node}") })),
+        )
+            .into_response();
+    };
+    let node = node.to_string();
+    ws.on_upgrade(move |socket| crate::nodes::relay_ws(remote, socket, node))
+        .into_response()
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {

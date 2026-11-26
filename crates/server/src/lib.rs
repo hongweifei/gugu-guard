@@ -2,6 +2,7 @@ pub mod api;
 pub mod assets;
 pub mod audit;
 pub mod metrics;
+pub mod nodes;
 pub mod state;
 pub mod terminal;
 pub mod ws;
@@ -17,11 +18,12 @@ use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Router;
 use gugu_core::audit::AuditStore;
+use gugu_core::config::NodeConfig;
 use gugu_core::manager::SharedManager;
 use state::AppState;
 use tower_http::cors::CorsLayer;
 
-/// Web 服务的可选配置：认证、跨域、审计落盘位置与内置终端。
+/// Web 服务的可选配置：认证、跨域、审计落盘位置、内置终端与从节点表。
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub api_key: Option<String>,
@@ -32,6 +34,10 @@ pub struct ServerOptions {
     pub terminal: bool,
     /// 终端会话的工作目录；None 时用当前目录。
     pub terminal_cwd: Option<PathBuf>,
+    /// 由本节点纳管的从节点；空表示只有本机。
+    pub nodes: Vec<NodeConfig>,
+    /// 本机在节点表里的显示名；None 时用主机名。
+    pub node_name: Option<String>,
 }
 
 fn embedded_static_handler(req: Request) -> Response {
@@ -69,14 +75,29 @@ pub async fn run_server(
         terminal::check_exposure(addr.ip(), options.api_key.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
+    // 节点表配错（重名、地址不合法、对外地址没 Key）同样直接拒绝启动。
+    let node_problems = gugu_core::config::validate_nodes(&options.nodes);
+    if !node_problems.is_empty() {
+        return Err(anyhow::anyhow!(
+            "节点配置有误: {}",
+            node_problems.join("；")
+        ));
+    }
 
     let audit = options
         .audit_dir
         .map_or_else(AuditStore::disabled, AuditStore::new);
+    let nodes = Arc::new(nodes::NodeRegistry::new(
+        &options.nodes,
+        options.node_name.clone(),
+    ));
     let state = AppState::new(manager, options.api_key, options.cors_origins)
         .with_audit(Arc::new(audit))
+        .with_nodes(nodes)
         .with_shutdown(api_shutdown_tx)
         .with_terminal(options.terminal, options.terminal_cwd);
+    // 从节点探测独立于请求处理：没有从节点时任务立即结束。
+    let poller = state.nodes.spawn_poller();
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()
@@ -97,6 +118,7 @@ pub async fn run_server(
         .merge(ws::routes())
         .merge(metrics::routes())
         .merge(terminal::routes())
+        .merge(nodes::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth_middleware,
@@ -115,14 +137,16 @@ pub async fn run_server(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Web 服务已启动: http://{addr}");
 
-    axum::serve(
+    let served = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
         let _ = (&mut shutdown_rx).await;
     })
-    .await?;
+    .await;
+    poller.abort();
+    served?;
 
     Ok(())
 }

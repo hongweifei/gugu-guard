@@ -45,6 +45,18 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .search-box input:focus { border-color: var(--accent); width: 260px; }
 .search-box input::placeholder { color: var(--text-3); }
 
+/* ── Nodes ── */
+.node-picker { display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); transition: border-color .2s; }
+.node-picker:hover { border-color: var(--border-hover); }
+.node-picker select { background: transparent; border: none; color: var(--text); font-family: var(--sans); font-size: .85rem; font-weight: 500; outline: none; cursor: pointer; max-width: 200px; }
+.node-picker select option { background: var(--bg-2); color: var(--text); }
+.node-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: 0 0 auto; }
+.node-dot.local { background: var(--accent); }
+.node-dot.online { background: var(--green); }
+.node-dot.offline { background: var(--red); }
+.node-banner { display: flex; align-items: center; gap: 8px; margin: -8px 0 20px; padding: 10px 14px; border: 1px solid var(--red); border-radius: 10px; background: var(--red-dim); color: var(--text); font-size: .85rem; line-height: 1.5; }
+.node-banner-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex: 0 0 auto; }
+
 /* ── Buttons ── */
 .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); color: var(--text); font-family: var(--sans); font-size: .85rem; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
 .btn:hover { border-color: var(--border-hover); background: var(--bg-3); }

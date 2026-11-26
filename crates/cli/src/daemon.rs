@@ -73,6 +73,7 @@ pub fn default_config_template() -> String {
 [daemon]
 pid_file = \"{pid}\"
 log_dir = \"logs\"
+# node_name = \"中心机\"    # 本机在节点表里的显示名；缺省用主机名
 # api_key = \"your-secret-key\"
 # webhook_url = \"https://oapi.dingtalk.com/robot/send?access_token=xxx\"
 # webhook_format = \"dingtalk\"   # dingtalk(钉钉/企微) | feishu | raw
@@ -83,6 +84,14 @@ port = {port}
 # cors_origins = [\"http://localhost:3000\"]
 # terminal = false   # 内置终端默认关闭；开启后浏览器里就是一个真实 shell。
                    # 监听非回环地址时必须同时配置 daemon.api_key，否则拒绝启动。
+
+# 多节点 (可选)：在中心节点声明其他机器，WebUI 顶栏即可切换并直接操作它们。
+# 从节点只需正常跑 gugu；指向非回环地址时必须填 api_key，否则中心节点拒绝启动。
+# [[nodes]]
+# name = \"web1\"                 # 节点标识，用作 --node 参数，只能用字母/数字/._-
+# label = \"上海 Web\"            # 界面显示名，可省略
+# url = \"http://10.0.0.12:9090\"
+# api_key = \"从节点的 daemon.api_key\"
 
 # 守护进程自身的运行日志按天写入 log_dir 下的 gugu-daemon.<日期>.log (保留最近 30 份)。
 # 操作审计写入 log_dir/audit.jsonl（保留 90 天，只记写操作，GET 不记）。
@@ -224,6 +233,15 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
             .map_err(anyhow::Error::msg)?;
     }
 
+    // 节点表同理：代理会拿配置里的 Key 去操作从节点，地址或 Key 配错就明确失败。
+    let node_problems = config.node_problems();
+    if !node_problems.is_empty() {
+        return Err(anyhow::anyhow!(
+            "节点配置有误:\n  - {}",
+            node_problems.join("\n  - ")
+        ));
+    }
+
     let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let log_base = config
         .daemon
@@ -255,6 +273,9 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     if config.daemon.web.terminal {
         tracing::info!("WebUI 内置终端已启用，工作目录: {}", config_dir.display());
     }
+    if !config.nodes.is_empty() {
+        tracing::info!("多节点已启用，纳管 {} 台从节点", config.nodes.len());
+    }
 
     // 启动 manager actor（内部会自动启动所有 auto_start 进程和监控循环）
     let shared = gugu_core::manager::start(&config, Some(config_path.to_path_buf()));
@@ -265,12 +286,14 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     let server_shared = shared.clone();
     let server_options = gugu_server::ServerOptions {
         api_key,
-        cors_origins: config.daemon.web.cors_origins,
+        cors_origins: config.daemon.web.cors_origins.clone(),
         // 审计与守护日志同处 log_dir，便于一并备份/清理
         audit_dir: Some(log_base),
         terminal: config.daemon.web.terminal,
         // 打开终端默认落在配置文件所在目录，相对路径与配置里的写法一致
         terminal_cwd: Some(config_dir),
+        nodes: config.nodes.clone(),
+        node_name: config.local_node_name(),
     };
     let server_handle = tokio::spawn(async move {
         if let Err(e) = gugu_server::run_server(

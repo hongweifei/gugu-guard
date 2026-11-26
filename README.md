@@ -21,6 +21,7 @@
 - **日志结构化与检索** — 每行解析出级别、正文、结构化字段与行内时间（JSON / logfmt / 文本启发式），日志面板带级别徽标与字段胶囊；按级别、关键字、输出流检索落盘的日志文件，返回命中与扫描范围
 - **操作审计** — 谁在何时对哪个进程做了什么：写操作（启停、增删改、重载、停止守护）连同结果、来源、客户端与耗时追加到 `logs/audit.jsonl`，保留 90 天；WebUI「操作审计」与 `gugu audit` 可按动作、结果、时间、关键字筛选
 - **WebUI 内置终端** — 浏览器里打开一个真实 PTY（Windows ConPTY / Unix openpty）：`cd`、分页器、彩色输出与交互式程序都照常工作，输出实时流式回传。默认关闭，开启后受 API Key 与回环监听两道安全门槛约束；单实例最多 4 个会话，空闲 30 分钟自动关闭，打开与关闭写入操作审计
+- **多节点** — 一台中心节点纳管多台跑着 gugu 的机器：`[[nodes]]` 里写上从节点地址与 Key，WebUI 顶栏切换后直接启停进程、看日志、改配置；节点表每 5 秒探测在线状态与延迟，REST 代理与 WebSocket 中继都由中心节点完成，从节点零改动
 - **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
@@ -185,6 +186,9 @@ gugu daemon start                 # 后台启动守护进程 (分离运行，日
 gugu daemon stop                  # 优雅停止守护进程 (停子进程 → 关服务 → 清 pid)
 gugu status                       # 查看所有进程状态
 gugu list                         # 列出已配置进程
+gugu nodes                        # 列出中心节点纳管的节点与在线状态
+gugu --node web1 status           # 操作从节点（经中心节点代理，命令与本地一致）
+gugu --node web1 logs api -l 50
 gugu start <name>                 # 启动进程
 gugu stop <name>                  # 停止进程
 gugu restart <name>               # 重启进程
@@ -213,6 +217,7 @@ gugu uninstall                    # 卸载开机自启 (同样支持 --mode / --
 -c, --config <PATH>      # 指定配置文件 (默认：程序同目录的 gugu.toml)
     --server <URL>       # 指定服务端地址
     --api-key <KEY>      # 指定 API Key (优先级高于配置文件)
+    --node <NAME>        # 操作哪台节点：gugu nodes 里的标识，缺省为本机 local
 ```
 
 ### 添加进程示例
@@ -255,6 +260,10 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=关键字&since_minutes=60` | 操作审计（写操作记录，新的在前） |
 | GET | `/api/v1/terminal` | 终端是否启用、shell、工作目录、会话上限与空闲超时 |
 | WS | `/api/v1/terminal/ws` | 内置终端会话（JSON 帧：`input` / `resize` / `data` / `exit`） |
+| GET | `/api/v1/nodes` | 节点表：本机与从节点的在线状态、延迟、版本、进程数 |
+| GET | `/api/v1/node` | 本节点自身信息（中心节点每 5 秒探测从节点的也是这个接口） |
+| ANY | `/api/v1/n/{node}/...` | 代理到从节点的同名接口（方法、查询串、请求体、下载头都原样转发） |
+| WS | `/api/v1/ws?node=web1` | 跟随所选节点的实时推送（中心节点与从节点建中继） |
 | GET | `/api/v1/stats` | 统计信息 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
 | POST | `/api/v1/reload` | 重新加载配置 |
@@ -262,6 +271,7 @@ gugu add frontend -x "bun run dev" \
 | WS | `/api/v1/ws` | 实时状态推送 |
 
 > 设置 `api_key` 后，所有 API 请求需携带 `Authorization: Bearer <key>` 请求头，WebSocket 连接需添加 `?token=<key>` 查询参数。
+> 从节点代理路径同样受中心节点自己的认证保护；从节点的 Key 只存在于中心节点配置里，`GET /api/v1/nodes` 不会返回它。
 
 ## 项目结构
 
@@ -275,7 +285,7 @@ gugu-guard/
 ├── web/            # WebUI (无构建步骤，直接内嵌进二进制)
 │   ├── index.html
 │   ├── style.css
-│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / form(表单) / app(接线与启动)
+│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / form(表单) / nodes(节点切换) / app(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
 ```
@@ -288,6 +298,7 @@ gugu-guard/
 |------|------|--------|------|
 | `daemon.pid_file` | string | — | PID 文件路径 |
 | `daemon.log_dir` | string | — | 日志目录 |
+| `daemon.node_name` | string | 主机名 | 本机在节点表里的显示名；节点标识始终是 `local` |
 | `daemon.api_key` | string | — | API Key，设置后启用认证 |
 | `daemon.webhook_url` | string | — | 异常通知的 webhook 地址（钉钉/企微/飞书机器人或自建端） |
 | `daemon.webhook_format` | string | `dingtalk` | 载荷格式：`dingtalk`（钉钉与企微同形）/ `feishu` / `raw` |
@@ -437,6 +448,29 @@ addr = "127.0.0.1"               # 只给本机用时，回环监听可以不带
 - **协议** — 客户端 `{"type":"input","data":"..."}`、`{"type":"resize","cols":120,"rows":30}`；
   服务端 `{"type":"ready","shell","cwd","max_sessions","idle_timeout_secs"}`、`{"type":"data","data":"..."}`、
   `{"type":"exit","code","reason"}`
+
+### 多节点
+
+```toml
+[daemon]
+node_name = "中心机"             # 界面上显示的名字，缺省用主机名
+
+[[nodes]]
+name = "web1"                   # 节点标识：URL 路径与 --node 都用它
+label = "上海 Web"              # 显示名，可省略
+url = "http://10.0.0.12:9090"   # 从节点地址
+api_key = "从节点的 daemon.api_key"   # 指向非回环地址时必填
+```
+
+- **拓扑** — 只有中心节点需要这段配置。从节点照常跑 gugu，不需要知道中心节点存在；它只要开放自己的 HTTP 端口，按需配置 `daemon.api_key`
+- **切换即操作** — WebUI 顶栏的节点选择器切换后，进程列表、日志、指标、审计、表单全部指向该节点，启停与改配置直接生效；实时状态与日志通过 `WS /api/v1/ws?node=` 由中心节点中继，仍是 2 秒一推
+- **在线状态** — 中心节点每 5 秒探测一次各从节点的 `GET /api/v1/node`，记录在线/离线、往返延迟、版本与进程数；顶栏圆点与 `gugu nodes` 都读这份结果，离线时页面顶部显示最后一条错误
+- **HTTP 代理** — `/api/v1/n/{node}/...` 把方法、查询串、请求体、`Content-Type` 与下载头原样转发，认证换成从节点自己的 Key；响应状态码与正文不经改写
+- **命令行** — `gugu nodes` 列出节点；`--node <name>` 让客户端命令走中心节点代理，例如 `gugu --node web1 restart api`
+- **审计** — 代理的写操作在中心节点记一条，动作码与本机一致，对象带上节点名（`web1/api`），本机与从节点的操作不会混在一起
+- **安全** — 指向非回环地址的节点必须配置 `api_key`，否则守护进程拒绝启动（与终端同一道门槛）；从节点的 Key 只出现在中心节点的配置与转发请求里
+- **终端** — 内置终端操作的是跑着 gugu 的那台机器，只对本机开放；选中从节点时入口隐藏，要在从节点上开终端就访问它自己的面板
+- **生效时机** — 节点表在守护进程启动时读取；改动 `[[nodes]]` 后重启守护进程（`gugu reload` 只重载进程配置与守护参数，不重建节点表）
 
 ### cgroup v2 硬限
 

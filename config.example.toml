@@ -2,6 +2,9 @@
 pid_file = "gugu.pid"
 log_dir = "logs"              # 进程日志与操作审计 audit.jsonl 都落在这里
 
+# 本机在节点表里的显示名 (可选，缺省用主机名)。只影响展示，节点标识始终是 local。
+# node_name = "中心机"
+
 # API Key 认证 (可选，设置后所有 API 和 WebSocket 请求需要携带此 Key)
 # api_key = "your-secret-key"
 
@@ -21,6 +24,16 @@ port = 9090
 # WebUI 内置终端 (默认关闭)。开启后浏览器里是一个真实 shell，
 # 监听非回环地址时必须同时配置 daemon.api_key，否则守护进程拒绝启动。
 # terminal = false
+
+# 多节点 (可选)：在中心节点声明其他机器，WebUI 顶栏切换后可直接启停进程、
+# 看日志、改配置，实时状态与日志也随之跟随所选节点。
+# 从节点只需正常跑 gugu，不需要任何额外配置；指向非回环地址时必须填 api_key
+# (中心节点用它访问从节点)，否则中心节点拒绝启动。
+# [[nodes]]
+# name = "web1"                 # 节点标识，用作 --node 参数，只能用字母/数字/._-
+# label = "上海 Web"            # 界面显示名，可省略
+# url = "http://10.0.0.12:9090"
+# api_key = "从节点的 daemon.api_key"
 
 # 示例进程配置
 # 注意：其中的相对路径 (logs/、工作目录) 都相对于本配置文件所在目录，

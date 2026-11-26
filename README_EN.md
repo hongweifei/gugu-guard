@@ -21,6 +21,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Structured Logs & Search** — each line is parsed into level, message, structured fields and an in-line timestamp (JSON / logfmt / text heuristics), so the log panel shows level badges and field chips; logs on disk are searchable by level, keyword and stream, with hit and scan-range counts
 - **Operation Audit** — who did what to which process and when: write operations (start/stop, add/update/delete, reload, daemon shutdown) are appended to `logs/audit.jsonl` with result, source, client and duration, kept for 90 days; the WebUI "Operation Audit" panel and `gugu audit` filter by action, result, time and keyword
 - **Built-in WebUI Terminal** — a real PTY in the browser (ConPTY on Windows, openpty on Unix): `cd`, pagers, colors and TUI programs behave normally, and output streams back live. Off by default; when enabled it is gated by API Key auth and loopback binding. Up to 4 sessions per instance, 30-minute idle timeout, and both open and close are written to the operation audit
+- **Multiple Nodes** — one hub manages several machines running gugu: list them under `[[nodes]]` with their URL and Key, then switch in the WebUI top bar to start/stop processes, read logs and edit config directly. Health is probed every 5 seconds; REST proxying and WebSocket relaying happen on the hub, so remote nodes need no extra setup
 - **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
@@ -184,6 +185,9 @@ gugu daemon start                 # Start detached in background (logs to file)
 gugu daemon stop                  # Graceful stop (children → server → pid file)
 gugu status                       # Show process status
 gugu list                         # List configured processes
+gugu nodes                        # List managed nodes with online state
+gugu --node web1 status           # Operate a remote node through the hub, same syntax
+gugu --node web1 logs api -l 50
 gugu start <name>                 # Start a process
 gugu stop <name>                  # Stop a process
 gugu restart <name>               # Restart a process
@@ -212,6 +216,7 @@ Global options:
 -c, --config <PATH>      # Config file path (default: gugu.toml next to the binary)
     --server <URL>       # Server URL to connect to
     --api-key <KEY>      # API Key (overrides config file)
+    --node <NAME>        # Target node (id from gugu nodes; default local)
 ```
 
 ### Add Process Examples
@@ -255,6 +260,10 @@ cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-l
 | GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=keyword&since_minutes=60` | Operation audit records (write operations, newest first) |
 | GET | `/api/v1/terminal` | Terminal availability, shell, working directory, session limit and idle timeout |
 | WS | `/api/v1/terminal/ws` | Built-in terminal session (JSON frames: `input` / `resize` / `data` / `exit`) |
+| GET | `/api/v1/nodes` | Node table: local plus remote nodes with online state, latency, version, process counts |
+| GET | `/api/v1/node` | This node's own info (also what the hub probes every 5 seconds) |
+| ANY | `/api/v1/n/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
+| WS | `/api/v1/ws?node=web1` | Real-time push for the selected node (hub relays to the node) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
 | POST | `/api/v1/reload` | Reload config |
@@ -262,6 +271,7 @@ cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-l
 | WS | `/api/v1/ws` | Real-time status |
 
 > When `api_key` is set, all API requests require the `Authorization: Bearer <key>` header. WebSocket connections require `?token=<key>` query parameter.
+> Proxy paths are protected by the hub's own auth; remote node keys live only in the hub config and are never returned by `GET /api/v1/nodes`.
 
 ## Project Structure
 
@@ -287,6 +297,7 @@ gugu-guard/
 |-------|------|---------|-------------|
 | `daemon.pid_file` | string | — | PID file path |
 | `daemon.log_dir` | string | — | Log directory |
+| `daemon.node_name` | string | hostname | Display name of this machine in the node table; the node id stays `local` |
 | `daemon.api_key` | string | — | API Key, enables auth when set |
 | `daemon.webhook_url` | string | — | Alert webhook (DingTalk / WeCom / Feishu bot or your own endpoint) |
 | `daemon.webhook_format` | string | `dingtalk` | Payload shape: `dingtalk` (WeCom shares it) / `feishu` / `raw` |
@@ -450,6 +461,29 @@ addr = "127.0.0.1"               # loopback-only use may omit the API Key
 - **Protocol** — client `{"type":"input","data":"..."}` and `{"type":"resize","cols":120,"rows":30}`; server
   `{"type":"ready","shell","cwd","max_sessions","idle_timeout_secs"}`, `{"type":"data","data":"..."}` and
   `{"type":"exit","code","reason"}`
+
+### Multiple Nodes
+
+```toml
+[daemon]
+node_name = "hub"                # Display name, defaults to the hostname
+
+[[nodes]]
+name = "web1"                    # Node id: used in the URL path and by --node
+label = "Shanghai Web"           # Display name, optional
+url = "http://10.0.0.12:9090"    # Remote node address
+api_key = "that node's daemon.api_key"   # required for non-loopback addresses
+```
+
+- **Topology** — only the hub needs this config. Remote nodes keep running gugu as usual and do not need to know about the hub; they only expose their HTTP port and, when needed, their own `daemon.api_key`
+- **Switching is operating** — the top-bar selector repoints the process list, logs, metrics, audit and forms at that node, so start/stop and config edits apply there directly. Live status and logs follow through `WS /api/v1/ws?node=`, which the hub relays, still one push every 2 seconds
+- **Health** — the hub probes each node's `GET /api/v1/node` every 5 seconds and records online state, round-trip latency, version and process counts. The top-bar dot and `gugu nodes` read the same data; when a node is offline the last error is shown in a banner
+- **HTTP proxy** — `/api/v1/n/{node}/...` forwards method, query string, body, `Content-Type` and download headers unchanged, signing the request with that node's key; the response status and body pass through as-is
+- **CLI** — `gugu nodes` lists nodes; `--node <name>` routes any client command through the hub, e.g. `gugu --node web1 restart api`
+- **Audit** — a proxied write is recorded on the hub with the same action code, and the target is prefixed with the node id (`web1/api`) so local and remote operations stay distinguishable
+- **Security** — a node pointing at a non-loopback address must have an `api_key`, otherwise the daemon refuses to start (the same gate as the terminal); remote keys appear only in the hub config and in forwarded requests
+- **Terminal** — the built-in terminal operates the machine running gugu and is local-only; the entry is hidden while a remote node is selected, so use that node's own panel when you need a shell there
+- **When it applies** — the node table is read at daemon startup; restart the daemon after editing `[[nodes]]` (`gugu reload` reloads process config and daemon settings, it does not rebuild the node table)
 
 ### cgroup v2 Hard Limits
 

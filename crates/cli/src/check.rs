@@ -57,6 +57,26 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
         }
     }
 
+    println!("  从节点数: {}", config.nodes.len());
+    for node in &config.nodes {
+        match node.validate() {
+            Ok(()) => println!(
+                "  ✓ 节点 {}  {}  [{}]",
+                node.name,
+                node.base_url(),
+                node.display_name()
+            ),
+            Err(e) => {
+                println!("  ✗ 节点 {}  {}", node.name, e);
+                problems += 1;
+            }
+        }
+    }
+    for name in gugu_core::config::duplicate_node_names(&config.nodes) {
+        println!("  ✗ 节点名称重复: {name}");
+        problems += 1;
+    }
+
     if problems == 0 {
         println!("结果: 配置有效");
         Ok(())

@@ -106,6 +106,21 @@ function fmtBytes(n) {
     return n + ' B';
 }
 
+function fmtRate(n) {
+    if (n == null) return '—';
+    if (n < 1024) return `${Math.round(n)} B/s`;
+    return fmtBytes(n) + '/s';
+}
+
+/// 顶栏的整机带宽读数；数据来自 WS status 消息的 system 字段。
+function updateNetStats() {
+    const rx = document.getElementById('stat-net-rx');
+    const tx = document.getElementById('stat-net-tx');
+    if (!rx || !tx) return;
+    rx.textContent = systemTraffic ? fmtRate(systemTraffic.rx_bytes_per_sec) : '—';
+    tx.textContent = systemTraffic ? fmtRate(systemTraffic.tx_bytes_per_sec) : '—';
+}
+
 function usageInfo(p) {
     const u = p.usage;
     if (!u) return { label: '—', title: '暂无采样（进程未运行）' };
@@ -132,6 +147,18 @@ function lastExitInfo(p) {
     return { label, title: `最近 ${list.length} 次退出：\n${title}` };
 }
 
+function portsInfo(p) {
+    const ports = p.listen_ports || [];
+    if (!ports.length) return { label: '—', title: '未配置监听端口（在编辑里填写可统计连接数与预检端口占用）' };
+    return { label: ports.join(', '), title: `监听端口：${ports.join(', ')}` };
+}
+
+function connectionsInfo(p) {
+    const ports = p.listen_ports || [];
+    if (!ports.length) return { label: '—', title: '未配置监听端口，无法统计连接数' };
+    return { label: String(p.connections || 0), title: `这些端口上已建立的 TCP 连接数` };
+}
+
 function buildCard(p, isNew) {
     const st = statusOf(p);
     const cmd = p.args?.length ? `${p.command} ${p.args.join(' ')}` : (p.command || '');
@@ -147,6 +174,8 @@ function buildCard(p, isNew) {
     const hcBtn = p.has_health_check ? `<button class="btn btn-hc" data-action="health" data-name="${esc(p.name)}" title="手动健康检查">检查</button>` : '';
     const exit = lastExitInfo(p);
     const usage = usageInfo(p);
+    const ports = portsInfo(p);
+    const conns = connectionsInfo(p);
     return `<div class="pcard" data-name="${esc(p.name)}">
         <div class="pcard-head">
             <div class="pcard-name"><span class="pcard-dot ${st.key}"></span>${esc(p.name)}</div>
@@ -158,6 +187,8 @@ function buildCard(p, isNew) {
             <div class="pcard-meta-item pcard-cmd"><span class="pcard-meta-label">命令</span><span class="pcard-meta-val" title="${esc(cmd)}">${esc(cmd)}</span></div>
             <div class="pcard-meta-item pcard-exit"><span class="pcard-meta-label">上次退出</span><span class="pcard-meta-val" title="${esc(exit.title)}">${esc(exit.label)}</span></div>
             <div class="pcard-meta-item pcard-usage"><span class="pcard-meta-label">资源</span><span class="pcard-meta-val" title="${esc(usage.title)}">${esc(usage.label)}</span></div>
+            <div class="pcard-meta-item pcard-ports"><span class="pcard-meta-label">端口</span><span class="pcard-meta-val" title="${esc(ports.title)}">${esc(ports.label)}</span></div>
+            <div class="pcard-meta-item pcard-conns"><span class="pcard-meta-label">连接</span><span class="pcard-meta-val" title="${esc(conns.title)}">${esc(conns.label)}</span></div>
         </div>
         <div class="pcard-actions">
             <button class="btn act-start" data-action="start" data-name="${esc(p.name)}" ${run?'disabled':''}>启动</button>
@@ -165,6 +196,7 @@ function buildCard(p, isNew) {
             <button class="btn act-restart" data-action="restart" data-name="${esc(p.name)}">重启</button>
             ${hcBtn}
             <button class="btn act-logs" data-action="logs" data-name="${esc(p.name)}">日志</button>
+            <button class="btn act-metrics" data-action="metrics" data-name="${esc(p.name)}">指标</button>
             <button class="btn" data-action="edit" data-name="${esc(p.name)}">编辑</button>
             <button class="btn act-delete" data-action="remove" data-name="${esc(p.name)}">删除</button>
         </div>
@@ -194,6 +226,16 @@ function patchCard(card, p) {
         const usage = usageInfo(p);
         metas[4].textContent = usage.label;
         metas[4].title = usage.title;
+    }
+    if (metas[5]) {
+        const ports = portsInfo(p);
+        metas[5].textContent = ports.label;
+        metas[5].title = ports.title;
+    }
+    if (metas[6]) {
+        const conns = connectionsInfo(p);
+        metas[6].textContent = conns.label;
+        metas[6].title = conns.title;
     }
 
     const btns = card.querySelectorAll('.pcard-actions .btn');

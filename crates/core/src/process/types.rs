@@ -50,6 +50,12 @@ pub struct ProcessInfo {
     /// 进程树资源占用（CPU 占单核百分比 + 内存），未运行时为 None。
     #[serde(default)]
     pub usage: Option<UsageSample>,
+    /// 本进程关注的本机端口（显式声明 + 健康检查端口）。
+    #[serde(default)]
+    pub listen_ports: Vec<u16>,
+    /// 这些端口上的已建立连接数。
+    #[serde(default)]
+    pub connections: u32,
 }
 
 /// 一次进程退出的记录：用于排障（「昨晚崩了 4 次，每次退出码 137」）。

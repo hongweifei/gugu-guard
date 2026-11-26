@@ -36,6 +36,8 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 let msg = json!({
                     "type": "status",
                     "processes": processes,
+                    // 整机带宽随状态一起推，省掉 UI 的额外轮询
+                    "system": state.manager.history().latest_traffic(),
                 });
 
                 if let Ok(text) = serde_json::to_string(&msg) {
@@ -138,7 +140,7 @@ fn drain_log_entries(log_rx: &mut LogRx, buf: &mut Vec<gugu_core::process::LogEn
         loop {
             match rx.try_recv() {
                 Ok(entry) => {
-                    let mut e = entry.clone();
+                    let mut e = entry;
                     e.process_name = Some(name.clone());
                     buf.push(e);
                 }

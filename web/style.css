@@ -58,7 +58,7 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .btn-danger:hover { background: var(--red); color: #fff; }
 
 /* ── Stats ── */
-.stats-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+.stats-bar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 24px; }
 .stat-card { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; text-align: center; transition: border-color .2s; }
 .stat-card:hover { border-color: var(--border-hover); }
 .stat-number { font-size: 2rem; font-weight: 700; letter-spacing: -.03em; color: var(--text-2); }
@@ -66,6 +66,7 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 .stat-running .stat-number { color: var(--green); }
 .stat-stopped .stat-number { color: var(--amber); }
 .stat-failed  .stat-number { color: var(--red); }
+.stat-net-num { font-size: 1.15rem; font-family: var(--mono); color: var(--sky); padding-top: 10px; }
 
 /* ── Process Grid ── */
 .process-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; }
@@ -283,6 +284,31 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 
+/* ── 指标面板 ── */
+.metric-dot { background: var(--sky); }
+.metric-range { font-size: .72rem; color: var(--text-3); font-weight: 500; margin-left: 4px; }
+.metric-body { flex: 1; overflow-y: auto; padding: 14px 16px 20px; min-height: 320px; max-height: 70vh; }
+.metric-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.metric-tile { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.metric-tile-label { font-size: .7rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.metric-tile-val { font-family: var(--mono); font-size: .88rem; color: var(--text); }
+.metric-block { margin-bottom: 18px; }
+.metric-block-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; font-size: .85rem; font-weight: 600; color: var(--text); }
+.metric-summary { font-size: .74rem; font-weight: 500; color: var(--text-3); font-family: var(--mono); }
+.chart-wrap svg { display: block; width: 100%; height: 110px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; }
+.chart-scale { display: flex; justify-content: space-between; font-family: var(--mono); font-size: .68rem; color: var(--text-3); padding: 2px 4px 0; }
+.chart-legend-row { display: flex; gap: 12px; padding: 4px 4px 0; }
+.chart-legend { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; color: var(--text-2); }
+.chart-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.chart-empty { color: var(--text-3); font-size: .8rem; padding: 18px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; }
+.metric-note { font-size: .7rem; color: var(--text-3); margin-top: 6px; }
+.history-table { width: 100%; border-collapse: collapse; font-size: .78rem; font-family: var(--mono); }
+.history-table th { text-align: left; color: var(--text-3); font-weight: 500; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.history-table td { padding: 5px 8px; color: var(--text-2); border-bottom: 1px solid rgba(30,42,64,.5); }
+.history-table td.ok { color: var(--green); }
+.history-table td.bad { color: var(--red); }
+.history-table td.muted { color: var(--text-3); }
+
 /* ── Responsive ── */
 @media(max-width:768px) {
     .navbar { flex-direction: column; gap: 12px; align-items: stretch; }
@@ -290,6 +316,7 @@ body { font-family: var(--sans); background: var(--bg-0); color: var(--text); mi
     .search-box input { width: 140px; }
     .search-box input:focus { width: 180px; }
     .stats-bar { grid-template-columns: repeat(2, 1fr); }
+    .metric-tiles { grid-template-columns: repeat(2, 1fr); }
     .process-grid { grid-template-columns: 1fr; }
     .field-row { grid-template-columns: 1fr; }
     .log-container { width: 98vw; max-height: 90vh; }

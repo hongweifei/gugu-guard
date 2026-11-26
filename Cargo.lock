@@ -606,6 +606,7 @@ dependencies = [
  "gugu-server",
  "libc",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

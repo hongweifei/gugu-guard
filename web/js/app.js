@@ -27,6 +27,7 @@ document.getElementById('btn-confirm-cancel').onclick = () => {
 
 document.getElementById('btn-refresh-logs').onclick = () => refreshLogs();
 document.getElementById('btn-close-logs').onclick = closeLogs;
+document.getElementById('btn-close-metric').onclick = closeMetrics;
 document.getElementById('log-body').addEventListener('scroll', onLogScroll);
 document.getElementById('log-search').addEventListener('input', (e) => {
     logSearchQuery = e.target.value.toLowerCase().trim();
@@ -89,6 +90,7 @@ document.getElementById('process-grid').addEventListener('click', (e) => {
         case 'start': case 'stop': case 'restart': doAct(action, name); break;
         case 'health': doHealthCheck(name); break;
         case 'logs': showLogs(name); break;
+        case 'metrics': showMetrics(name); break;
         case 'edit': editProc(name); break;
         case 'remove': askRemove(name); break;
         case 'filter-group': groupFilter = btn.dataset.group; render(true); break;
@@ -98,6 +100,7 @@ document.getElementById('process-grid').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
+        else if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
         else if (document.getElementById('fs-backdrop').classList.contains('open')) { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); }
         else if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
         else if (document.getElementById('confirm-backdrop').classList.contains('open')) { pendingRemove = null; document.getElementById('confirm-backdrop').classList.remove('open'); }
@@ -154,6 +157,11 @@ async function init() {
             return;
         }
         allProcesses = await resp.json();
+        try {
+            const sys = await api('GET', '/system?minutes=1');
+            systemTraffic = sys.latest || null;
+            updateNetStats();
+        } catch { /* 带宽只是补充读数，取不到就等 WS 推送 */ }
         render(true);
         connectWS();
     } catch {

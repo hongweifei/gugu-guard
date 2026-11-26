@@ -19,6 +19,12 @@ pub const EVENT_UNHEALTHY: &str = "process_unhealthy";
 pub const EVENT_MEMORY_LIMIT: &str = "process_memory_limit";
 /// 进程被守护进程重新拉起。
 pub const EVENT_RECOVERED: &str = "process_recovered";
+/// 日志命中告警关键字。
+pub const EVENT_LOG_PATTERN: &str = "process_log_pattern";
+/// 日志在统计窗口内刷屏。
+pub const EVENT_LOG_BURST: &str = "process_log_burst";
+/// 依赖进程在超时内未就绪，下游进程没有启动。
+pub const EVENT_NOT_READY: &str = "process_not_ready";
 
 fn client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {

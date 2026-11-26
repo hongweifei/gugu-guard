@@ -11,8 +11,13 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **CLI Tool** — Full-featured command line with colored table output
 - **Log Capture** — Automatic stdout/stderr capture, in-memory ring buffer + file persistence + auto rotation
 - **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
-- **Exit History** — keeps the last 5 exits per process (time, exit code, whether it was auto-restarted), visible in the WebUI card and the API
+- **Exit History** — the last 5 exits (time, exit code, whether it was auto-restarted) are visible on the card and via the API; every start/exit/revival is also appended to a 30-day rolling journal that survives daemon restarts, so availability and crash frequency stay measurable
 - **Resource Monitoring** — samples CPU/memory for the whole process tree (including helpers like conhost), shown on the card and in `/metrics`; `max_memory_mb` restarts a process that exceeds its memory cap
+- **Metric Time Series** — one bucket per minute kept for 24 hours (CPU/memory average and peak, connection count), read through the WebUI "metrics" panel and `GET /api/v1/processes/:name/history`
+- **Port Preflight & Connections** — with `listen_ports` configured, startup fails loudly when the port is already taken (naming the owner), and established connections on those ports are counted while running
+- **Readiness Probe** — `depends_on` now waits for the upstream to actually serve (health check passing or ports listening), up to `ready_timeout_secs`
+- **Log Alerts** — keyword hits and short bursts of output raise notifications with a cooldown, so a retry storm can't flood the bot
+- **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
@@ -179,6 +184,9 @@ gugu start <name>                 # Start a process
 gugu stop <name>                  # Stop a process
 gugu restart <name>               # Restart a process
 gugu logs <name> [-l 100]         # View logs
+gugu history <name> [-m 60]       # Metric time series (CPU/memory/connections, one bucket per minute)
+gugu exits <name> [-m 60]         # Exit history and availability (persisted journal)
+gugu net [-m 60]                  # Host bandwidth time series
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
@@ -204,12 +212,17 @@ Global options:
 gugu add my-api -x "python -m uvicorn main:app --host 0.0.0.0" \
   --dir /home/user/api \
   --env PORT=8000,DEBUG=false \
+  --port 8000 \
   --start
 
 gugu add frontend -x "bun run dev" \
   --dir /home/user/web \
   --no-auto-start
 ```
+
+`--port` accepts repeats or a comma-separated list; ports are what enable the preflight check and
+connection counting. `--no-port-check` disables the preflight, `--ready-timeout` sets how long a
+dependency may take to become ready (default 60s).
 
 ## REST API
 
@@ -225,6 +238,9 @@ gugu add frontend -x "bun run dev" \
 | POST | `/api/v1/processes/:name/restart` | Restart |
 | GET | `/api/v1/processes/:name/logs` | Get logs |
 | GET | `/api/v1/processes/:name/config` | Get config |
+| GET | `/api/v1/processes/:name/history?minutes=60` | Metric time series (one bucket per minute, up to 24h) |
+| GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | Exit events and availability stats |
+| GET | `/api/v1/system?minutes=60` | Host bandwidth time series and current rate |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
 | POST | `/api/v1/reload` | Reload config |
@@ -238,13 +254,13 @@ gugu add frontend -x "bun run dev" \
 ```
 gugu-guard/
 ├── crates/
-│   ├── core/       # Core lib: config, process management, logging, health checks
+│   ├── core/       # Core lib: config, process management, logging, health checks, metrics & exit journal, socket probes
 │   ├── server/     # Web server: REST API, WebSocket, auth, static files
 │   └── cli/        # Command line tool
 ├── web/            # WebUI (no build step, embedded into the binary)
 │   ├── index.html
 │   ├── style.css
-│   └── js/         # core(state/utils) / render(list) / logs(viewer) / form(modals) / app(wiring+boot)
+│   └── js/         # core(state/utils) / render(list) / history(metrics) / logs(viewer) / form(modals) / app(wiring+boot)
 ├── config.example.toml
 └── Cargo.toml      # Workspace root config
 ```
@@ -285,6 +301,10 @@ gugu-guard/
 | `max_memory_mb` | u64 | — | Process tree memory cap; exceeding it restarts via the auto-restart path |
 | `max_log_size_mb` | u64 | — | Log file size limit (MB), auto-rotate when exceeded |
 | `unhealthy_restart` | bool | `false` | Auto-restart on health check failure |
+| `listen_ports` | u16[] | `[]` | Ports this process listens on: used for the startup preflight, connection counting and dependency readiness |
+| `port_check` | bool | `true` | Check that `listen_ports` are free before starting |
+| `ready_timeout_secs` | u64 | `60` | How long downstream waits for this process to become ready |
+| `log_alert` | table | — | Keyword/burst log alerts, see below |
 | `stdout_log` | string | — | stdout log file path |
 | `stderr_log` | string | — | stderr log file path |
 
@@ -299,6 +319,30 @@ interval_secs = 30
 timeout_secs = 5
 fail_threshold = 3        # consecutive failures before a process is judged unhealthy (only restarts with unhealthy_restart = true)
 ```
+
+### Ports, Readiness and Log Alerts
+
+```toml
+[processes.my-app]
+listen_ports = [8080]     # drives the preflight, connection counting and readiness of dependents
+port_check = true         # fail the start when the port is already taken, naming the owner
+ready_timeout_secs = 60   # cap for waiting on this process as a dependency
+
+[processes.my-app.log_alert]
+patterns = ["panic", "exception", "error"]  # any keyword hit raises an alert (lowercase substring match)
+window_secs = 10          # burst window
+burst_lines = 200         # alert when the window holds this many lines, 0 disables burst detection
+cooldown_secs = 300       # silence for the same alert, so a retry storm can't flood the bot
+```
+
+A downstream of `depends_on` no longer waits for "the process started" but for it to actually serve:
+with a health check it waits for that to pass, otherwise for every `listen_ports` entry to be listening.
+On timeout, or if the dependency exits meanwhile, that downstream is skipped for this round and a
+notification is sent.
+
+> Note: connection counts are established TCP connections on those **listening ports**, read from the
+> system socket table. Host bandwidth is the sum of physical NICs, not a per-process figure — the kernel
+> does not account NIC bytes per process.
 
 ## CI & Release
 

@@ -1,5 +1,7 @@
 //! Actor 主循环与命令处理：每个写操作如何落到 `State` 上。
 
+use std::sync::Arc;
+
 use crate::config::{AppConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
 use crate::process::{LogEntry, ManagedProcess};
@@ -168,7 +170,8 @@ async fn do_add(
         return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
     }
     config.validate()?;
-    let mut proc = ManagedProcess::new(name.clone(), config);
+    let mut proc =
+        ManagedProcess::new(name.clone(), config).with_history(Arc::clone(&state.history));
     if start_now {
         proc.start().await?;
     }
@@ -202,11 +205,11 @@ async fn do_update(
             .await?;
     }
     // SAFETY: 同上
-    *state
+    state
         .processes
         .get_mut(name)
         .expect("已验证存在")
-        .config_mut() = config;
+        .set_config(config);
 
     if let Some(ref new) = new_name {
         if new != name {
@@ -217,6 +220,8 @@ async fn do_update(
             let mut proc = state.processes.remove(name).expect("已验证存在");
             proc.rename(new.clone());
             state.processes.insert(new.clone(), proc);
+            // 历史跟着改名走，否则改名后可用率与指标序列都断档
+            state.history.rename(name, new);
             tracing::info!("[{}] 进程已改名为 [{}]", name, new);
         }
     }
@@ -239,6 +244,7 @@ async fn do_remove(state: &mut State, name: &str) -> Result<()> {
         proc.stop().await?;
     }
     state.processes.remove(name);
+    state.history.forget(name);
     tracing::info!("[{}] 进程已移除", name);
     state.save_config()
 }
@@ -284,6 +290,7 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
             }
         }
         state.processes.remove(name);
+        state.history.forget(name);
         tracing::info!("[{}] 进程已移除 (配置重载)", name);
     }
 
@@ -296,7 +303,7 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
         if let Some(proc) = state.processes.get_mut(name) {
             let was_running = proc.is_running();
             let needs_restart = was_running && !proc.config().runtime_fields_eq(&resolved);
-            *proc.config_mut() = resolved;
+            proc.set_config(resolved);
             if needs_restart {
                 let _ = proc.stop().await;
                 let _ = proc.start().await;
@@ -305,7 +312,8 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
                 tracing::info!("[{}] 配置已更新 (配置重载)", name);
             }
         } else {
-            let mut proc = ManagedProcess::new(name.clone(), resolved);
+            let mut proc = ManagedProcess::new(name.clone(), resolved)
+                .with_history(Arc::clone(&state.history));
             if config.auto_start {
                 let _ = proc.start().await;
             }

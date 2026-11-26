@@ -125,6 +125,15 @@ enum Commands {
         stdout_log: Option<String>,
         #[arg(long)]
         stderr_log: Option<String>,
+        /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断
+        #[arg(short = 'p', long, value_delimiter = ',')]
+        port: Vec<u16>,
+        /// 关闭启动前的端口占用预检
+        #[arg(long)]
+        no_port_check: bool,
+        /// 依赖就绪的最长等待秒数
+        #[arg(long, default_value_t = 60)]
+        ready_timeout: u64,
         #[arg(short, long)]
         start: bool,
     },
@@ -137,6 +146,38 @@ enum Commands {
         name: String,
         #[arg(short, long, default_value = "50")]
         lines: usize,
+    },
+
+    #[command(about = "查看进程指标时序 (CPU / 内存 / 连接数，默认最近 60 分钟)")]
+    History {
+        name: String,
+        #[arg(short, long, default_value_t = 60)]
+        minutes: u64,
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[command(about = "查看进程退出历史与可用率 (落盘记录，跨守护重启保留)")]
+    Exits {
+        name: String,
+        #[arg(short, long, default_value_t = 60)]
+        minutes: u64,
+        /// 最多列出的事件条数
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[command(about = "查看整机带宽时序 (所有网卡合计，非单进程口径)")]
+    Net {
+        #[arg(short, long, default_value_t = 60)]
+        minutes: u64,
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
     },
 
     #[command(about = "重新加载配置文件")]

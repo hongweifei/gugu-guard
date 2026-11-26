@@ -23,6 +23,7 @@ function closeModal() {
     document.getElementById('f-name-hint').className = 'field-hint';
     document.getElementById('f-name-hint').textContent = '';
     resetHealthCheck();
+    resetNetworkSettings();
     editingName = null;
     editingBase = null;
 }
@@ -128,6 +129,56 @@ function resetHealthCheck() {
     document.getElementById('f-hc-fail').value = 3;
     document.getElementById('f-unhealthy-restart').checked = false;
     toggleHcFields();
+}
+
+function collectPorts() {
+    const raw = document.getElementById('f-ports').value;
+    return raw
+        .split(/[,，\s]+/)
+        .map(s => parseInt(s, 10))
+        .filter(n => Number.isInteger(n) && n > 0 && n <= 65535);
+}
+
+/// 端口/就绪/日志告警三块拼成一个对象，避免 onsubmit 里散落大量读取。
+function collectNetworkSettings() {
+    const patterns = document.getElementById('f-alert-patterns').value
+        .split(/[,，]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+    const burst = parseInt(document.getElementById('f-alert-burst').value) || 0;
+    const log_alert = (patterns.length || burst > 0) ? {
+        patterns,
+        window_secs: parseInt(document.getElementById('f-alert-window').value) || 10,
+        burst_lines: burst,
+        cooldown_secs: parseInt(document.getElementById('f-alert-cooldown').value) || 300,
+    } : null;
+    return {
+        listen_ports: collectPorts(),
+        port_check: document.getElementById('f-port-check').checked,
+        ready_timeout_secs: parseInt(document.getElementById('f-ready-timeout').value) || 60,
+        log_alert,
+    };
+}
+
+function fillNetworkSettings(cfg) {
+    document.getElementById('f-ports').value = (cfg.listen_ports || []).join(', ');
+    document.getElementById('f-port-check').checked = cfg.port_check ?? true;
+    document.getElementById('f-ready-timeout').value = cfg.ready_timeout_secs ?? 60;
+    const alert = cfg.log_alert;
+    document.getElementById('f-alert-patterns').value = alert ? (alert.patterns || []).join(', ') : '';
+    document.getElementById('f-alert-burst').value = alert ? (alert.burst_lines ?? 0) : 0;
+    document.getElementById('f-alert-window').value = alert ? (alert.window_secs ?? 10) : 10;
+    document.getElementById('f-alert-cooldown').value = alert ? (alert.cooldown_secs ?? 300) : 300;
+}
+
+function resetNetworkSettings() {
+    document.getElementById('f-ports').value = '';
+    document.getElementById('f-port-check').checked = true;
+    document.getElementById('f-ready-timeout').value = 60;
+    document.getElementById('f-alert-patterns').value = '';
+    document.getElementById('f-alert-burst').value = 0;
+    document.getElementById('f-alert-window').value = 10;
+    document.getElementById('f-alert-cooldown').value = 300;
 }
 
 function checkNameDuplicate() {
@@ -299,6 +350,7 @@ window.editProc = async function(name) {
             Object.entries(cfg.env).forEach(([k, v]) => addEnvRow(k, v));
         }
         fillHealthCheck(cfg);
+        fillNetworkSettings(cfg);
         openModal('编辑 — ' + name, '保存');
     } catch (e) {
         if (e.message === 'Unauthorized') {
@@ -315,6 +367,7 @@ window.editProc = async function(name) {
         f('f-shell').checked = false;
         f('f-stop-timeout').value = 10;
         resetHealthCheck();
+        resetNetworkSettings();
         openModal('编辑 — ' + name, '保存');
     }
 };
@@ -345,6 +398,7 @@ document.getElementById('process-form').onsubmit = async (e) => {
         stderr_log: document.getElementById('f-stderr').value || null,
         group: document.getElementById('f-group').value.trim() || null,
         start_now: document.getElementById('f-auto-start').checked,
+        ...collectNetworkSettings(),
     };
     try {
         if (editingName) {

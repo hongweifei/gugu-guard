@@ -11,8 +11,13 @@
 - **命令行工具** — 完整的 CLI，支持彩色表格输出
 - **日志捕获** — stdout/stderr 自动捕获，内存环形缓冲区 + 文件持久化 + 自动轮转
 - **健康检查** — TCP 端口 / HTTP 请求检测，连续失败达到阈值才判定重启，瞬时抖动不误伤
-- **崩溃历史** — 保留每个进程最近 5 次退出（时间、退出码、是否被自动拉起），WebUI 卡片与 API 都能看到
+- **崩溃历史** — 最近 5 次退出（时间、退出码、是否被自动拉起）在卡片与 API 都能看到；每次启动/退出/拉起另外追加到 30 天滚动日志，跨守护重启保留，可算可用率与崩溃频次
 - **资源监控** — 按进程树采样 CPU/内存（含 conhost 等子进程），卡片与 `/metrics` 可见；`max_memory_mb` 超限自动重启，防内存泄漏
+- **指标时序** — 每分钟一桶保留 24 小时，CPU/内存均值与峰值、连接数随 WebUI「指标」面板与 `GET /api/v1/processes/:name/history` 查看
+- **端口预检与连接数** — 配置 `listen_ports` 后启动前检查端口是否被别的进程占用（占用时直接失败并报出占用者），运行中统计这些端口上的已建立连接数
+- **就绪探针** — `depends_on` 现在等上游真的可用（健康检查通过或端口进入监听）再拉起下游，最多等 `ready_timeout_secs`
+- **日志告警** — 命中关键字、或短时间内输出刷屏，按冷却时间推送通知，避免重试风暴刷爆机器人
+- **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
@@ -99,7 +104,8 @@ restart_delay_secs = 5
 max_log_size_mb = 10             # 日志文件超过 10MB 自动轮转
 stdout_log = "logs/my-app-stdout.log"
 stderr_log = "logs/my-app-stderr.log"
-depends_on = ["my-db"]           # 等待 my-db 启动后再启动
+listen_ports = [8080]            # 端口预检 + 连接数统计 + 依赖就绪判断
+depends_on = ["my-db"]           # 等 my-db 真的可用后再启动
 
 [processes.my-app.health_check]
 type = "tcp"
@@ -179,6 +185,9 @@ gugu start <name>                 # 启动进程
 gugu stop <name>                  # 停止进程
 gugu restart <name>               # 重启进程
 gugu logs <name> [-l 100]         # 查看日志
+gugu history <name> [-m 60]       # 指标时序（CPU/内存/连接数，每分钟一桶）
+gugu exits <name> [-m 60]         # 退出历史与可用率（落盘记录）
+gugu net [-m 60]                  # 整机带宽时序
 gugu add <name> -x "node app.js"  # 添加进程
 gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
@@ -204,12 +213,16 @@ gugu uninstall                    # 卸载开机自启 (同样支持 --mode / --
 gugu add my-api -x "python -m uvicorn main:app --host 0.0.0.0" \
   --dir /home/user/api \
   --env PORT=8000,DEBUG=false \
+  --port 8000 \
   --start
 
 gugu add frontend -x "bun run dev" \
   --dir /home/user/web \
   --no-auto-start
 ```
+
+`--port` 可重复或逗号分隔；填了端口才会做启动前占用预检并统计连接数。
+`--no-port-check` 关掉预检，`--ready-timeout` 调整等依赖就绪的上限（默认 60 秒）。
 
 ## REST API
 
@@ -225,6 +238,9 @@ gugu add frontend -x "bun run dev" \
 | POST | `/api/v1/processes/:name/restart` | 重启 |
 | GET | `/api/v1/processes/:name/logs` | 获取日志 |
 | GET | `/api/v1/processes/:name/config` | 获取配置 |
+| GET | `/api/v1/processes/:name/history?minutes=60` | 指标时序（每分钟一桶，最长 24 小时） |
+| GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | 退出事件与可用率统计 |
+| GET | `/api/v1/system?minutes=60` | 整机带宽时序与当前速率 |
 | GET | `/api/v1/stats` | 统计信息 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
 | POST | `/api/v1/reload` | 重新加载配置 |
@@ -239,13 +255,13 @@ gugu add frontend -x "bun run dev" \
 gugu-guard/
 ├── .github/workflows/  # CI 门禁 (fmt/clippy/test) 与 tag 触发的绿色包发布
 ├── crates/
-│   ├── core/       # 核心库: 配置、进程管理、日志、健康检查
+│   ├── core/       # 核心库: 配置、进程管理、日志、健康检查、指标与退出历史、套接字探针
 │   ├── server/     # Web 服务: REST API、WebSocket、认证、静态文件
 │   └── cli/        # 命令行工具
 ├── web/            # WebUI (无构建步骤，直接内嵌进二进制)
 │   ├── index.html
 │   ├── style.css
-│   └── js/         # core(状态/工具) / render(列表) / logs(日志) / form(表单) / app(接线与启动)
+│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / form(表单) / app(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
 ```
@@ -287,6 +303,10 @@ gugu-guard/
 | `max_memory_mb` | u64 | — | 进程树内存上限，超限按自动重启路径重启（防泄漏） |
 | `max_log_size_mb` | u64 | — | 日志文件大小上限 (MB)，超限自动轮转 |
 | `unhealthy_restart` | bool | `false` | 健康检查失败时自动重启 |
+| `listen_ports` | u16[] | `[]` | 该进程监听的端口：启动前占用预检、连接数统计、依赖就绪判断都用它 |
+| `port_check` | bool | `true` | 启动前检查 `listen_ports` 是否已被别的进程占用 |
+| `ready_timeout_secs` | u64 | `60` | 作为下游依赖被等待时，最多等多久就绪 |
+| `log_alert` | table | — | 日志关键字与刷屏告警，见下节 |
 | `stdout_log` | string | — | stdout 日志文件路径 |
 | `stderr_log` | string | — | stderr 日志文件路径 |
 
@@ -301,6 +321,28 @@ interval_secs = 30
 timeout_secs = 5
 fail_threshold = 3        # 连续失败该次数才判定不健康（配合 unhealthy_restart 才重启）
 ```
+
+### 端口、就绪与日志告警
+
+```toml
+[processes.my-app]
+listen_ports = [8080]     # 端口预检、连接数统计、依赖就绪判断都以此为准
+port_check = true         # 启动前发现端口被别人占着就直接失败，并报出占用者
+ready_timeout_secs = 60   # 作为依赖被上游等待时的上限
+
+[processes.my-app.log_alert]
+patterns = ["panic", "exception", "error"]  # 命中任一关键字即告警（小写子串匹配）
+window_secs = 10          # 刷屏统计窗口
+burst_lines = 200         # 窗口内输出达到该行数即告警，0 表示不启用刷屏检测
+cooldown_secs = 300       # 同类告警的静默时长，防止重试风暴刷屏
+```
+
+`depends_on` 的下游不再只等上游"进程起来了"，而是等它真的可用：配了健康检查就等检查
+通过，否则等 `listen_ports` 全部进入监听。等待超时或被依赖进程中途退出，本轮跳过该下游
+并推送一条通知。
+
+> 说明：连接数是这些**监听端口**上已建立的 TCP 连接数，从系统套接字表读出；
+> 整机带宽是所有物理网卡合计，不是单进程口径（内核不按进程记录网卡字节）。
 
 ## 持续集成与发布
 

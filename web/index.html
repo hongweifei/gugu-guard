@@ -45,6 +45,14 @@
             <div class="stat-number" id="stat-failed">0</div>
             <div class="stat-label">失败</div>
         </div>
+        <div class="stat-card stat-net">
+            <div class="stat-number stat-net-num" id="stat-net-rx">—</div>
+            <div class="stat-label">整机下行</div>
+        </div>
+        <div class="stat-card stat-net">
+            <div class="stat-number stat-net-num" id="stat-net-tx">—</div>
+            <div class="stat-label">整机上行</div>
+        </div>
     </section>
 
     <section class="group-bar" id="group-bar"></section>
@@ -86,6 +94,18 @@
                 </div>
             </div>
             <div class="log-body" id="log-body"></div>
+        </div>
+    </div>
+
+    <div class="log-overlay" id="metric-overlay">
+        <div class="log-container">
+            <div class="log-toolbar">
+                <div class="log-title"><span class="log-dot metric-dot"></span><span id="metric-name">-</span><span class="metric-range">最近 60 分钟</span></div>
+                <div class="log-controls">
+                    <button class="btn btn-sm" id="btn-close-metric">关闭</button>
+                </div>
+            </div>
+            <div class="metric-body" id="metrics-body"></div>
         </div>
     </div>
 
@@ -140,6 +160,33 @@
                 <div class="field-row">
                     <div class="field"><label>stdout 日志</label><input type="text" id="f-stdout" placeholder="logs/stdout.log"></div>
                     <div class="field"><label>stderr 日志</label><input type="text" id="f-stderr" placeholder="logs/stderr.log"></div>
+                </div>
+
+                <div class="section-title">网络、就绪与告警</div>
+                <div class="field">
+                    <label>监听端口</label>
+                    <input type="text" id="f-ports" placeholder="8080, 9000 (可选)">
+                    <div class="field-hint">填写后启动前会检查端口是否被别的进程占用，并统计这些端口上的连接数</div>
+                </div>
+                <div class="field-row toggles-row">
+                    <label class="toggle"><input type="checkbox" id="f-port-check" checked><span class="toggle-mark"></span>启动前检查端口占用</label>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label>依赖就绪超时 (秒)</label><input type="number" id="f-ready-timeout" value="60" min="1" title="等待上游依赖端口就绪的最长秒数，超时则本轮不拉起本进程"></div>
+                    <div class="field"></div>
+                </div>
+                <div class="field">
+                    <label>日志关键字</label>
+                    <input type="text" id="f-alert-patterns" placeholder="error, panic, exception (逗号分隔，留空则不监控)">
+                    <div class="field-hint">命中任一关键字即告警（小写子串匹配，每行只判一次）</div>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label>刷屏阈值 (行)</label><input type="number" id="f-alert-burst" value="0" min="0" title="窗口内输出达到该行数即告警，0 表示不启用"></div>
+                    <div class="field"><label>刷屏窗口 (秒)</label><input type="number" id="f-alert-window" value="10" min="1"></div>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label>告警冷却 (秒)</label><input type="number" id="f-alert-cooldown" value="300" min="0" title="同类告警的静默时长，避免刷屏式通知"></div>
+                    <div class="field"></div>
                 </div>
 
                 <div class="section-title">健康检查</div>
@@ -270,6 +317,7 @@
 </div>
 <script src="/js/core.js"></script>
 <script src="/js/render.js"></script>
+<script src="/js/history.js"></script>
 <script src="/js/logs.js"></script>
 <script src="/js/form.js"></script>
 <script src="/js/app.js"></script>

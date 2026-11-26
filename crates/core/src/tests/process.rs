@@ -25,6 +25,10 @@ fn test_config() -> ProcessConfig {
         max_log_size_mb: None,
         stdout_log: None,
         stderr_log: None,
+        listen_ports: Vec::new(),
+        port_check: true,
+        ready_timeout_secs: 60,
+        log_alert: None,
     }
 }
 
@@ -420,7 +424,7 @@ mod command_split {
 
 mod read_stream_non_utf8 {
     use super::*;
-    use crate::process::read_stream;
+    use crate::process::{read_stream, StreamTarget};
     use std::collections::VecDeque;
     use std::sync::Arc;
     use tokio::sync::{broadcast, Mutex};
@@ -437,12 +441,15 @@ mod read_stream_non_utf8 {
         let (tx, _rx) = broadcast::channel(16);
         read_stream(
             reader,
-            None,
-            buffer.clone(),
-            tx,
             LogStream::Stdout,
-            "t",
-            None,
+            StreamTarget {
+                log_path: None,
+                buffer: buffer.clone(),
+                log_tx: tx,
+                process: "t",
+                max_log_size_mb: None,
+                watcher: None,
+            },
         )
         .await;
 
@@ -485,7 +492,7 @@ mod exit_history {
     fn keeps_newest_records_and_caps_len() {
         let mut p = ManagedProcess::new("w".into(), test_config());
         for code in 0..(MAX_EXIT_HISTORY as i32 + 3) {
-            p.record_exit(Some(code));
+            p.record_exit(Some(code), false);
         }
         let exits = p.recent_exits();
         assert_eq!(exits.len(), MAX_EXIT_HISTORY, "超过上限应丢弃最旧的记录");
@@ -500,8 +507,8 @@ mod exit_history {
     #[test]
     fn marks_only_latest_exit_as_auto_restarted() {
         let mut p = ManagedProcess::new("w".into(), test_config());
-        p.record_exit(Some(1));
-        p.record_exit(Some(137));
+        p.record_exit(Some(1), false);
+        p.record_exit(Some(137), false);
         p.mark_last_exit_auto_restarted();
         let exits = p.recent_exits();
         assert!(!exits[0].auto_restarted, "更早的记录不应被改动");
@@ -511,7 +518,7 @@ mod exit_history {
     #[test]
     fn snapshot_carries_exit_history() {
         let mut p = ManagedProcess::new("w".into(), test_config());
-        p.record_exit(None);
+        p.record_exit(None, false);
         let info = p.info();
         assert_eq!(info.recent_exits.len(), 1, "快照应携带退出历史");
         assert_eq!(info.recent_exits[0].code, None, "无退出码时应为 None");

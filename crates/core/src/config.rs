@@ -194,6 +194,54 @@ pub struct ProcessConfig {
     pub stdout_log: Option<PathBuf>,
     #[serde(default)]
     pub stderr_log: Option<PathBuf>,
+    /// 服务监听的端口：启动前做占用预检，运行期统计连接数，也作为就绪判定依据。
+    #[serde(default)]
+    pub listen_ports: Vec<u16>,
+    /// 启动前检查 [`Self::listen_ports`] 是否已被别的进程占用。
+    #[serde(default = "default_true")]
+    pub port_check: bool,
+    /// 等待被依赖进程就绪的超时（秒）；超时则本进程不启动。
+    #[serde(default = "default_ready_timeout")]
+    pub ready_timeout_secs: u64,
+    /// 日志关键字与刷屏告警；未配置则不做日志分析。
+    #[serde(default)]
+    pub log_alert: Option<LogAlertConfig>,
+}
+
+/// 日志告警：关键字命中推一条通知，单位时间行数暴涨再推一条。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogAlertConfig {
+    /// 关键字（按子串匹配，ASCII 忽略大小写）。
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    /// 刷屏检测的统计窗口（秒）。
+    #[serde(default = "default_alert_window")]
+    pub window_secs: u64,
+    /// 一个窗口内行数达到该值判定为刷屏；0 表示关闭刷屏检测。
+    #[serde(default)]
+    pub burst_lines: u32,
+    /// 同类告警的冷却时间（秒），避免持续异常刷屏通知。
+    #[serde(default = "default_alert_cooldown")]
+    pub cooldown_secs: u64,
+}
+
+impl LogAlertConfig {
+    /// # Errors
+    /// 窗口为 0、关键字全为空且未启用刷屏检测时返回 `GuguError::ConfigError`。
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.window_secs == 0 {
+            return Err(crate::error::GuguError::ConfigError(
+                "log_alert.window_secs 不能为 0".into(),
+            ));
+        }
+        let has_pattern = self.patterns.iter().any(|p| !p.trim().is_empty());
+        if !has_pattern && self.burst_lines == 0 {
+            return Err(crate::error::GuguError::ConfigError(
+                "log_alert 至少要配置 patterns 或 burst_lines".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub fn default_true() -> bool {
@@ -210,6 +258,15 @@ pub fn default_restart_reset_secs() -> u64 {
 }
 pub fn default_stop_timeout() -> u64 {
     10
+}
+pub fn default_ready_timeout() -> u64 {
+    60
+}
+pub fn default_alert_window() -> u64 {
+    10
+}
+pub fn default_alert_cooldown() -> u64 {
+    300
 }
 
 impl ProcessConfig {
@@ -235,17 +292,51 @@ impl ProcessConfig {
     /// 校验进程配置合法性。
     ///
     /// # Errors
-    /// command 为空或健康检查配置不合法时返回 `GuguError::ConfigError`。
+    /// command 为空、端口为 0、健康检查或日志告警配置不合法时返回 `GuguError::ConfigError`。
     pub fn validate(&self) -> crate::error::Result<()> {
         if self.command.trim().is_empty() {
             return Err(crate::error::GuguError::ConfigError(
                 "command 不能为空".into(),
             ));
         }
+        if self.listen_ports.contains(&0) {
+            return Err(crate::error::GuguError::ConfigError(
+                "listen_ports 不能包含 0".into(),
+            ));
+        }
         if let Some(ref hc) = self.health_check {
             hc.validate()?;
         }
+        if let Some(ref la) = self.log_alert {
+            la.validate()?;
+        }
+        if self.ready_timeout_secs == 0 {
+            return Err(crate::error::GuguError::ConfigError(
+                "ready_timeout_secs 不能为 0".into(),
+            ));
+        }
         Ok(())
+    }
+
+    /// 需要关注的本机端口：显式声明的监听端口 + 健康检查/就绪检查用的端口。
+    ///
+    /// 端口预检、连接数统计、依赖就绪判定都基于这一份端口集合。
+    #[must_use]
+    pub fn watched_ports(&self) -> Vec<u16> {
+        let mut ports = self.listen_ports.clone();
+        if let Some(ref hc) = self.health_check {
+            let port = match &hc.check_type {
+                HealthCheckType::Tcp { port, .. } => Some(*port),
+                HealthCheckType::Http { url } => port_from_url(url),
+            };
+            if let Some(p) = port {
+                ports.push(p);
+            }
+        }
+        ports.retain(|p| *p != 0);
+        ports.sort_unstable();
+        ports.dedup();
+        ports
     }
 
     pub fn normalize_paths(&mut self) {
@@ -323,6 +414,25 @@ fn default_health_timeout() -> u64 {
 }
 pub fn default_fail_threshold() -> u32 {
     3
+}
+
+/// 从 URL 里取出端口；未写端口时按 scheme 取默认值（http 80 / https 443）。
+///
+/// 只服务于「哪些端口归这个服务」这一个用途，因此不引入完整 URL 解析库。
+#[must_use]
+pub fn port_from_url(url: &str) -> Option<u16> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if let Some((_, port)) = authority.rsplit_once(':') {
+        if let Ok(port) = port.parse::<u16>() {
+            return Some(port);
+        }
+    }
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" => Some(443),
+        "http" => Some(80),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

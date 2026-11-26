@@ -8,19 +8,35 @@ use chrono::Utc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, Mutex};
 
+use super::logwatch::LogWatcher;
 use super::types::{LogEntry, LogStream};
 
 const MAX_LOG_LINES: usize = 1000;
 
+/// 一条输出流的采集目标：内存缓冲、广播通道、日志文件与告警分析器。
+/// 打包成一个结构，`read_stream` 只关心"从哪条流读"和"读到的东西去哪"。
+pub(crate) struct StreamTarget<'a> {
+    pub(crate) log_path: Option<PathBuf>,
+    pub(crate) buffer: Arc<Mutex<VecDeque<LogEntry>>>,
+    pub(crate) log_tx: broadcast::Sender<LogEntry>,
+    pub(crate) process: &'a str,
+    pub(crate) max_log_size_mb: Option<u64>,
+    pub(crate) watcher: Option<Arc<LogWatcher>>,
+}
+
 pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
-    log_path: Option<PathBuf>,
-    buffer: Arc<Mutex<VecDeque<LogEntry>>>,
-    log_tx: broadcast::Sender<LogEntry>,
     stream: LogStream,
-    name: &str,
-    max_log_size_mb: Option<u64>,
+    target: StreamTarget<'_>,
 ) {
+    let StreamTarget {
+        log_path,
+        buffer,
+        log_tx,
+        process: name,
+        max_log_size_mb,
+        watcher,
+    } = target;
     let mut buf_reader = BufReader::new(reader);
     let mut raw: Vec<u8> = Vec::with_capacity(1024);
     let mut file = open_log_file(log_path.as_deref()).await;
@@ -42,6 +58,9 @@ pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                     body = &body[..body.len() - 1];
                 }
                 let line = String::from_utf8_lossy(body).into_owned();
+                if let Some(ref watcher) = watcher {
+                    watcher.on_line(&line);
+                }
                 let entry = LogEntry {
                     timestamp: Utc::now(),
                     stream: stream.clone(),

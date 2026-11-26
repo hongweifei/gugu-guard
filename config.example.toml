@@ -33,6 +33,18 @@ max_log_size_mb = 10
 stdout_log = "logs/example-web-stdout.log"
 stderr_log = "logs/example-web-stderr.log"
 
+# 监听端口：启动前检查占用、运行中统计连接数、作为依赖时判断是否就绪
+listen_ports = [8080]
+# port_check = true          # 启动前端口已被别人占用则直接失败并报出占用者 (默认 true)
+# ready_timeout_secs = 60    # 下游等待本进程就绪的上限 (默认 60)
+
+# 日志告警：关键字命中或短时间输出刷屏时推送通知 (需要 daemon.webhook_url)
+# [processes.example-web.log_alert]
+# patterns = ["error", "panic", "exception"]  # 小写子串匹配，命中任一即告警
+# window_secs = 10           # 刷屏统计窗口
+# burst_lines = 200          # 窗口内行数达到该值即告警，0 表示不启用刷屏检测
+# cooldown_secs = 300        # 同类告警静默时长，防止重试风暴刷屏
+
 [processes.example-web.health_check]
 type = "tcp"
 host = "127.0.0.1"  # 可选，默认 127.0.0.1
@@ -50,4 +62,4 @@ auto_start = false
 auto_restart = false
 stdout_log = "logs/example-echo-stdout.log"
 
-# depends_on = ["example-web"]  # 在 example-web 启动后再启动
+# depends_on = ["example-web"]  # 等 example-web 的端口进入监听后再启动

@@ -13,9 +13,12 @@ use tokio::task::JoinHandle;
 
 use crate::config::ProcessConfig;
 use crate::error::{GuguError, Result};
+use crate::history::History;
+use crate::sockets;
 
-use super::capture::read_stream;
+use super::capture::{read_stream, StreamTarget};
 use super::command::split_command_words;
+use super::logwatch::{LogAlert, LogWatcher};
 use super::terminate::{force_kill, run_stop_command, send_default_stop_signal};
 use super::types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
 use super::{UsageSample, UsageSampler, MAX_EXIT_HISTORY};
@@ -48,10 +51,17 @@ pub struct ManagedProcess {
     /// 进程树资源占用（由监控循环按节拍刷新）。
     usage: Option<UsageSample>,
     usage_sampler: UsageSampler,
+    /// 指标与退出日志；测试等场景可用 `History::disabled()`。
+    history: Arc<History>,
+    /// 日志关键字/刷屏分析器，未配置时为 None。
+    log_watcher: Option<Arc<LogWatcher>>,
+    /// 监听端口上的已建立连接数（由监控循环刷新）。
+    connections: u32,
 }
 
 impl ManagedProcess {
     pub fn new(name: String, config: ProcessConfig) -> Self {
+        let log_watcher = config.log_alert.as_ref().and_then(LogWatcher::from_config);
         let (log_tx, _) = broadcast::channel(LOG_BROADCAST_CAPACITY);
         Self {
             name,
@@ -72,7 +82,17 @@ impl ManagedProcess {
             exit_history: VecDeque::new(),
             usage: None,
             usage_sampler: UsageSampler::new(),
+            history: Arc::new(History::disabled()),
+            log_watcher,
+            connections: 0,
         }
+    }
+
+    /// 接入历史仓库（生产路径由 `manager::State` 注入）。
+    #[must_use]
+    pub fn with_history(mut self, history: Arc<History>) -> Self {
+        self.history = history;
+        self
     }
 
     #[must_use]
@@ -85,8 +105,19 @@ impl ManagedProcess {
         &self.config
     }
 
-    pub fn config_mut(&mut self) -> &mut ProcessConfig {
-        &mut self.config
+    /// 换一份配置。日志告警分析器在进程运行期间保持原样：采集任务已经持有旧句柄，
+    /// 重建只会让新配置收不到日志，因此运行中修改的 `log_alert` 在下一次启动生效。
+    pub fn set_config(&mut self, config: ProcessConfig) {
+        if !self.is_running() {
+            self.log_watcher = config.log_alert.as_ref().and_then(LogWatcher::from_config);
+        }
+        self.config = config;
+    }
+
+    /// 本进程关注的端口（显式声明 + 健康检查端口）。
+    #[must_use]
+    pub fn watched_ports(&self) -> Vec<u16> {
+        self.config.watched_ports()
     }
 
     pub fn rename(&mut self, new_name: String) {
@@ -127,16 +158,22 @@ impl ManagedProcess {
         self.crash_restart_count += 1;
     }
 
-    /// 记录一次进程退出（保留最近 MAX_EXIT_HISTORY 条，新的在后）。
-    pub(crate) fn record_exit(&mut self, code: Option<i32>) {
+    /// 记录一次进程退出（保留最近 MAX_EXIT_HISTORY 条，新的在后），并写进退出日志。
+    ///
+    /// `stopped` 标记操作者主动停止：这类退出不计入崩溃次数，但照常计入运行时长。
+    pub(crate) fn record_exit(&mut self, code: Option<i32>, stopped: bool) {
+        let at = Utc::now();
+        let uptime_secs = self.started_at.map(|t| (at - t).num_seconds());
         self.exit_history.push_back(ExitRecord {
-            at: Utc::now(),
+            at,
             code,
             auto_restarted: false,
         });
         while self.exit_history.len() > MAX_EXIT_HISTORY {
             self.exit_history.pop_front();
         }
+        self.history
+            .mark_exit(&self.name, at, code, uptime_secs, stopped);
     }
 
     /// 标记最近一次退出是被守护进程自动拉起的（在自动重启真正成功后调用）。
@@ -144,6 +181,7 @@ impl ManagedProcess {
         if let Some(last) = self.exit_history.back_mut() {
             last.auto_restarted = true;
         }
+        self.history.mark_revived(&self.name, Utc::now());
     }
 
     #[must_use]
@@ -155,6 +193,7 @@ impl ManagedProcess {
     pub fn sample_usage(&mut self) {
         let Some(pid) = self.child.as_ref().and_then(Child::id) else {
             self.usage = None;
+            self.connections = 0;
             return;
         };
         if let Some(sample) = self.usage_sampler.sample(pid) {
@@ -162,9 +201,35 @@ impl ManagedProcess {
         }
     }
 
+    /// 按本端口的已建立连接数刷新；`counts` 是本周期的全机端口计数表。
+    pub fn sample_connections(&mut self, counts: &std::collections::HashMap<u16, u32>) {
+        if !self.is_running() {
+            self.connections = 0;
+            return;
+        }
+        self.connections = self
+            .watched_ports()
+            .iter()
+            .filter_map(|port| counts.get(port))
+            .sum();
+    }
+
     #[must_use]
     pub fn usage(&self) -> Option<UsageSample> {
         self.usage
+    }
+
+    #[must_use]
+    pub fn connections(&self) -> u32 {
+        self.connections
+    }
+
+    /// 取走日志分析器攒下的告警（监控循环每节拍调用一次）。
+    pub fn take_log_alerts(&self) -> Vec<LogAlert> {
+        match &self.log_watcher {
+            Some(watcher) => watcher.take_alerts(),
+            None => Vec::new(),
+        }
     }
 
     /// 记录一次健康检查结果，返回 (当前连续失败次数, 是否达到判定阈值)。
@@ -200,6 +265,18 @@ impl ManagedProcess {
     pub async fn start(&mut self) -> Result<()> {
         if self.is_running() {
             return Err(GuguError::AlreadyRunning(self.name.clone()));
+        }
+
+        // 端口预检：端口被别的进程占着时，启动必然失败，先明确告诉用户是谁占的
+        if self.config.port_check {
+            for port in self.watched_ports() {
+                if let Some(listener) = sockets::listen_on(port) {
+                    let reason = listener.describe();
+                    tracing::error!("[{}] 启动前端口检查失败: {}", self.name, reason);
+                    self.status = ProcessStatus::Failed(reason.clone());
+                    return Err(GuguError::StartFailed(self.name.clone(), reason));
+                }
+            }
         }
 
         self.status = ProcessStatus::Starting;
@@ -309,15 +386,19 @@ impl ManagedProcess {
                     let log_file = self.config.stdout_log.clone();
                     let buffer = self.stdout_lines.clone();
                     let log_tx = self.log_tx.clone();
+                    let watcher = self.log_watcher.clone();
                     let handle = tokio::spawn(async move {
                         read_stream(
                             stdout,
-                            log_file,
-                            buffer,
-                            log_tx,
                             LogStream::Stdout,
-                            &name,
-                            max_log_size,
+                            StreamTarget {
+                                log_path: log_file,
+                                buffer,
+                                log_tx,
+                                process: &name,
+                                max_log_size_mb: max_log_size,
+                                watcher,
+                            },
                         )
                         .await;
                     });
@@ -329,15 +410,19 @@ impl ManagedProcess {
                     let log_file = self.config.stderr_log.clone();
                     let buffer = self.stderr_lines.clone();
                     let log_tx = self.log_tx.clone();
+                    let watcher = self.log_watcher.clone();
                     let handle = tokio::spawn(async move {
                         read_stream(
                             stderr,
-                            log_file,
-                            buffer,
-                            log_tx,
                             LogStream::Stderr,
-                            &name,
-                            max_log_size,
+                            StreamTarget {
+                                log_path: log_file,
+                                buffer,
+                                log_tx,
+                                process: &name,
+                                max_log_size_mb: max_log_size,
+                                watcher,
+                            },
                         )
                         .await;
                     });
@@ -345,11 +430,14 @@ impl ManagedProcess {
                 }
 
                 self.child = Some(child);
-                self.started_at = Some(Utc::now());
+                let started_at = Utc::now();
+                self.started_at = Some(started_at);
+                self.history.mark_start(&self.name, started_at);
                 self.status = ProcessStatus::Running;
                 self.last_health_check = None;
                 self.health_failures = 0;
                 self.usage = None;
+                self.connections = 0;
 
                 tracing::info!("[{}] 进程已启动 (PID: {:?})", self.name, pid);
                 Ok(())
@@ -410,9 +498,10 @@ impl ManagedProcess {
         }
 
         if let Some(code) = stopped_code {
-            self.record_exit(code);
+            self.record_exit(code, true);
         }
         self.usage = None;
+        self.connections = 0;
         self.abort_log_tasks();
         #[cfg(windows)]
         {
@@ -438,8 +527,9 @@ impl ManagedProcess {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     tracing::info!("[{}] 进程已退出 (退出码: {:?})", self.name, status.code());
-                    self.record_exit(status.code());
+                    self.record_exit(status.code(), false);
                     self.usage = None;
+                    self.connections = 0;
                     self.abort_log_tasks();
                     self.child = None;
                     #[cfg(windows)]
@@ -486,6 +576,8 @@ impl ManagedProcess {
             uptime_secs,
             recent_exits: self.recent_exits(),
             usage: self.usage,
+            listen_ports: self.watched_ports(),
+            connections: self.connections,
         }
     }
 

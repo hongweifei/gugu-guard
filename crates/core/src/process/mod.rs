@@ -6,17 +6,20 @@
 //! - [`command`]：命令构造（分词、PATH 解析、shell/直接启动）
 //! - [`terminate`]：停止与强杀（停止命令、信号、taskkill / force）
 //! - [`capture`]：stdout/stderr 采集与日志文件（含轮转）
+//! - [`logwatch`]：日志告警（关键字命中、刷屏检测）
 //! - [`job`]：(Windows) Job Object 进程树封装
 
 mod capture;
 mod command;
 #[cfg(windows)]
 mod job;
+mod logwatch;
 mod managed;
 mod terminate;
 mod types;
 mod usage;
 
+pub use logwatch::{AlertKind, LogAlert, LogWatcher};
 pub use managed::ManagedProcess;
 pub use types::{ExitRecord, LogEntry, LogStream, ProcessInfo, ProcessStatus};
 pub use usage::{format_bytes, UsageSample, UsageSampler};
@@ -26,6 +29,6 @@ pub const MAX_EXIT_HISTORY: usize = 5;
 
 // 单元测试通过 crate::process::* 访问（保持拆分前的路径不变）
 #[cfg(test)]
-pub(crate) use capture::read_stream;
+pub(crate) use capture::{read_stream, StreamTarget};
 #[cfg(test)]
 pub(crate) use command::split_command_words;

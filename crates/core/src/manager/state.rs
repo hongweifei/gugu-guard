@@ -1,10 +1,13 @@
-//! Actor 内部状态：进程表、配置基路径与「声明式 ↔ 解析式」路径换算。
+//! Actor 内部状态：进程表、配置基路径与「声明式 ↔ 解析式」路径换算、历史仓库。
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::{AppConfig, DaemonConfig, ProcessConfig};
 use crate::error::Result;
+use crate::history::History;
 use crate::process::ManagedProcess;
-use std::collections::HashMap;
-use std::path::PathBuf;
 
 use super::{topological_sort, ProcessSnapshot};
 
@@ -14,18 +17,24 @@ pub(super) struct State {
     pub(super) config_path: Option<PathBuf>,
     pub(super) config_dir: PathBuf,
     pub(super) log_base: PathBuf,
+    /// 指标与退出日志；与 `SharedManager` 共享同一份。
+    pub(super) history: Arc<History>,
 }
 
 impl State {
     pub(super) fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
         let (config_dir, log_base) = Self::bases(config, config_path.as_deref());
+        let history = Arc::new(History::new(log_base.join("history")));
 
         let processes = config
             .processes
             .iter()
             .map(|(name, pc)| {
                 let resolved = Self::resolve_paths(pc, &config_dir, &log_base);
-                (name.clone(), ManagedProcess::new(name.clone(), resolved))
+                (
+                    name.clone(),
+                    ManagedProcess::new(name.clone(), resolved).with_history(Arc::clone(&history)),
+                )
             })
             .collect();
 
@@ -35,6 +44,7 @@ impl State {
             config_path,
             config_dir,
             log_base,
+            history,
         }
     }
 
@@ -127,11 +137,40 @@ impl State {
         };
 
         for name in order {
+            let (auto_start, depends_on, ready_timeout) = match self.processes.get(&name) {
+                Some(proc) => (
+                    proc.config().auto_start,
+                    proc.config().depends_on.clone(),
+                    std::time::Duration::from_secs(proc.config().ready_timeout_secs),
+                ),
+                None => continue,
+            };
+            if !auto_start {
+                continue;
+            }
+
+            // 依赖必须真正就绪才拉起本进程，否则失败的下游会让上游"看起来启动成功"
+            let mut blocked_by = None;
+            for dep in depends_on {
+                if !self.processes.contains_key(&dep) {
+                    continue;
+                }
+                if !super::ready::wait_dependency(self, &dep, ready_timeout).await {
+                    blocked_by = Some(dep);
+                    break;
+                }
+            }
+            if let Some(dep) = blocked_by {
+                tracing::error!(
+                    "[{name}] 依赖 [{dep}] 在 {ready_timeout:?} 内未就绪，本进程不启动"
+                );
+                super::monitor::notify_dependency_not_ready(self, &name, &dep);
+                continue;
+            }
+
             if let Some(proc) = self.processes.get_mut(&name) {
-                if proc.config().auto_start {
-                    if let Err(e) = proc.start().await {
-                        tracing::error!("自动启动进程 '{}' 失败: {}", name, e);
-                    }
+                if let Err(e) = proc.start().await {
+                    tracing::error!("自动启动进程 '{}' 失败: {}", name, e);
                 }
             }
         }

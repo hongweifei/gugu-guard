@@ -1,20 +1,24 @@
 //! 进程管理器：单一 actor 任务串行化全部写操作，读操作走 watch 快照。
 //!
 //! 子模块分工：
-//! - [`state`]：actor 内部状态（进程表、配置基路径、回写）
+//! - [`state`]：actor 内部状态（进程表、配置基路径、回写、历史仓库）
 //! - [`actor`]：命令分发与具体操作
-//! - [`monitor`]：2 秒监控循环（探活、自动重启、健康检查）
+//! - [`monitor`]：2 秒监控循环（探活、自动重启、健康检查、指标采集、日志告警）
 //! - [`deps`]：依赖拓扑排序
+//! - [`ready`]：依赖就绪等待
 
 mod actor;
 mod deps;
 mod monitor;
+mod ready;
 mod state;
 
 use crate::config::{AppConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
+use crate::history::History;
 use crate::process::{LogEntry, ProcessInfo};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 
 pub use deps::topological_sort;
@@ -112,6 +116,7 @@ impl ProcessSnapshot {
 pub struct SharedManager {
     cmd_tx: mpsc::Sender<Command>,
     snapshot: watch::Receiver<ProcessSnapshot>,
+    history: Arc<History>,
 }
 
 impl SharedManager {
@@ -127,6 +132,12 @@ impl SharedManager {
 
     pub fn all_process_names(&self) -> Vec<String> {
         self.snapshot.borrow().names()
+    }
+
+    /// 指标时序与退出日志的读句柄；读它不需要经过 actor。
+    #[must_use]
+    pub fn history(&self) -> &Arc<History> {
+        &self.history
     }
 
     // ── 写操作（命令通道） ──
@@ -295,6 +306,7 @@ pub fn start(config: &AppConfig, config_path: Option<PathBuf>) -> SharedManager 
     let mut state = state::State::new(config, config_path);
     let snapshot = state.snapshot();
     let (snap_tx, snap_rx) = watch::channel(snapshot);
+    let history = Arc::clone(&state.history);
 
     tokio::spawn(async move {
         state.start_all().await;
@@ -304,5 +316,6 @@ pub fn start(config: &AppConfig, config_path: Option<PathBuf>) -> SharedManager 
     SharedManager {
         cmd_tx,
         snapshot: snap_rx,
+        history,
     }
 }

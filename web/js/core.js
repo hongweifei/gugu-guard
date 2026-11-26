@@ -16,6 +16,8 @@ let logStreamFilter = 'all';
 let logLineHeight = 22;
 let logVisibleCount = 0;
 let logScrollTop = 0;
+/// 最近一次整机带宽读数，由 WS status 消息的 system 字段更新。
+let systemTraffic = null;
 
 async function api(method, path, body) {
     const opts = { method };
@@ -61,6 +63,8 @@ function connectWS() {
             const d = JSON.parse(ev.data);
             if (d.type === 'status') {
                 allProcesses = d.processes || [];
+                systemTraffic = d.system || null;
+                updateNetStats();
                 render();
             } else if (d.type === 'logs') {
                 if (d.entries?.length) {

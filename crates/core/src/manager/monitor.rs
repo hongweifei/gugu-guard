@@ -37,9 +37,41 @@ pub(super) async fn run_monitor_cycle(state: &mut State) {
         }
     }
 
-    // 资源采样：运行中的进程刷新进程树 CPU/内存（非运行态会清空）
+    // 资源与连接采样：端口表一个周期只读一次，所有进程共用
+    let port_counts = crate::sockets::established_counts();
     for proc in state.processes.values_mut() {
         proc.sample_usage();
+        proc.sample_connections(&port_counts);
+    }
+
+    // 指标入库：进程资源 + 整机带宽（带宽首采样只建基准，返回 None）
+    let now = chrono::Utc::now();
+    let samples: Vec<(&str, crate::process::UsageSample, u32)> = state
+        .processes
+        .iter()
+        .filter_map(|(name, proc)| {
+            proc.usage()
+                .map(|usage| (name.as_str(), usage, proc.connections()))
+        })
+        .collect();
+    state.history.record_usage(now, &samples);
+    let _ = state.history.sample_traffic(now);
+
+    // 日志告警：采集侧攒下的命中与刷屏，在这里统一投递
+    for (name, proc) in &state.processes {
+        for alert in proc.take_log_alerts() {
+            let label = match alert.kind {
+                crate::process::AlertKind::Pattern => "命中关键字",
+                crate::process::AlertKind::Burst => "输出刷屏",
+            };
+            let message = format!(
+                "进程 {name} 日志{label}（{}）：{}",
+                alert.detail, alert.sample
+            );
+            // 没配 webhook 时这是唯一的落点，所以无条件写进守护日志
+            tracing::warn!("{message}");
+            events.push((alert.kind.as_str().to_string(), name.clone(), message));
+        }
     }
 
     // 内存超限：按自动重启路径处理（计入崩溃重启计数，避免重启风暴）
@@ -157,6 +189,17 @@ fn find_dead(state: &mut State) -> (Vec<PendingRestart>, Vec<DownExit>) {
         }
     }
     (dead, down)
+}
+
+/// 依赖未就绪导致下游没有启动：这类"什么都没发生"的失败必须主动通知，
+/// 否则用户只看到上游起不来、下游静悄悄地不存在。
+pub(super) fn notify_dependency_not_ready(state: &State, name: &str, dep: &str) {
+    let message = format!("进程 {name} 的依赖 {dep} 未在超时内就绪，{name} 未启动");
+    tracing::warn!("{message}");
+    if let Some((url, format)) = state.daemon_config.notify_target() {
+        let payload = notify::event(notify::EVENT_NOT_READY, name, &message);
+        notify::spawn(url.to_string(), format, message, payload);
+    }
 }
 
 async fn run_health_checks(state: &mut State) -> Vec<Notice> {

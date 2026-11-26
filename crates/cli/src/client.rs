@@ -5,6 +5,7 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Attribute, Cell, Color, Table,
 };
 use gugu_core::config::{AppConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT, LOCALHOST};
+use gugu_core::history::{ExitEvent, ExitStats, MetricPoint, TrafficPoint};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -143,6 +144,9 @@ pub(crate) async fn run_client(
             stop_timeout,
             stdout_log,
             stderr_log,
+            port,
+            no_port_check,
+            ready_timeout,
             start,
         } => {
             let mut env_map = HashMap::new();
@@ -163,6 +167,9 @@ pub(crate) async fn run_client(
                 "stop_timeout_secs": stop_timeout,
                 "stdout_log": stdout_log,
                 "stderr_log": stderr_log,
+                "listen_ports": port,
+                "port_check": !no_port_check,
+                "ready_timeout_secs": ready_timeout,
                 "start_now": start,
             });
             let resp = api
@@ -206,6 +213,53 @@ pub(crate) async fn run_client(
             }
         }
 
+        Commands::History {
+            name,
+            minutes,
+            json,
+        } => {
+            let body = fetch_json(
+                &api,
+                &format!("/api/v1/processes/{name}/history?minutes={minutes}"),
+            )
+            .await?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                let data: HistoryResponse = serde_json::from_value(body)?;
+                print_history_table(name, &data.points);
+            }
+        }
+
+        Commands::Exits {
+            name,
+            minutes,
+            limit,
+            json,
+        } => {
+            let body = fetch_json(
+                &api,
+                &format!("/api/v1/processes/{name}/exits?minutes={minutes}&limit={limit}"),
+            )
+            .await?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                let data: ExitsResponse = serde_json::from_value(body)?;
+                print_exits(name, &data.events, &data.stats);
+            }
+        }
+
+        Commands::Net { minutes, json } => {
+            let body = fetch_json(&api, &format!("/api/v1/system?minutes={minutes}")).await?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                let data: SystemResponse = serde_json::from_value(body)?;
+                print_net_table(&data.points, data.latest.as_ref());
+            }
+        }
+
         Commands::Reload => {
             let resp = api.post("/api/v1/reload").send().await?;
             print_api_response(resp).await?;
@@ -229,17 +283,14 @@ fn print_status_table(processes: &[gugu_core::process::ProcessInfo]) {
         return;
     }
 
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS);
-    table.set_header(vec![
-        Cell::new("名称").add_attribute(Attribute::Bold),
-        Cell::new("状态").add_attribute(Attribute::Bold),
-        Cell::new("PID").add_attribute(Attribute::Bold),
-        Cell::new("运行时间").add_attribute(Attribute::Bold),
-        Cell::new("重启次数").add_attribute(Attribute::Bold),
-    ]);
+    let show_ports = processes.iter().any(|p| !p.listen_ports.is_empty());
+
+    let mut header = vec!["名称", "状态", "PID", "运行时间", "重启次数"];
+    if show_ports {
+        header.push("端口");
+    }
+    header.push("连接");
+    let mut table = new_table(header);
 
     for p in processes {
         let status_cell = match &p.status {
@@ -258,16 +309,35 @@ fn print_status_table(processes: &[gugu_core::process::ProcessInfo]) {
             .map(|s| format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60))
             .unwrap_or_default();
 
-        table.add_row(vec![
+        let mut row = vec![
             Cell::new(&p.name),
             status_cell,
             Cell::new(p.pid.map(|id| id.to_string()).unwrap_or_default()),
             Cell::new(uptime),
             Cell::new(p.restart_count),
-        ]);
+        ];
+        if show_ports {
+            row.push(Cell::new(join_ports(&p.listen_ports)));
+        }
+        row.push(Cell::new(
+            if p.connections > 0 || !p.listen_ports.is_empty() {
+                p.connections.to_string()
+            } else {
+                String::new()
+            },
+        ));
+        table.add_row(row);
     }
 
     println!("{table}");
+}
+
+fn join_ports(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
@@ -302,6 +372,175 @@ fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
     }
 
     println!("{table}");
+}
+
+/// 取一个 JSON 接口的响应体；非 2xx 时把错误信息带出来。
+async fn fetch_json(api: &ApiHelper<'_>, path: &str) -> Result<serde_json::Value> {
+    let resp = api.get(path).send().await.context("无法连接到守护进程")?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str().map(str::to_string)))
+            .unwrap_or(text);
+        anyhow::bail!("请求失败 ({status}): {msg}");
+    }
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn new_table(header: Vec<&str>) -> Table {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_header(
+        header
+            .into_iter()
+            .map(|h| Cell::new(h).add_attribute(Attribute::Bold)),
+    );
+    table
+}
+
+fn format_size(bytes: f64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes.abs();
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    let sign = if bytes < 0.0 { "-" } else { "" };
+    format!("{sign}{value:.1}{}", UNITS[unit])
+}
+
+fn format_rate(bytes_per_sec: f64) -> String {
+    format!("{}/s", format_size(bytes_per_sec))
+}
+
+fn print_history_table(name: &str, points: &[MetricPoint]) {
+    if points.is_empty() {
+        println!("进程 {name} 暂无指标记录（守护进程启动后每分钟采样一次）");
+        return;
+    }
+    let mut table = new_table(vec![
+        "时间",
+        "CPU 平均",
+        "CPU 峰值",
+        "内存 平均",
+        "内存 峰值",
+        "连接数",
+    ]);
+    for p in points {
+        table.add_row(vec![
+            Cell::new(p.at.format("%m-%d %H:%M")),
+            Cell::new(format!("{:.1}%", p.cpu_avg)),
+            Cell::new(format!("{:.1}%", p.cpu_peak)),
+            Cell::new(format_size(p.mem_avg as f64)),
+            Cell::new(format_size(p.mem_peak as f64)),
+            Cell::new(p.connections),
+        ]);
+    }
+    println!("{table}");
+    println!("共 {} 个采样分钟，最近 24 小时", points.len());
+}
+
+fn print_exits(name: &str, events: &[ExitEvent], stats: &ExitStats) {
+    let availability = stats
+        .availability
+        .map(|a| format!("{:.2}%", f64::from(a) * 100.0))
+        .unwrap_or_else(|| "无记录".to_string());
+    println!("进程 {name} 最近 {} 分钟：", stats.window_minutes);
+    println!(
+        "退出 {} 次（崩溃 {} 次，主动停止 {} 次，自动拉起 {} 次），累计运行 {}，可用率 {availability}",
+        stats.exits,
+        stats.crashes,
+        stats.manual_stops,
+        stats.auto_restarted,
+        format_uptime(stats.uptime_secs as i64),
+    );
+    if events.is_empty() {
+        println!("该窗口内没有退出记录");
+        return;
+    }
+    let mut table = new_table(vec!["时间", "退出码", "存活时长", "原因", "自动拉起"]);
+    for e in events {
+        table.add_row(vec![
+            Cell::new(e.at.format("%m-%d %H:%M:%S")),
+            Cell::new(
+                e.code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "未知".to_string()),
+            ),
+            Cell::new(format_uptime(e.uptime_secs.unwrap_or(0))),
+            Cell::new(if e.stopped {
+                "主动停止"
+            } else {
+                "自行退出"
+            }),
+            Cell::new(if e.auto_restarted { "是" } else { "否" }),
+        ]);
+    }
+    println!("{table}");
+}
+
+fn print_net_table(points: &[TrafficPoint], latest: Option<&TrafficPoint>) {
+    if points.is_empty() {
+        let current = latest.map_or_else(
+            || "当前无读数".to_string(),
+            |l| {
+                format!(
+                    "当前 ↓{} ↑{}",
+                    format_rate(l.rx_bytes_per_sec),
+                    format_rate(l.tx_bytes_per_sec)
+                )
+            },
+        );
+        println!("暂无带宽记录（守护进程启动后每分钟采样一次，{current}）");
+        return;
+    }
+    let mut table = new_table(vec!["时间", "下行", "上行"]);
+    for p in points {
+        table.add_row(vec![
+            Cell::new(p.at.format("%m-%d %H:%M")),
+            Cell::new(format_rate(p.rx_bytes_per_sec)),
+            Cell::new(format_rate(p.tx_bytes_per_sec)),
+        ]);
+    }
+    println!("{table}");
+    println!("整机所有物理网卡合计（不含回环），非单进程口径");
+}
+
+fn format_uptime(secs: i64) -> String {
+    let secs = secs.max(0);
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
+/// 历史接口的响应体：只声明 CLI 需要打印的字段。
+#[derive(serde::Deserialize)]
+struct HistoryResponse {
+    #[serde(default)]
+    points: Vec<MetricPoint>,
+}
+
+#[derive(serde::Deserialize)]
+struct ExitsResponse {
+    #[serde(default)]
+    events: Vec<ExitEvent>,
+    stats: ExitStats,
+}
+
+#[derive(serde::Deserialize)]
+struct SystemResponse {
+    #[serde(default)]
+    latest: Option<TrafficPoint>,
+    #[serde(default)]
+    points: Vec<TrafficPoint>,
 }
 
 async fn print_api_response(resp: reqwest::Response) -> Result<()> {

@@ -4,6 +4,7 @@
 mod auth;
 mod fs;
 mod groups;
+mod history;
 mod logs;
 mod misc;
 mod processes;
@@ -58,6 +59,15 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/processes/{name}/health",
             post(processes::check_health),
         )
+        .route(
+            "/api/v1/processes/{name}/history",
+            get(history::process_history),
+        )
+        .route(
+            "/api/v1/processes/{name}/exits",
+            get(history::process_exits),
+        )
+        .route("/api/v1/system", get(history::system_history))
         .route("/api/v1/stats", get(misc::get_stats))
         .route("/api/v1/groups", get(groups::list_groups))
         .route("/api/v1/groups/{group}", get(groups::get_group))

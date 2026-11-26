@@ -179,6 +179,14 @@ pub(super) struct CreateProcessRequest {
     stdout_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
     #[serde(default)]
+    listen_ports: Vec<u16>,
+    #[serde(default = "gugu_core::config::default_true")]
+    port_check: bool,
+    #[serde(default = "gugu_core::config::default_ready_timeout")]
+    ready_timeout_secs: u64,
+    #[serde(default)]
+    log_alert: Option<gugu_core::config::LogAlertConfig>,
+    #[serde(default)]
     start_now: bool,
     new_name: Option<String>,
 }
@@ -208,6 +216,10 @@ impl CreateProcessRequest {
             max_log_size_mb: self.max_log_size_mb,
             stdout_log: self.stdout_log,
             stderr_log: self.stderr_log,
+            listen_ports: self.listen_ports,
+            port_check: self.port_check,
+            ready_timeout_secs: self.ready_timeout_secs,
+            log_alert: self.log_alert,
         };
         (config, start_now, new_name)
     }

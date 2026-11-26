@@ -1,9 +1,11 @@
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod history;
 pub mod manager;
 pub mod notify;
 pub mod process;
+pub mod sockets;
 
 pub use config::AppConfig;
 pub use error::{GuguError, Result};
@@ -14,5 +16,5 @@ mod tests {
     mod config;
     mod manager;
     mod process;
-    mod support;
+    pub(crate) mod support;
 }

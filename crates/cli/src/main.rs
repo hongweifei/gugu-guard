@@ -128,6 +128,15 @@ enum Commands {
         /// 日志格式：auto / json / logfmt / text（默认 auto 逐档尝试）
         #[arg(long)]
         log_format: Option<String>,
+        /// cgroup v2 硬限：CPU，如 50% / 0.5（核数）/ "50000 100000"（仅 Linux）
+        #[arg(long)]
+        cpu_max: Option<String>,
+        /// cgroup v2 硬限：内存，如 512M / 2G（仅 Linux）
+        #[arg(long)]
+        memory_max: Option<String>,
+        /// cgroup v2 硬限：任务数，防 fork 炸弹（仅 Linux）
+        #[arg(long)]
+        pids_max: Option<String>,
         /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断
         #[arg(short = 'p', long, value_delimiter = ',')]
         port: Vec<u16>,

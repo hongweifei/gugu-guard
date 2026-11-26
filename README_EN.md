@@ -13,6 +13,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Health Checks** — TCP port / HTTP request monitoring; restarts only after N consecutive failures (default 3), so transient blips don't kill healthy processes
 - **Exit History** — the last 5 exits (time, exit code, whether it was auto-restarted) are visible on the card and via the API; every start/exit/revival is also appended to a 30-day rolling journal that survives daemon restarts, so availability and crash frequency stay measurable
 - **Resource Monitoring** — samples CPU/memory for the whole process tree (including helpers like conhost), shown on the card and in `/metrics`; `max_memory_mb` restarts a process that exceeds its memory cap
+- **Hard Limits (cgroup v2)** — on Linux every process gets its own cgroup; `cpu_max` / `memory_max` / `pids_max` are enforced by the kernel (memory overrun OOMs the whole group, task count is capped), applied before the first instruction and cleaned up on exit
 - **Metric Time Series** — one bucket per minute kept for 24 hours (CPU/memory average and peak, connection count), read through the WebUI "metrics" panel and `GET /api/v1/processes/:name/history`
 - **Port Preflight & Connections** — with `listen_ports` configured, startup fails loudly when the port is already taken (naming the owner), and established connections on those ports are counted while running
 - **Readiness Probe** — `depends_on` now waits for the upstream to actually serve (health check passing or ports listening), up to `ready_timeout_secs`
@@ -217,6 +218,7 @@ gugu add my-api -x "python -m uvicorn main:app --host 0.0.0.0" \
   --dir /home/user/api \
   --env PORT=8000,DEBUG=false \
   --port 8000 \
+  --cpu-max 50% --memory-max 512M --pids-max 128 \
   --start
 
 gugu add frontend -x "bun run dev" \
@@ -226,7 +228,8 @@ gugu add frontend -x "bun run dev" \
 
 `--port` accepts repeats or a comma-separated list; ports are what enable the preflight check and
 connection counting. `--no-port-check` disables the preflight, `--ready-timeout` sets how long a
-dependency may take to become ready (default 60s).
+dependency may take to become ready (default 60s). `--cpu-max` / `--memory-max` / `--pids-max` are
+cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-limits)).
 
 ## REST API
 
@@ -281,6 +284,7 @@ gugu-guard/
 | `daemon.api_key` | string | — | API Key, enables auth when set |
 | `daemon.webhook_url` | string | — | Alert webhook (DingTalk / WeCom / Feishu bot or your own endpoint) |
 | `daemon.webhook_format` | string | `dingtalk` | Payload shape: `dingtalk` (WeCom shares it) / `feishu` / `raw` |
+| `daemon.cgroup_root` | string | `/sys/fs/cgroup` | Where cgroup v2 limits are created; point it at a writable subtree in containers or systemd delegation |
 | `daemon.web.addr` | string | `0.0.0.0` | Listen address |
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
@@ -304,6 +308,9 @@ gugu-guard/
 | `stop_timeout_secs` | u64 | `10` | Stop timeout in seconds |
 | `depends_on` | string[] | `[]` | Process dependencies, start in dependency order |
 | `max_memory_mb` | u64 | — | Process tree memory cap; exceeding it restarts via the auto-restart path |
+| `cpu_max` | string | — | cgroup v2 CPU cap: `50%` / `0.5` (cores) / `50000 100000` (quota period); Linux only |
+| `memory_max` | string | — | cgroup v2 memory cap: `512M` / `2G` / bytes; overrun OOMs the group; Linux only |
+| `pids_max` | string | — | cgroup v2 task cap, fork-bomb protection; Linux only |
 | `max_log_size_mb` | u64 | — | Log file size limit (MB), auto-rotate when exceeded |
 | `unhealthy_restart` | bool | `false` | Auto-restart on health check failure |
 | `listen_ports` | u16[] | `[]` | Ports this process listens on: used for the startup preflight, connection counting and dependency readiness |
@@ -372,6 +379,35 @@ log_format = "auto"       # auto: try JSON → logfmt → text per line; pin it 
   lines/bytes and a truncation flag. Only the current path is read, not the `.1`…`.5` rotations
 - **No invented timestamps** — a history line without its own timestamp is never given the capture
   time; a time filter simply excludes such lines
+
+### cgroup v2 Hard Limits
+
+```toml
+[daemon]
+cgroup_root = "/sys/fs/cgroup"   # default; point it at a writable subtree in containers or systemd delegation
+
+[processes.my-app]
+cpu_max = "50%"                  # half a core; also 0.5 (cores) or "50000 100000"
+memory_max = "512M"              # overrun OOMs the whole group — this is not a restart
+pids_max = "128"                 # task cap, fork-bomb protection
+```
+
+- **Prerequisites** — Linux with the cgroup v2 unified hierarchy (`cgroup.controllers` under the mount
+  point) and write access: run as root, or point `cgroup_root` at a subtree delegated to you. A missing
+  cpu / memory / pids controller fails the start and names the missing one
+- **When it applies** — before exec, the daemon creates `<cgroup_root>/gugu/<name>-<hash>`, writes the
+  limits, and the child writes itself into `cgroup.procs` between `fork` and `exec`: the whole tree is
+  limited from its first instruction, with no "start it, then move it" window
+- **Inheritance and cleanup** — children and grandchildren stay in the same cgroup; when the process exits
+  or is stopped the daemon writes `cgroup.kill` and removes the directory, so no orphan escapes.
+  A leftover directory from a previous run is cleared on the next start
+- **Memory semantics** — `memory.max` is a kernel limit: crossing it triggers the cgroup OOM and the
+  whole group is killed (`memory.oom.group = 1`), with `memory.swap.max = 0` so swapping cannot dodge
+  the cap. The daemon only sees the exit (usually 137); `auto_restart` can bring it back
+- **Versus `max_memory_mb`** — `max_memory_mb` is the daemon's own watchdog: sample, then restart.
+  `memory_max` is enforced by the kernel, so the process cannot overuse before being killed. Both may be set
+- **Non-Linux** — configuring any limit fails the start with an explicit "Linux only" message; it is never
+  silently ignored
 
 ## CI & Release
 

@@ -179,8 +179,9 @@ async fn do_add(
         return Err(GuguError::ConfigError(format!("进程 '{name}' 已存在")));
     }
     config.validate()?;
-    let mut proc =
-        ManagedProcess::new(name.clone(), config).with_history(Arc::clone(&state.history));
+    let mut proc = ManagedProcess::new(name.clone(), config)
+        .with_history(Arc::clone(&state.history))
+        .with_cgroup_base(state.cgroup_base.clone());
     if start_now {
         proc.start().await?;
     }
@@ -318,6 +319,7 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
     let (config_dir, log_base) = State::bases(new_config, state.config_path.as_deref());
     state.config_dir = config_dir.clone();
     state.log_base = log_base.clone();
+    state.cgroup_base = State::cgroup_base(new_config, &config_dir);
 
     let to_remove: Vec<String> = state
         .processes
@@ -355,7 +357,8 @@ async fn do_reload(state: &mut State, new_config: &AppConfig) -> Result<()> {
             }
         } else {
             let mut proc = ManagedProcess::new(name.clone(), resolved)
-                .with_history(Arc::clone(&state.history));
+                .with_history(Arc::clone(&state.history))
+                .with_cgroup_base(state.cgroup_base.clone());
             if config.auto_start {
                 let _ = proc.start().await;
             }

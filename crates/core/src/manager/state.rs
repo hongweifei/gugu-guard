@@ -17,6 +17,8 @@ pub(super) struct State {
     pub(super) config_path: Option<PathBuf>,
     pub(super) config_dir: PathBuf,
     pub(super) log_base: PathBuf,
+    /// cgroup v2 的落地目录（`daemon.cgroup_root` 或系统默认）。
+    pub(super) cgroup_base: PathBuf,
     /// 指标与退出日志；与 `SharedManager` 共享同一份。
     pub(super) history: Arc<History>,
 }
@@ -24,6 +26,7 @@ pub(super) struct State {
 impl State {
     pub(super) fn new(config: &AppConfig, config_path: Option<PathBuf>) -> Self {
         let (config_dir, log_base) = Self::bases(config, config_path.as_deref());
+        let cgroup_base = Self::cgroup_base(config, &config_dir);
         let history = Arc::new(History::new(log_base.join("history")));
 
         let processes = config
@@ -33,7 +36,9 @@ impl State {
                 let resolved = Self::resolve_paths(pc, &config_dir, &log_base);
                 (
                     name.clone(),
-                    ManagedProcess::new(name.clone(), resolved).with_history(Arc::clone(&history)),
+                    ManagedProcess::new(name.clone(), resolved)
+                        .with_history(Arc::clone(&history))
+                        .with_cgroup_base(cgroup_base.clone()),
                 )
             })
             .collect();
@@ -44,8 +49,19 @@ impl State {
             config_path,
             config_dir,
             log_base,
+            cgroup_base,
             history,
         }
+    }
+
+    /// 硬限的落地目录：`daemon.cgroup_root`（相对路径按配置目录解析）或系统默认。
+    pub(super) fn cgroup_base(config: &AppConfig, config_dir: &std::path::Path) -> PathBuf {
+        config
+            .daemon
+            .cgroup_root
+            .as_ref()
+            .map(|p| crate::config::resolve_relative_path(p, config_dir))
+            .unwrap_or_else(|| PathBuf::from(crate::cgroup::DEFAULT_BASE))
     }
 
     pub(super) fn bases(

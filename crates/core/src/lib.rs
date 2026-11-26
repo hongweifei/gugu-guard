@@ -1,3 +1,4 @@
+pub mod cgroup;
 pub mod config;
 pub mod error;
 pub mod health;
@@ -14,6 +15,7 @@ pub use manager::SharedManager;
 
 #[cfg(test)]
 mod tests {
+    mod cgroup;
     mod config;
     mod logs;
     mod manager;

@@ -166,6 +166,20 @@
                     <button type="button" class="btn btn-xs btn-add-row" onclick="addEnvRow()">+ 添加变量</button>
                 </div>
 
+                <div class="section-title">资源硬限（cgroup v2，仅 Linux）</div>
+                <div class="field-row">
+                    <div class="field"><label>CPU 上限</label><input type="text" id="f-cpu-max" placeholder="50% / 0.5 / 50000 100000"></div>
+                    <div class="field"><label>内存上限</label><input type="text" id="f-memory-max" placeholder="512M / 2G"></div>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label>任务数上限</label>
+                        <input type="text" id="f-pids-max" placeholder="128（防 fork 炸弹，可选）">
+                        <div class="field-hint">留空即不启用。硬限由内核执行：内存越界会整组 OOM 杀进程，不是「超限重启」；Windows / macOS 配置后启动会明确报错</div>
+                    </div>
+                    <div class="field"></div>
+                </div>
+
                 <div class="section-title">日志输出</div>
                 <div class="field-row">
                     <div class="field"><label>stdout 日志</label><input type="text" id="f-stdout" placeholder="logs/stdout.log"></div>

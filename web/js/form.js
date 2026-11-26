@@ -340,6 +340,9 @@ window.editProc = async function(name) {
         f('f-stdout').value = cfg.stdout_log || '';
         f('f-stderr').value = cfg.stderr_log || '';
         f('f-log-format').value = cfg.log_format || 'auto';
+        f('f-cpu-max').value = cfg.cpu_max || '';
+        f('f-memory-max').value = cfg.memory_max || '';
+        f('f-pids-max').value = cfg.pids_max || '';
         f('f-group').value = cfg.group || '';
         f('f-max-restarts').value = cfg.max_restarts ?? 3;
         f('f-restart-delay').value = cfg.restart_delay_secs ?? 5;
@@ -363,6 +366,9 @@ window.editProc = async function(name) {
         f('f-stdout').value = '';
         f('f-stderr').value = '';
         f('f-log-format').value = 'auto';
+        f('f-cpu-max').value = '';
+        f('f-memory-max').value = '';
+        f('f-pids-max').value = '';
         f('f-max-restarts').value = 3;
         f('f-restart-delay').value = 5;
         f('f-restart-reset').value = 60;
@@ -399,6 +405,9 @@ document.getElementById('process-form').onsubmit = async (e) => {
         stdout_log: document.getElementById('f-stdout').value || null,
         stderr_log: document.getElementById('f-stderr').value || null,
         log_format: document.getElementById('f-log-format').value || 'auto',
+        cpu_max: document.getElementById('f-cpu-max').value.trim() || null,
+        memory_max: document.getElementById('f-memory-max').value.trim() || null,
+        pids_max: document.getElementById('f-pids-max').value.trim() || null,
         group: document.getElementById('f-group').value.trim() || null,
         start_now: document.getElementById('f-auto-start').checked,
         ...collectNetworkSettings(),

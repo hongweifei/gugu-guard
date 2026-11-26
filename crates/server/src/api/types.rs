@@ -271,6 +271,15 @@ pub(super) struct CreateProcessRequest {
     group: Option<String>,
     #[serde(default)]
     max_memory_mb: Option<u64>,
+    /// cgroup v2 硬限：CPU（`50%` / `0.5` / `50000 100000`）。
+    #[serde(default)]
+    cpu_max: Option<String>,
+    /// cgroup v2 硬限：内存（`512M` / `2G` / 字节数）。
+    #[serde(default)]
+    memory_max: Option<String>,
+    /// cgroup v2 硬限：任务数。
+    #[serde(default)]
+    pids_max: Option<String>,
     #[serde(default)]
     max_log_size_mb: Option<u64>,
     stdout_log: Option<PathBuf>,
@@ -312,6 +321,9 @@ impl CreateProcessRequest {
             depends_on: self.depends_on,
             group: self.group,
             max_memory_mb: self.max_memory_mb,
+            cpu_max: self.cpu_max,
+            memory_max: self.memory_max,
+            pids_max: self.pids_max,
             max_log_size_mb: self.max_log_size_mb,
             stdout_log: self.stdout_log,
             stderr_log: self.stderr_log,

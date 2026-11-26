@@ -97,6 +97,10 @@ port = {port}
 # shell = false
 # max_memory_mb = 512
 # max_log_size_mb = 10
+# cgroup v2 硬限 (仅 Linux，需 root 或已委派的 cgroup 目录)：
+# cpu_max = \"50%\"          # 占单核 50%；也可写 0.5（核数）或 \"50000 100000\"
+# memory_max = \"512M\"       # 越界由内核整组 OOM，不是重启
+# pids_max = \"128\"          # 任务数上限，防 fork 炸弹
 # stdout_log = \"logs/my-app-stdout.log\"
 # stderr_log = \"logs/my-app-stderr.log\"
 

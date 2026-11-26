@@ -115,6 +115,10 @@ pub struct DaemonConfig {
     /// webhook 载荷格式，默认 dingtalk（钉钉与企微同形）。
     #[serde(default)]
     pub webhook_format: WebhookFormat,
+    /// cgroup v2 硬限的落地目录；默认 `/sys/fs/cgroup`。
+    /// 容器或 systemd 委派环境里指向自己有写权限的子树。
+    #[serde(default)]
+    pub cgroup_root: Option<PathBuf>,
     #[serde(default)]
     pub web: WebConfig,
 }
@@ -188,6 +192,15 @@ pub struct ProcessConfig {
     /// 进程树内存上限 (MB)：超过则按自动重启路径重启（防泄漏）。
     #[serde(default)]
     pub max_memory_mb: Option<u64>,
+    /// cgroup v2 硬限：CPU 带宽，`50%` / `0.5`（核数）/ `50000 100000`（quota period）。
+    #[serde(default)]
+    pub cpu_max: Option<String>,
+    /// cgroup v2 硬限：内存，`512M` / `2G` / 字节数；越界由内核整组 OOM。
+    #[serde(default)]
+    pub memory_max: Option<String>,
+    /// cgroup v2 硬限：任务数（防 fork 炸弹），如 `128`。
+    #[serde(default)]
+    pub pids_max: Option<String>,
     #[serde(default)]
     pub max_log_size_mb: Option<u64>,
     #[serde(default)]
@@ -290,6 +303,23 @@ impl ProcessConfig {
             && self.env == other.env
             && self.stop_command == other.stop_command
             && self.shell == other.shell
+            // 硬限只在启动时生效：改了限值就要重启，否则用户会以为已经生效
+            && self.cpu_max == other.cpu_max
+            && self.memory_max == other.memory_max
+            && self.pids_max == other.pids_max
+    }
+
+    /// 解析出的 cgroup 硬限（三个字段都为空时返回不启用的空规格）。
+    ///
+    /// # Errors
+    /// 任一限值写法无法解析时返回 `GuguError::ConfigError`。
+    pub fn cgroup_spec(&self) -> crate::error::Result<crate::cgroup::CgroupSpec> {
+        crate::cgroup::CgroupSpec::parse(
+            self.cpu_max.as_deref(),
+            self.memory_max.as_deref(),
+            self.pids_max.as_deref(),
+        )
+        .map_err(crate::error::GuguError::ConfigError)
     }
 
     /// 校验进程配置合法性。
@@ -313,6 +343,8 @@ impl ProcessConfig {
         if let Some(ref la) = self.log_alert {
             la.validate()?;
         }
+        // 限值写错在保存配置时就拦住，而不是等启动才发现
+        self.cgroup_spec()?;
         if self.ready_timeout_secs == 0 {
             return Err(crate::error::GuguError::ConfigError(
                 "ready_timeout_secs 不能为 0".into(),

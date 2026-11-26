@@ -16,6 +16,7 @@ mod state;
 use crate::config::{AppConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
 use crate::history::History;
+use crate::logs::{LogQuery, LogSearchReport};
 use crate::process::{LogEntry, ProcessInfo};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,8 +77,15 @@ enum Command {
     },
     GetProcessLogs {
         name: String,
-        lines: usize,
+        query: LogQuery,
         reply: ReplyTx<Vec<LogEntry>>,
+    },
+    /// 检索落盘的历史日志文件；`budget_bytes` 是每个文件最多倒读的字节数。
+    SearchLogs {
+        name: String,
+        query: LogQuery,
+        budget_bytes: u64,
+        reply: ReplyTx<LogSearchReport>,
     },
     SubscribeLogs {
         name: String,
@@ -222,10 +230,27 @@ impl SharedManager {
         .await
     }
 
-    pub async fn get_process_logs(&self, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
+    /// 实时日志：按检索条件过滤内存环形缓冲，取最新的 `query.limit` 条。
+    pub async fn get_process_logs(&self, name: &str, query: LogQuery) -> Result<Vec<LogEntry>> {
         self.call_val(|r| Command::GetProcessLogs {
             name: name.to_string(),
-            lines,
+            query,
+            reply: r,
+        })
+        .await
+    }
+
+    /// 历史日志检索：倒读落盘的 stdout/stderr 文件，按字节预算限量。
+    pub async fn search_process_logs(
+        &self,
+        name: &str,
+        query: LogQuery,
+        budget_bytes: u64,
+    ) -> Result<LogSearchReport> {
+        self.call_val(|r| Command::SearchLogs {
+            name: name.to_string(),
+            query,
+            budget_bytes,
             reply: r,
         })
         .await

@@ -1,6 +1,6 @@
 /target
 *.log
-logs/
+/logs/
 gugu.toml
 gugu.pid
 .env

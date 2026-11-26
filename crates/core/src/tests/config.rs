@@ -24,6 +24,7 @@ fn minimal_config() -> ProcessConfig {
         max_log_size_mb: None,
         stdout_log: None,
         stderr_log: None,
+        log_format: Default::default(),
         listen_ports: Vec::new(),
         port_check: true,
         ready_timeout_secs: 60,

@@ -17,6 +17,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Port Preflight & Connections** — with `listen_ports` configured, startup fails loudly when the port is already taken (naming the owner), and established connections on those ports are counted while running
 - **Readiness Probe** — `depends_on` now waits for the upstream to actually serve (health check passing or ports listening), up to `ready_timeout_secs`
 - **Log Alerts** — keyword hits and short bursts of output raise notifications with a cooldown, so a retry storm can't flood the bot
+- **Structured Logs & Search** — each line is parsed into level, message, structured fields and an in-line timestamp (JSON / logfmt / text heuristics), so the log panel shows level badges and field chips; logs on disk are searchable by level, keyword and stream, with hit and scan-range counts
 - **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
@@ -184,6 +185,9 @@ gugu start <name>                 # Start a process
 gugu stop <name>                  # Stop a process
 gugu restart <name>               # Restart a process
 gugu logs <name> [-l 100]         # View logs
+gugu logs <name> --level warn -q timeout --stream stderr
+                                  # Live logs filtered by minimum level / keyword / stream
+gugu logs <name> --file -q timeout   # Search the on-disk log file (last 4MB by default)
 gugu history <name> [-m 60]       # Metric time series (CPU/memory/connections, one bucket per minute)
 gugu exits <name> [-m 60]         # Exit history and availability (persisted journal)
 gugu net [-m 60]                  # Host bandwidth time series
@@ -236,7 +240,8 @@ dependency may take to become ready (default 60s).
 | POST | `/api/v1/processes/:name/start` | Start |
 | POST | `/api/v1/processes/:name/stop` | Stop |
 | POST | `/api/v1/processes/:name/restart` | Restart |
-| GET | `/api/v1/processes/:name/logs` | Get logs |
+| GET | `/api/v1/processes/:name/logs?lines=100&level=warn&q=keyword&stream=stderr` | Live logs, filterable by level / keyword / stream |
+| GET | `/api/v1/processes/:name/logs/search?q=keyword&level=warn&limit=200&budget_mb=4` | Search on-disk logs; returns hits plus scanned lines/bytes and truncation flag |
 | GET | `/api/v1/processes/:name/config` | Get config |
 | GET | `/api/v1/processes/:name/history?minutes=60` | Metric time series (one bucket per minute, up to 24h) |
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | Exit events and availability stats |
@@ -307,6 +312,7 @@ gugu-guard/
 | `log_alert` | table | — | Keyword/burst log alerts, see below |
 | `stdout_log` | string | — | stdout log file path |
 | `stderr_log` | string | — | stderr log file path |
+| `log_format` | string | `auto` | Structured format for log lines: `auto` / `json` / `logfmt` / `text` |
 
 ### Health Check
 
@@ -343,6 +349,29 @@ notification is sent.
 > Note: connection counts are established TCP connections on those **listening ports**, read from the
 > system socket table. Host bandwidth is the sum of physical NICs, not a per-process figure — the kernel
 > does not account NIC bytes per process.
+
+### Log Format & Search
+
+```toml
+[processes.my-app]
+stdout_log = "logs/my-app-stdout.log"
+stderr_log = "logs/my-app-stderr.log"
+log_format = "auto"       # auto: try JSON → logfmt → text per line; pin it with json / logfmt / text
+```
+
+- **Parsing** — each line yields a level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`;
+  numeric levels accept both syslog 0-7 and bunyan/pino 10-60), a message, structured fields and an
+  in-line timestamp. `level` / `msg` / `time` keys are lifted out of JSON and logfmt lines, the rest
+  stays as fields, and nested objects flatten to `a.b.c`
+- **ANSI handling** — the in-memory buffer, WebSocket pushes and search results have colour/cursor
+  escapes stripped; files on disk keep the original bytes, so exported logs match process output
+- **Live search** — `level` / `q` / `stream` on `GET /logs` filter the in-memory ring buffer
+  (1000 lines per stream per process)
+- **History search** — `GET /logs/search` reads the last `budget_mb` (default 4, max 32) of each log
+  file, parses it with the same parser and filters it; the response carries hit counts, scanned
+  lines/bytes and a truncation flag. Only the current path is read, not the `.1`…`.5` rotations
+- **No invented timestamps** — a history line without its own timestamp is never given the capture
+  time; a time filter simply excludes such lines
 
 ## CI & Release
 

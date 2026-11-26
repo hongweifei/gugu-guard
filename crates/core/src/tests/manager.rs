@@ -1,4 +1,5 @@
 use crate::config::*;
+use crate::logs::LogQuery;
 use crate::manager::{topological_sort, SharedManager};
 use std::collections::HashMap;
 
@@ -24,6 +25,7 @@ fn test_config() -> ProcessConfig {
         max_log_size_mb: None,
         stdout_log: None,
         stderr_log: None,
+        log_format: Default::default(),
         listen_ports: Vec::new(),
         port_check: true,
         ready_timeout_secs: 60,
@@ -464,7 +466,10 @@ mod get_process_logs {
     #[tokio::test]
     async fn returns_error_for_nonexistent() {
         let mgr = spawn_test_manager();
-        let err = mgr.get_process_logs("nope", 100).await.unwrap_err();
+        let err = mgr
+            .get_process_logs("nope", LogQuery::default())
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("nope"),
             "错误应包含进程名，实际: {err}"
@@ -700,6 +705,75 @@ stdout_log = "logs/web.log"  # 日志路径注释
         );
         let abs_dir = dir.path().display().to_string().replace('\\', "/");
         assert!(!saved.contains(&abs_dir), "不应把本机绝对路径写进配置");
+        mgr.shutdown();
+    }
+}
+
+// ── 历史日志检索 ──────────────────────────────────────────
+
+mod search_process_logs {
+    use super::*;
+    use crate::logs::LogLevel;
+
+    fn manager_with_stdout_log(path: std::path::PathBuf) -> SharedManager {
+        let mut config = AppConfig::default();
+        let mut cfg = test_config();
+        cfg.auto_start = false;
+        cfg.stdout_log = Some(path);
+        config.processes.insert("app".to_string(), cfg);
+        crate::manager::start(&config, None)
+    }
+
+    #[tokio::test]
+    async fn requires_configured_log_files() {
+        let mgr = spawn_test_manager();
+        mgr.add_process("plain".to_string(), test_config(), false)
+            .await
+            .unwrap();
+        let err = mgr
+            .search_process_logs("plain", LogQuery::default(), 4096)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("stdout_log"),
+            "应说明缺少日志文件配置，实际: {err}"
+        );
+        mgr.shutdown();
+    }
+
+    #[tokio::test]
+    async fn scans_configured_file_and_filters_by_level() {
+        let dir = crate::tests::support::tempdir();
+        let path = dir.path().join("out.log");
+        std::fs::write(
+            &path,
+            "{\"level\":\"info\",\"msg\":\"start\"}\n{\"level\":\"error\",\"msg\":\"boom\"}\n",
+        )
+        .unwrap();
+        let mgr = manager_with_stdout_log(path);
+
+        let report = mgr
+            .search_process_logs(
+                "app",
+                LogQuery {
+                    min_level: Some(LogLevel::Error),
+                    ..Default::default()
+                },
+                4096,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.matched, 1, "只有 error 那条符合级别条件");
+        assert_eq!(report.hits.len(), 1);
+        assert_eq!(
+            report.hits[0]
+                .parsed
+                .as_ref()
+                .and_then(|p| p.message.as_deref()),
+            Some("boom")
+        );
+        assert_eq!(report.files.len(), 1, "应报告扫描到的文件");
         mgr.shutdown();
     }
 }

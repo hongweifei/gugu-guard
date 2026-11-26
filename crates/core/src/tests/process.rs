@@ -1,4 +1,5 @@
 use crate::config::ProcessConfig;
+use crate::logs::LogQuery;
 use crate::process::{LogEntry, LogStream, ManagedProcess, ProcessStatus};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ fn test_config() -> ProcessConfig {
         max_log_size_mb: None,
         stdout_log: None,
         stderr_log: None,
+        log_format: Default::default(),
         listen_ports: Vec::new(),
         port_check: true,
         ready_timeout_secs: 60,
@@ -276,7 +278,7 @@ mod managed_process_logs {
     #[tokio::test]
     async fn new_process_has_empty_logs() {
         let proc = ManagedProcess::new("test".to_string(), test_config());
-        let logs = proc.logs(100).await;
+        let logs = proc.logs(&LogQuery::default()).await;
         assert!(logs.is_empty(), "新建进程日志应为空");
     }
 
@@ -284,7 +286,7 @@ mod managed_process_logs {
     async fn clear_logs_on_empty_is_harmless() {
         let proc = ManagedProcess::new("test".to_string(), test_config());
         proc.clear_logs().await;
-        let logs = proc.logs(100).await;
+        let logs = proc.logs(&LogQuery::default()).await;
         assert!(logs.is_empty(), "清空空日志应无副作用");
     }
 }
@@ -301,6 +303,7 @@ mod log_entry_serde {
             stream: LogStream::Stdout,
             line: "hello world".to_string(),
             process_name: Some("test".to_string()),
+            parsed: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: LogEntry = serde_json::from_str(&json).unwrap();
@@ -449,6 +452,7 @@ mod read_stream_non_utf8 {
                 process: "t",
                 max_log_size_mb: None,
                 watcher: None,
+                format: crate::logs::LogFormat::Auto,
             },
         )
         .await;
@@ -537,7 +541,12 @@ mod direct_spawn_windows {
         p.start().await.expect("应能启动");
         let deadline = Instant::now() + Duration::from_secs(8);
         let lines = loop {
-            let logs = p.logs(64).await;
+            let logs = p
+                .logs(&LogQuery {
+                    limit: 64,
+                    ..Default::default()
+                })
+                .await;
             let ls: Vec<String> = logs.iter().map(|e| e.line.clone()).collect();
             if ls.iter().any(|l| l.contains(expect)) || Instant::now() >= deadline {
                 break ls;

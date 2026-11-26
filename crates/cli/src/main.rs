@@ -125,6 +125,9 @@ enum Commands {
         stdout_log: Option<String>,
         #[arg(long)]
         stderr_log: Option<String>,
+        /// 日志格式：auto / json / logfmt / text（默认 auto 逐档尝试）
+        #[arg(long)]
+        log_format: Option<String>,
         /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断
         #[arg(short = 'p', long, value_delimiter = ',')]
         port: Vec<u16>,
@@ -141,11 +144,30 @@ enum Commands {
     #[command(about = "移除一个进程")]
     Remove { name: String },
 
-    #[command(about = "查看进程日志")]
+    #[command(about = "查看进程日志（可按级别/关键字/输出流过滤）")]
     Logs {
         name: String,
+        /// 实时读取的条数上限
         #[arg(short, long, default_value = "50")]
         lines: usize,
+        /// 最低级别：trace / debug / info / warn / error / fatal
+        #[arg(long)]
+        level: Option<String>,
+        /// 关键字（空白分隔，全部命中才算匹配）
+        #[arg(short = 'q', long)]
+        query: Option<String>,
+        /// 只查看某条输出流：stdout / stderr
+        #[arg(long)]
+        stream: Option<String>,
+        /// 改为检索已落盘的历史日志文件
+        #[arg(long)]
+        file: bool,
+        /// 历史检索时每个文件最多倒读的 MB 数
+        #[arg(long, default_value_t = 4)]
+        budget_mb: u64,
+        /// 历史检索的命中条数上限
+        #[arg(short = 'n', long, default_value_t = 200)]
+        limit: usize,
     },
 
     #[command(about = "查看进程指标时序 (CPU / 内存 / 连接数，默认最近 60 分钟)")]

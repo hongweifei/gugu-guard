@@ -1,6 +1,8 @@
 //! API 请求/响应类型（仅 api 树内可见）。
 
 use gugu_core::config::{HealthCheckConfig, ProcessConfig};
+use gugu_core::logs::{LogLevel, LogQuery};
+use gugu_core::process::LogStream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -125,14 +127,109 @@ impl BatchResult {
 
 // ── 请求体 ──────────────────────────────────────────────
 
+/// 日志接口的查询参数：实时读取与历史文件检索共用一套过滤维度。
 #[derive(Deserialize)]
-pub(super) struct LogQuery {
+pub(super) struct LogQueryParams {
+    /// 实时读取的条数上限。
     #[serde(default = "default_lines")]
     pub(super) lines: usize,
+    /// 历史文件检索的命中条数上限。
+    #[serde(default = "default_search_limit")]
+    pub(super) limit: usize,
+    /// 最低级别：trace / debug / info / warn / error / fatal；`all` 或留空表示不限。
+    pub(super) level: Option<String>,
+    /// 关键字，空白分隔，全部命中才算匹配。
+    pub(super) q: Option<String>,
+    /// `stdout` / `stderr`；留空或 `all` 表示不限。
+    pub(super) stream: Option<String>,
+    /// 历史检索时每个文件最多倒读的 MB 数。
+    #[serde(default = "default_budget_mb")]
+    pub(super) budget_mb: u64,
 }
+
+impl LogQueryParams {
+    /// 实时读取条件。
+    ///
+    /// # Errors
+    /// 级别或输出流写错时返回可直接展示给用户的错误说明。
+    pub(super) fn live_query(&self) -> Result<LogQuery, String> {
+        Ok(self
+            .filters()?
+            .into_query(self.lines.clamp(1, MAX_LIVE_LINES)))
+    }
+
+    /// 历史文件检索条件。
+    ///
+    /// # Errors
+    /// 级别或输出流写错时返回可直接展示给用户的错误说明。
+    pub(super) fn search_query(&self) -> Result<LogQuery, String> {
+        Ok(self
+            .filters()?
+            .into_query(self.limit.clamp(1, MAX_SEARCH_LIMIT)))
+    }
+
+    /// 每个文件的最大倒读字节数。
+    pub(super) fn budget_bytes(&self) -> u64 {
+        self.budget_mb
+            .clamp(1, MAX_BUDGET_MB)
+            .saturating_mul(1024 * 1024)
+    }
+
+    fn filters(&self) -> Result<LogFilters, String> {
+        let stream = match self.stream.as_deref().map(str::trim) {
+            None | Some("" | "all") => None,
+            Some("stdout") => Some(LogStream::Stdout),
+            Some("stderr") => Some(LogStream::Stderr),
+            Some(other) => return Err(format!("未知输出流 {other}，可选 stdout / stderr / all")),
+        };
+        let min_level = match self.level.as_deref().map(str::trim) {
+            None | Some("" | "all") => None,
+            Some(raw) => Some(LogLevel::parse(raw).ok_or_else(|| {
+                format!("未知日志级别 {raw}，可选 trace / debug / info / warn / error / fatal")
+            })?),
+        };
+        Ok(LogFilters {
+            stream,
+            min_level,
+            keywords: LogQuery::keywords_from(self.q.as_deref()),
+        })
+    }
+}
+
+/// 查询参数里解析出的过滤维度，行为上等价于不含时间窗与条数上限的 [`LogQuery`]。
+struct LogFilters {
+    stream: Option<LogStream>,
+    min_level: Option<LogLevel>,
+    keywords: Vec<String>,
+}
+
+impl LogFilters {
+    fn into_query(self, limit: usize) -> LogQuery {
+        LogQuery {
+            stream: self.stream,
+            min_level: self.min_level,
+            keywords: self.keywords,
+            since: None,
+            until: None,
+            limit,
+        }
+    }
+}
+
+const MAX_LIVE_LINES: usize = 1000;
+const MAX_SEARCH_LIMIT: usize = 1000;
+const MAX_BUDGET_MB: u64 = 32;
 
 fn default_lines() -> usize {
     100
+}
+
+fn default_search_limit() -> usize {
+    200
+}
+
+fn default_budget_mb() -> u64 {
+    4
 }
 
 #[derive(Deserialize)]
@@ -179,6 +276,8 @@ pub(super) struct CreateProcessRequest {
     stdout_log: Option<PathBuf>,
     stderr_log: Option<PathBuf>,
     #[serde(default)]
+    log_format: gugu_core::logs::LogFormat,
+    #[serde(default)]
     listen_ports: Vec<u16>,
     #[serde(default = "gugu_core::config::default_true")]
     port_check: bool,
@@ -216,6 +315,7 @@ impl CreateProcessRequest {
             max_log_size_mb: self.max_log_size_mb,
             stdout_log: self.stdout_log,
             stderr_log: self.stderr_log,
+            log_format: self.log_format,
             listen_ports: self.listen_ports,
             port_check: self.port_check,
             ready_timeout_secs: self.ready_timeout_secs,

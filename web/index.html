@@ -73,11 +73,20 @@
                 <div class="log-title"><span class="log-dot"></span><span id="log-process-name">-</span></div>
                 <div class="log-controls">
                     <input type="text" id="log-search" class="log-search-input" placeholder="搜索日志..." autocomplete="off">
+                    <select id="log-level-filter" class="log-stream-select" title="最低日志级别">
+                        <option value="all">全部级别</option>
+                        <option value="debug">debug+</option>
+                        <option value="info">info+</option>
+                        <option value="warn">warn+</option>
+                        <option value="error">error+</option>
+                        <option value="fatal">仅 fatal</option>
+                    </select>
                     <select id="log-stream-filter" class="log-stream-select">
                         <option value="all">全部</option>
                         <option value="stdout">stdout</option>
                         <option value="stderr">stderr</option>
                     </select>
+                    <button class="btn btn-sm" id="btn-search-logs" title="按当前条件检索落盘的历史日志文件">历史检索</button>
                     <label class="log-autoscroll"><input type="checkbox" id="log-autoscroll" checked> 自动滚动</label>
                     <button class="btn btn-sm" id="btn-clear-logs" title="清空日志">
                         <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"/></svg>
@@ -93,6 +102,7 @@
                     </button>
                 </div>
             </div>
+            <div class="log-status" id="log-status" hidden></div>
             <div class="log-body" id="log-body"></div>
         </div>
     </div>
@@ -160,6 +170,19 @@
                 <div class="field-row">
                     <div class="field"><label>stdout 日志</label><input type="text" id="f-stdout" placeholder="logs/stdout.log"></div>
                     <div class="field"><label>stderr 日志</label><input type="text" id="f-stderr" placeholder="logs/stderr.log"></div>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label>日志格式</label>
+                        <select id="f-log-format">
+                            <option value="auto">auto（逐行识别 JSON / logfmt / 文本）</option>
+                            <option value="json">json</option>
+                            <option value="logfmt">logfmt</option>
+                            <option value="text">text</option>
+                        </select>
+                        <div class="field-hint">结构化解析口径：决定日志面板的级别徽标与字段胶囊从哪里来</div>
+                    </div>
+                    <div class="field"></div>
                 </div>
 
                 <div class="section-title">网络、就绪与告警</div>

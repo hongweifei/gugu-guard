@@ -37,6 +37,15 @@ document.getElementById('log-stream-filter').addEventListener('change', (e) => {
     logStreamFilter = e.target.value;
     renderLogBody();
 });
+document.getElementById('log-level-filter').addEventListener('change', (e) => {
+    logLevelFilter = e.target.value;
+    renderLogBody();
+});
+document.getElementById('btn-search-logs').onclick = () => searchHistoryLogs();
+document.getElementById('log-status').addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]');
+    if (act && act.dataset.act === 'live') refreshLogs();
+});
 document.getElementById('btn-clear-logs').onclick = async () => {
     if (!selectedProcess) return;
     try {

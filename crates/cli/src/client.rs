@@ -6,6 +6,8 @@ use comfy_table::{
 };
 use gugu_core::config::{AppConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT, LOCALHOST};
 use gugu_core::history::{ExitEvent, ExitStats, MetricPoint, TrafficPoint};
+use gugu_core::logs::{LogLevel, LogSearchReport, ParsedLine};
+use gugu_core::process::{LogEntry, LogStream};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -144,6 +146,7 @@ pub(crate) async fn run_client(
             stop_timeout,
             stdout_log,
             stderr_log,
+            log_format,
             port,
             no_port_check,
             ready_timeout,
@@ -155,6 +158,10 @@ pub(crate) async fn run_client(
                     env_map.insert(k.to_string(), v.to_string());
                 }
             }
+            let log_format = match log_format.as_deref() {
+                None => None,
+                Some(raw) => Some(parse_log_format(raw)?),
+            };
             let body = serde_json::json!({
                 "command": command,
                 "args": args,
@@ -167,6 +174,7 @@ pub(crate) async fn run_client(
                 "stop_timeout_secs": stop_timeout,
                 "stdout_log": stdout_log,
                 "stderr_log": stderr_log,
+                "log_format": log_format,
                 "listen_ports": port,
                 "port_check": !no_port_check,
                 "ready_timeout_secs": ready_timeout,
@@ -188,28 +196,88 @@ pub(crate) async fn run_client(
             print_api_response(resp).await?;
         }
 
-        Commands::Logs { name, lines } => {
-            let resp = api
-                .get(&format!("/api/v1/processes/{name}/logs?lines={lines}"))
-                .send()
-                .await?;
-            let status = resp.status();
-            if !status.is_success() {
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("获取日志失败: {text}");
+        Commands::Logs {
+            name,
+            lines,
+            level,
+            query,
+            stream,
+            file,
+            budget_mb,
+            limit,
+        } => {
+            let mut params: Vec<(&str, String)> = Vec::new();
+            if let Some(raw) = level {
+                params.push(("level", raw.clone()));
             }
-            let logs: Vec<gugu_core::process::LogEntry> = resp.json().await?;
-            for entry in &logs {
-                let time = entry.timestamp.format("%H:%M:%S");
-                let prefix = match &entry.stream {
-                    gugu_core::process::LogStream::Stdout => "OUT",
-                    gugu_core::process::LogStream::Stderr => "ERR",
-                    _ => "???",
+            if let Some(raw) = query {
+                params.push(("q", raw.clone()));
+            }
+            if let Some(raw) = stream {
+                params.push(("stream", raw.clone()));
+            }
+
+            if *file {
+                params.push(("limit", limit.to_string()));
+                params.push(("budget_mb", budget_mb.to_string()));
+                let url = format!(
+                    "/api/v1/processes/{name}/logs/search?{}",
+                    encode_query(&params)
+                );
+                let resp = api.get(&url).send().await?;
+                if !resp.status().is_success() {
+                    let text = resp.text().await.unwrap_or_default();
+                    anyhow::bail!("检索历史日志失败: {text}");
+                }
+                let report: LogSearchReport = resp.json().await?;
+                for hit in &report.hits {
+                    let at = hit.at().map(|at| at.with_timezone(&chrono::Local));
+                    print_log_line(
+                        at,
+                        &hit.stream,
+                        hit.parsed.as_ref().and_then(|p| p.level),
+                        log_text(&hit.line, hit.parsed.as_ref()),
+                    );
+                }
+                if report.hits.is_empty() {
+                    println!("没有命中的日志");
+                }
+                let files = if report.files.is_empty() {
+                    String::new()
+                } else {
+                    format!("；文件 {}", report.files.join(", "))
                 };
-                println!("[{time}] [{prefix}] {}", entry.line);
-            }
-            if logs.is_empty() {
-                println!("暂无日志");
+                println!(
+                    "扫描 {} 行 / {}，命中 {} 条{}{files}",
+                    report.scanned_lines,
+                    format_size(report.scanned_bytes as f64),
+                    report.matched,
+                    if report.truncated {
+                        "，结果已截断（只保留最近的命中）"
+                    } else {
+                        ""
+                    }
+                );
+            } else {
+                params.push(("lines", lines.to_string()));
+                let url = format!("/api/v1/processes/{name}/logs?{}", encode_query(&params));
+                let resp = api.get(&url).send().await?;
+                if !resp.status().is_success() {
+                    let text = resp.text().await.unwrap_or_default();
+                    anyhow::bail!("获取日志失败: {text}");
+                }
+                let logs: Vec<LogEntry> = resp.json().await?;
+                for entry in &logs {
+                    print_log_line(
+                        Some(entry.timestamp.with_timezone(&chrono::Local)),
+                        &entry.stream,
+                        entry.parsed.as_ref().and_then(|p| p.level),
+                        log_text(&entry.line, entry.parsed.as_ref()),
+                    );
+                }
+                if logs.is_empty() {
+                    println!("暂无日志");
+                }
             }
         }
 
@@ -372,6 +440,67 @@ fn print_list_table(processes: &[gugu_core::process::ProcessInfo]) {
     }
 
     println!("{table}");
+}
+
+fn parse_log_format(raw: &str) -> Result<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok("auto"),
+        "json" => Ok("json"),
+        "logfmt" => Ok("logfmt"),
+        "text" => Ok("text"),
+        other => anyhow::bail!("未知日志格式 {other}，可选 auto / json / logfmt / text"),
+    }
+}
+
+fn encode_query(pairs: &[(&str, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={}", encode_component(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// 百分号编码：只保留 URL 查询串里的非保留字符。
+fn encode_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// 有结构化正文时用正文，否则原样打印整行。
+fn log_text<'a>(line: &'a str, parsed: Option<&'a ParsedLine>) -> &'a str {
+    parsed
+        .and_then(|parsed| parsed.message.as_deref())
+        .unwrap_or(line)
+}
+
+fn print_log_line(
+    at: Option<chrono::DateTime<chrono::Local>>,
+    stream: &LogStream,
+    level: Option<LogLevel>,
+    text: &str,
+) {
+    let time = at.map_or_else(
+        || "--:--:--".to_string(),
+        |at| at.format("%H:%M:%S").to_string(),
+    );
+    let stream_tag = match stream {
+        LogStream::Stdout => "OUT",
+        LogStream::Stderr => "ERR",
+        _ => "???",
+    };
+    let level_tag = level.map_or_else(
+        || "     ".to_string(),
+        |level| format!("{:<5}", level.as_str().to_uppercase()),
+    );
+    println!("[{time}] [{stream_tag}] {level_tag} {text}");
 }
 
 /// 取一个 JSON 接口的响应体；非 2xx 时把错误信息带出来。

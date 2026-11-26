@@ -32,6 +32,8 @@ restart_delay_secs = 5
 max_log_size_mb = 10
 stdout_log = "logs/example-web-stdout.log"
 stderr_log = "logs/example-web-stderr.log"
+# log_format = "auto"        # 日志行结构化格式：auto 逐行识别 JSON → logfmt → 文本；
+#                            # 也可写死 json / logfmt / text，级别徽标与字段胶囊据此提取
 
 # 监听端口：启动前检查占用、运行中统计连接数、作为依赖时判断是否就绪
 listen_ports = [8080]

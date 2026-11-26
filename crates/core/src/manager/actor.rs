@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::config::{AppConfig, ProcessConfig};
 use crate::error::{GuguError, Result};
+use crate::logs::{LogQuery, LogSearchReport, SearchOptions};
 use crate::process::{LogEntry, ManagedProcess};
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -112,8 +113,16 @@ pub(super) async fn handle(
                 .map(|p| state.declared_paths(p.config()));
             let _ = reply.send(Ok(cfg));
         }
-        Command::GetProcessLogs { name, lines, reply } => {
-            let _ = reply.send(do_get_logs(state, &name, lines).await);
+        Command::GetProcessLogs { name, query, reply } => {
+            let _ = reply.send(do_get_logs(state, &name, &query).await);
+        }
+        Command::SearchLogs {
+            name,
+            query,
+            budget_bytes,
+            reply,
+        } => {
+            let _ = reply.send(do_search_logs(state, &name, &query, budget_bytes).await);
         }
         Command::SubscribeLogs { name, reply } => {
             let _ = reply.send(do_subscribe(state, &name));
@@ -254,12 +263,45 @@ async fn do_clear_logs(state: &mut State, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn do_get_logs(state: &mut State, name: &str, lines: usize) -> Result<Vec<LogEntry>> {
+async fn do_get_logs(state: &mut State, name: &str, query: &LogQuery) -> Result<Vec<LogEntry>> {
     let proc = state
         .processes
         .get(name)
         .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
-    Ok(proc.logs(lines).await)
+    Ok(proc.logs(query).await)
+}
+
+async fn do_search_logs(
+    state: &State,
+    name: &str,
+    query: &LogQuery,
+    budget_bytes: u64,
+) -> Result<LogSearchReport> {
+    let proc = state
+        .processes
+        .get(name)
+        .ok_or_else(|| GuguError::ProcessNotFound(name.to_string()))?;
+    let files = proc.log_files();
+    if files.is_empty() {
+        return Err(GuguError::ConfigError(format!(
+            "[{name}] 未配置 stdout_log / stderr_log，没有可检索的历史日志文件"
+        )));
+    }
+    if !files.iter().any(|(_, path)| path.exists()) {
+        return Err(GuguError::ConfigError(format!(
+            "[{name}] 日志文件尚未生成（进程还没输出过内容）"
+        )));
+    }
+    let format = proc.config().log_format;
+    let options = SearchOptions::new(budget_bytes, query.limit);
+    let query = query.clone();
+    // 读文件是同步 I/O：挪到阻塞线程池，别把 tokio 工作线程占住。
+    let report = tokio::task::spawn_blocking(move || {
+        crate::logs::search_files(&files, format, &query, options)
+    })
+    .await
+    .map_err(|e| GuguError::ConfigError(format!("日志检索任务失败: {e}")))?;
+    Ok(report)
 }
 
 fn do_subscribe(state: &State, name: &str) -> Result<broadcast::Receiver<LogEntry>> {

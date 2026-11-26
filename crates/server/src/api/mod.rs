@@ -52,6 +52,10 @@ pub fn routes() -> Router<AppState> {
             get(logs::get_logs).delete(logs::clear_logs),
         )
         .route(
+            "/api/v1/processes/{name}/logs/search",
+            get(logs::search_logs),
+        )
+        .route(
             "/api/v1/processes/{name}/logs/download",
             get(logs::download_logs),
         )

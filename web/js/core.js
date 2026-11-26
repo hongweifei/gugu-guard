@@ -13,6 +13,10 @@ let API_KEY = localStorage.getItem('gugu_api_key') || '';
 let logEntries = [];
 let logSearchQuery = '';
 let logStreamFilter = 'all';
+/// 最低级别过滤：all / debug / info / warn / error / fatal。
+let logLevelFilter = 'all';
+/// 日志面板数据来源：live（实时环形缓冲）或 file（落盘历史文件检索结果）。
+let logMode = 'live';
 let logLineHeight = 22;
 let logVisibleCount = 0;
 let logScrollTop = 0;

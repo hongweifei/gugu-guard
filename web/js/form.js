@@ -339,6 +339,7 @@ window.editProc = async function(name) {
         f('f-dir').value = cfg.working_dir || '';
         f('f-stdout').value = cfg.stdout_log || '';
         f('f-stderr').value = cfg.stderr_log || '';
+        f('f-log-format').value = cfg.log_format || 'auto';
         f('f-group').value = cfg.group || '';
         f('f-max-restarts').value = cfg.max_restarts ?? 3;
         f('f-restart-delay').value = cfg.restart_delay_secs ?? 5;
@@ -361,6 +362,7 @@ window.editProc = async function(name) {
         f('f-dir').value = '';
         f('f-stdout').value = '';
         f('f-stderr').value = '';
+        f('f-log-format').value = 'auto';
         f('f-max-restarts').value = 3;
         f('f-restart-delay').value = 5;
         f('f-restart-reset').value = 60;
@@ -396,6 +398,7 @@ document.getElementById('process-form').onsubmit = async (e) => {
         unhealthy_restart: hcData.unhealthy_restart,
         stdout_log: document.getElementById('f-stdout').value || null,
         stderr_log: document.getElementById('f-stderr').value || null,
+        log_format: document.getElementById('f-log-format').value || 'auto',
         group: document.getElementById('f-group').value.trim() || null,
         start_now: document.getElementById('f-auto-start').checked,
         ...collectNetworkSettings(),

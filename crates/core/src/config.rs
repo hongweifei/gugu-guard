@@ -194,6 +194,9 @@ pub struct ProcessConfig {
     pub stdout_log: Option<PathBuf>,
     #[serde(default)]
     pub stderr_log: Option<PathBuf>,
+    /// 日志行的结构化格式；默认 auto：逐行按 JSON → logfmt → 文本 逐档回退。
+    #[serde(default)]
+    pub log_format: crate::logs::LogFormat,
     /// 服务监听的端口：启动前做占用预检，运行期统计连接数，也作为就绪判定依据。
     #[serde(default)]
     pub listen_ports: Vec<u16>,

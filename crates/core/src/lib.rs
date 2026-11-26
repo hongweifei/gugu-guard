@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod history;
+pub mod logs;
 pub mod manager;
 pub mod notify;
 pub mod process;
@@ -14,6 +15,7 @@ pub use manager::SharedManager;
 #[cfg(test)]
 mod tests {
     mod config;
+    mod logs;
     mod manager;
     mod process;
     pub(crate) mod support;

@@ -17,6 +17,7 @@
 - **端口预检与连接数** — 配置 `listen_ports` 后启动前检查端口是否被别的进程占用（占用时直接失败并报出占用者），运行中统计这些端口上的已建立连接数
 - **就绪探针** — `depends_on` 现在等上游真的可用（健康检查通过或端口进入监听）再拉起下游，最多等 `ready_timeout_secs`
 - **日志告警** — 命中关键字、或短时间内输出刷屏，按冷却时间推送通知，避免重试风暴刷爆机器人
+- **日志结构化与检索** — 每行解析出级别、正文、结构化字段与行内时间（JSON / logfmt / 文本启发式），日志面板带级别徽标与字段胶囊；按级别、关键字、输出流检索落盘的日志文件，返回命中与扫描范围
 - **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
@@ -185,6 +186,9 @@ gugu start <name>                 # 启动进程
 gugu stop <name>                  # 停止进程
 gugu restart <name>               # 重启进程
 gugu logs <name> [-l 100]         # 查看日志
+gugu logs <name> --level warn -q 超时 --stream stderr
+                                  # 实时日志，按最低级别 / 关键字 / 输出流过滤
+gugu logs <name> --file -q 超时   # 检索落盘的历史日志（默认倒读最近 4MB）
 gugu history <name> [-m 60]       # 指标时序（CPU/内存/连接数，每分钟一桶）
 gugu exits <name> [-m 60]         # 退出历史与可用率（落盘记录）
 gugu net [-m 60]                  # 整机带宽时序
@@ -236,7 +240,8 @@ gugu add frontend -x "bun run dev" \
 | POST | `/api/v1/processes/:name/start` | 启动 |
 | POST | `/api/v1/processes/:name/stop` | 停止 |
 | POST | `/api/v1/processes/:name/restart` | 重启 |
-| GET | `/api/v1/processes/:name/logs` | 获取日志 |
+| GET | `/api/v1/processes/:name/logs?lines=100&level=warn&q=关键字&stream=stderr` | 实时日志，支持级别 / 关键字 / 输出流过滤 |
+| GET | `/api/v1/processes/:name/logs/search?q=关键字&level=warn&limit=200&budget_mb=4` | 检索落盘的历史日志，返回命中、扫描行数与字节数、是否截断 |
 | GET | `/api/v1/processes/:name/config` | 获取配置 |
 | GET | `/api/v1/processes/:name/history?minutes=60` | 指标时序（每分钟一桶，最长 24 小时） |
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | 退出事件与可用率统计 |
@@ -309,6 +314,7 @@ gugu-guard/
 | `log_alert` | table | — | 日志关键字与刷屏告警，见下节 |
 | `stdout_log` | string | — | stdout 日志文件路径 |
 | `stderr_log` | string | — | stderr 日志文件路径 |
+| `log_format` | string | `auto` | 日志行结构化格式：`auto` / `json` / `logfmt` / `text` |
 
 ### 健康检查
 
@@ -343,6 +349,26 @@ cooldown_secs = 300       # 同类告警的静默时长，防止重试风暴刷�
 
 > 说明：连接数是这些**监听端口**上已建立的 TCP 连接数，从系统套接字表读出；
 > 整机带宽是所有物理网卡合计，不是单进程口径（内核不按进程记录网卡字节）。
+
+### 日志格式与检索
+
+```toml
+[processes.my-app]
+stdout_log = "logs/my-app-stdout.log"
+stderr_log = "logs/my-app-stderr.log"
+log_format = "auto"       # auto: 逐行按 JSON → logfmt → 文本 回退；也可写死 json / logfmt / text
+```
+
+- **解析口径** — 每行提取级别（`trace` / `debug` / `info` / `warn` / `error` / `fatal`，数字级别兼容
+  syslog 0-7 与 bunyan/pino 10-60）、正文、结构化字段与行内时间。JSON 与 logfmt 的
+  `level` / `msg` / `time` 等键会被提升，其余键作为字段展示；嵌套对象按 `a.b.c` 展平
+- **ANSI 处理** — 内存缓冲、WebSocket 推送与检索结果里的行会清掉颜色与光标控制符；
+  落盘文件保留原始字节，下载导出的日志与进程原样输出对得上
+- **实时检索** — `GET /logs` 的 `level` / `q` / `stream` 在内存环形缓冲（每进程每流最近 1000 行）上过滤
+- **历史检索** — `GET /logs/search` 从每个日志文件尾部倒读 `budget_mb`（默认 4，上限 32）这一段，
+  用同一解析器逐行结构化后过滤；返回命中条数、扫描行数/字节数，以及是否因预算或条数上限被截断。
+  只读当前路径的文件，不读 `.1`…`.5` 轮转备份
+- **时间不冒充** — 历史行如果解析不出自己的时间戳，就不填采集时间：按时间过滤时这类行会被排除
 
 ## 持续集成与发布
 

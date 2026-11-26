@@ -4,6 +4,7 @@
 //! 输出采集在 [`capture`]，Windows 进程树在 [`job`]。
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -14,6 +15,7 @@ use tokio::task::JoinHandle;
 use crate::config::ProcessConfig;
 use crate::error::{GuguError, Result};
 use crate::history::History;
+use crate::logs::LogQuery;
 use crate::sockets;
 
 use super::capture::{read_stream, StreamTarget};
@@ -380,6 +382,7 @@ impl ManagedProcess {
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
                 let max_log_size = self.config.max_log_size_mb;
+                let format = self.config.log_format;
 
                 if let Some(stdout) = stdout {
                     let name = self.name.clone();
@@ -398,6 +401,7 @@ impl ManagedProcess {
                                 process: &name,
                                 max_log_size_mb: max_log_size,
                                 watcher,
+                                format,
                             },
                         )
                         .await;
@@ -422,6 +426,7 @@ impl ManagedProcess {
                                 process: &name,
                                 max_log_size_mb: max_log_size,
                                 watcher,
+                                format,
                             },
                         )
                         .await;
@@ -581,55 +586,43 @@ impl ManagedProcess {
         }
     }
 
-    pub async fn logs(&self, lines: usize) -> Vec<LogEntry> {
+    /// 实时日志：stdout 与 stderr 按时间合并后，先按检索条件过滤，再取最新的 `limit` 条。
+    pub async fn logs(&self, query: &LogQuery) -> Vec<LogEntry> {
         let stdout = self.stdout_lines.lock().await;
         let stderr = self.stderr_lines.lock().await;
-
-        let total = stdout.len() + stderr.len();
-        if total == 0 {
+        if stdout.is_empty() && stderr.is_empty() {
             return Vec::new();
         }
 
-        let take = lines.min(total);
-        let skip = total.saturating_sub(take);
+        let mut merged: Vec<LogEntry> = Vec::with_capacity(stdout.len() + stderr.len());
+        merged.extend(stdout.iter().cloned());
+        merged.extend(stderr.iter().cloned());
+        drop(stdout);
+        drop(stderr);
+        // 稳定排序：时间相同的行里 stdout 在前，与合并游走的顺序一致。
+        merged.sort_by_key(|entry| entry.timestamp);
 
-        let mut result = Vec::with_capacity(take);
-        let mut si = 0;
-        let mut ei = 0;
-
-        let mut skipped = 0;
-        while si < stdout.len() || ei < stderr.len() {
-            let entry = match (stdout.get(si), stderr.get(ei)) {
-                (Some(s), Some(e)) => {
-                    if s.timestamp <= e.timestamp {
-                        si += 1;
-                        s.clone()
-                    } else {
-                        ei += 1;
-                        e.clone()
-                    }
-                }
-                (Some(s), None) => {
-                    si += 1;
-                    s.clone()
-                }
-                (None, Some(e)) => {
-                    ei += 1;
-                    e.clone()
-                }
-                (None, None) => break,
-            };
-
-            skipped += 1;
-            if skipped > skip {
-                result.push(entry);
-            }
-            if result.len() >= take {
-                break;
-            }
+        let mut hits: Vec<LogEntry> = merged
+            .into_iter()
+            .filter(|entry| query.matches(entry))
+            .collect();
+        if hits.len() > query.limit {
+            hits.drain(..hits.len() - query.limit);
         }
+        hits
+    }
 
-        result
+    /// 本进程配置的输出日志文件（stdout / stderr 各一条），供历史检索。
+    #[must_use]
+    pub fn log_files(&self) -> Vec<(LogStream, PathBuf)> {
+        let mut files = Vec::new();
+        if let Some(path) = &self.config.stdout_log {
+            files.push((LogStream::Stdout, path.clone()));
+        }
+        if let Some(path) = &self.config.stderr_log {
+            files.push((LogStream::Stderr, path.clone()));
+        }
+        files
     }
 
     pub fn set_status(&mut self, status: ProcessStatus) {

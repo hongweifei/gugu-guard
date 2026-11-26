@@ -75,6 +75,9 @@ pub struct LogEntry {
     pub line: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_name: Option<String>,
+    /// 结构化解析结果；纯文本行里没有级别与字段时省略，WS 载荷与之前一样轻。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<crate::logs::ParsedLine>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -74,6 +74,23 @@ command = "echo hello"
     }
 
     #[test]
+    fn terminal_is_off_by_default_and_parses_when_enabled() {
+        let toml = r#"
+[processes.svc]
+command = "echo hello"
+"#;
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(!config.daemon.web.terminal, "内置终端默认必须关闭");
+
+        let toml = r#"
+[daemon.web]
+terminal = true
+"#;
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(config.daemon.web.terminal, "terminal = true 应被解析");
+    }
+
+    #[test]
     fn parses_full_process_config() {
         let toml = r#"
 [processes.web]

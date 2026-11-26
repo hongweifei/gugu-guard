@@ -140,6 +140,8 @@ pub struct AuditStore {
     dir: Option<PathBuf>,
     recent: Mutex<VecDeque<AuditEntry>>,
     last_compact: Mutex<Option<Instant>>,
+    /// 串行化落盘，避免多个会话同时追加时把两行 JSON 拼在一起。
+    append_lock: Mutex<()>,
 }
 
 impl AuditStore {
@@ -149,6 +151,7 @@ impl AuditStore {
             dir: Some(dir),
             recent: Mutex::new(VecDeque::with_capacity(MAX_KEPT)),
             last_compact: Mutex::new(None),
+            append_lock: Mutex::new(()),
         }
     }
 
@@ -158,6 +161,7 @@ impl AuditStore {
             dir: None,
             recent: Mutex::new(VecDeque::with_capacity(MAX_KEPT)),
             last_compact: Mutex::new(None),
+            append_lock: Mutex::new(()),
         }
     }
 
@@ -182,6 +186,11 @@ impl AuditStore {
         let Some(path) = self.file_path() else {
             return;
         };
+        // 文件写入与压缩共用一把锁：并发会话只会排队，不会交错字节。
+        let _guard = self
+            .append_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 tracing::warn!("创建审计目录失败 {}: {}", parent.display(), e);
@@ -191,16 +200,17 @@ impl AuditStore {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_FILE_BYTES) || self.compact_due() {
             compact(&path);
         }
-        let Ok(line) = serde_json::to_string(entry) else {
+        let Ok(mut line) = serde_json::to_string(entry) else {
             return;
         };
+        line.push('\n');
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
         {
             Ok(mut file) => {
-                if let Err(e) = writeln!(file, "{line}") {
+                if let Err(e) = file.write_all(line.as_bytes()) {
                     tracing::warn!("写审计日志失败 {}: {}", path.display(), e);
                 }
             }
@@ -388,6 +398,34 @@ mod tests {
         let hits = reopened.query(&AuditFilter::default());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].target.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn concurrent_records_keep_one_json_per_line() {
+        let dir = tempdir();
+        let store = std::sync::Arc::new(AuditStore::new(dir.path().to_path_buf()));
+        let threads: Vec<_> = (0..8)
+            .map(|worker| {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || {
+                    for index in 0..50 {
+                        store.record(entry("terminal.open", &format!("w{worker}-{index}"), true));
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("写入线程不应 panic");
+        }
+
+        let text =
+            std::fs::read_to_string(store.file_path().expect("应落盘")).expect("读取审计文件失败");
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 400, "每条记录恰好一行");
+        for line in lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|error| panic!("审计行不是完整 JSON: {error}: {line}"));
+        }
     }
 
     #[test]

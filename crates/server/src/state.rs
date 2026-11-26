@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gugu_core::audit::AuditStore;
@@ -13,6 +14,10 @@ pub struct AppState {
     pub audit: Arc<AuditStore>,
     pub api_key: Option<String>,
     pub cors_origins: Vec<String>,
+    /// 是否开放 WebUI 内置终端。
+    pub terminal_enabled: bool,
+    /// 终端会话的工作目录（通常为配置文件所在目录）。
+    pub terminal_cwd: Option<PathBuf>,
     /// `POST /api/v1/shutdown` 用以请求守护进程优雅停止；
     /// 由 CLI 的 run_core 注入，测试或不接 API 的形态下为 None。
     pub shutdown_tx: Option<mpsc::Sender<()>>,
@@ -26,6 +31,8 @@ impl AppState {
             audit: Arc::new(AuditStore::disabled()),
             api_key,
             cors_origins,
+            terminal_enabled: false,
+            terminal_cwd: None,
             shutdown_tx: None,
         }
     }
@@ -34,6 +41,14 @@ impl AppState {
     #[must_use]
     pub fn with_audit(mut self, audit: Arc<AuditStore>) -> Self {
         self.audit = audit;
+        self
+    }
+
+    /// 注入终端开关与工作目录；不调用时终端关闭。
+    #[must_use]
+    pub fn with_terminal(mut self, enabled: bool, cwd: Option<PathBuf>) -> Self {
+        self.terminal_enabled = enabled;
+        self.terminal_cwd = cwd;
         self
     }
 

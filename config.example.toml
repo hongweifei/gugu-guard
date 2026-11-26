@@ -18,6 +18,9 @@ addr = "0.0.0.0"
 port = 9090
 # CORS 允许的来源 (可选，为空则允许所有)
 # cors_origins = ["http://localhost:3000"]
+# WebUI 内置终端 (默认关闭)。开启后浏览器里是一个真实 shell，
+# 监听非回环地址时必须同时配置 daemon.api_key，否则守护进程拒绝启动。
+# terminal = false
 
 # 示例进程配置
 # 注意：其中的相对路径 (logs/、工作目录) 都相对于本配置文件所在目录，

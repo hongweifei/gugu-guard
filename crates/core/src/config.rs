@@ -135,12 +135,17 @@ impl DaemonConfig {
     }
 }
 
+/// Web 服务配置：监听地址、端口、跨域来源与内置终端开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
     pub addr: Option<String>,
     pub port: Option<u16>,
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// 是否开放 WebUI 内置终端。默认关闭；开启后等于把 shell 交给能访问面板的人。
+    /// 监听非回环地址时必须配置 `api_key`，否则守护进程拒绝启动。
+    #[serde(default)]
+    pub terminal: bool,
 }
 
 impl Default for WebConfig {
@@ -149,6 +154,7 @@ impl Default for WebConfig {
             addr: Some(DEFAULT_BIND_ADDR.into()),
             port: Some(DEFAULT_PORT),
             cors_origins: Vec::new(),
+            terminal: false,
         }
     }
 }

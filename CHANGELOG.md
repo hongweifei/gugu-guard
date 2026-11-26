@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-服务可观测性、日志结构化、cgroup v2 硬限与操作审计四批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
+服务可观测性、日志结构化、cgroup v2 硬限、操作审计与内置终端五批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
 
 ### 新增
 
@@ -58,6 +58,15 @@
 - **落盘与保留** —— 追加到 `<log_dir>/audit.jsonl`，保留 90 天：每天首次写入时按保留期清理一次，文件超过 8MB 再立即压缩（仍过大就只留较新的半份）。内存另留最近 500 条供接口直接查
 - **来源口径** —— 优先 `X-Forwarded-For` 第一跳，其次 `X-Real-IP`，否则用连接对端地址；CLI 请求带 `gugu-cli/<版本>` UA，审计里能区分 CLI 与 WebUI
 - **接口与工具** —— `GET /api/v1/audit` 支持 `limit` / `action` / `ok` / `q` / `since_minutes`；`gugu audit` 支持 `--limit` / `--action` / `--failed` / `--since` / `--json`；WebUI 顶栏新增「操作审计」面板，可按动作、时间范围、结果与关键字筛选
+
+### WebUI 内置终端
+
+- **真 PTY** —— `portable-pty` 在 Windows 上走 ConPTY、Unix 上走 `openpty`，每个 WebSocket 连接一个独立 shell；`cd`、分页器、彩色输出与交互式程序都按终端语义工作，输出按块实时回传
+- **开关与安全门槛** —— 配置新增 `daemon.web.terminal`（默认 `false`）；开启后若监听地址不是回环且没有 `api_key`，守护进程在 manager 启动前直接拒绝启动并说明两种修法。终端路由挂在受保护路由下，自动继承 API Key 认证，WS 用 `?token=` 传 Key；握手强制 `Origin` 与 `Host` 同源，没有 Key 时 Host 必须是回环，挡住跨站 WebSocket 与 DNS rebinding
+- **会话治理** —— 单实例最多 4 个并发会话，超出返回 429；30 分钟无输入无输出自动结束；断线、关面板或主动关闭都会 kill 子进程并归还会话名额
+- **审计** —— 打开写 `terminal.open`（101），关闭写 `terminal.close`（200，detail 记时长与 shell）；GET 升级请求由 handler 自己记录，不依赖只拦写操作的审计中间件
+- **审计落盘并发修复** —— 终端会话天然并发，审计追加改为单锁内一次写入完整 JSON 行，避免多个会话同时记录时两行粘在一起
+- **接口与前端** —— 新增 `GET /api/v1/terminal` 与 `WS /api/v1/terminal/ws`；WebUI 顶栏「终端」按钮按开关状态显示，全屏 xterm.js 面板贴合暗色主题，窗口尺寸变化时 fit addon 重算并同步 `resize`。xterm.js 5.3.0 / fit addon 0.8.0 vendor 到 `web/vendor/`，随二进制嵌入，不访问 CDN
 
 ## [0.1.0] - 2026-10-16
 

@@ -20,6 +20,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Log Alerts** — keyword hits and short bursts of output raise notifications with a cooldown, so a retry storm can't flood the bot
 - **Structured Logs & Search** — each line is parsed into level, message, structured fields and an in-line timestamp (JSON / logfmt / text heuristics), so the log panel shows level badges and field chips; logs on disk are searchable by level, keyword and stream, with hit and scan-range counts
 - **Operation Audit** — who did what to which process and when: write operations (start/stop, add/update/delete, reload, daemon shutdown) are appended to `logs/audit.jsonl` with result, source, client and duration, kept for 90 days; the WebUI "Operation Audit" panel and `gugu audit` filter by action, result, time and keyword
+- **Built-in WebUI Terminal** — a real PTY in the browser (ConPTY on Windows, openpty on Unix): `cd`, pagers, colors and TUI programs behave normally, and output streams back live. Off by default; when enabled it is gated by API Key auth and loopback binding. Up to 4 sessions per instance, 30-minute idle timeout, and both open and close are written to the operation audit
 - **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
@@ -252,6 +253,8 @@ cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-l
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | Exit events and availability stats |
 | GET | `/api/v1/system?minutes=60` | Host bandwidth time series and current rate |
 | GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=keyword&since_minutes=60` | Operation audit records (write operations, newest first) |
+| GET | `/api/v1/terminal` | Terminal availability, shell, working directory, session limit and idle timeout |
+| WS | `/api/v1/terminal/ws` | Built-in terminal session (JSON frames: `input` / `resize` / `data` / `exit`) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
 | POST | `/api/v1/reload` | Reload config |
@@ -291,6 +294,7 @@ gugu-guard/
 | `daemon.web.addr` | string | `0.0.0.0` | Listen address |
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
+| `daemon.web.terminal` | bool | `false` | Enable the built-in WebUI terminal; a non-loopback bind also requires `api_key` |
 
 > The daemon writes its own runtime log to `gugu-daemon.<date>.log` in `log_dir`, rotated daily (last 30 kept). All three run modes (foreground, boot task, Windows service) write the file; it also prints to the console only when stdout is a terminal.
 
@@ -408,6 +412,44 @@ gugu audit --action process.start --json
 - **Query** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`:
   `action` is the action code, `ok=true/false` keeps successes or failures only, `q` matches target,
   path, source and reason, and `since_minutes` bounds the time window
+
+### Built-in WebUI Terminal
+
+```toml
+[daemon]
+api_key = "your-secret-key"      # required for 0.0.0.0 / LAN binds, or startup fails
+
+[daemon.web]
+terminal = true                  # default false; enables a real shell in the browser
+addr = "127.0.0.1"               # loopback-only use may omit the API Key
+```
+
+- **A real PTY, not a line executor** — ConPTY on Windows and `openpty` on Unix (`portable-pty`), so the shell
+  believes it is attached to a terminal: `cd`, `less`, colors, completion and TTY-only programs work. Output is
+  streamed to the browser in chunks and rendered by xterm.js
+- **Security gate** — the terminal is off by default. A bind on `127.0.0.1` / `localhost` / `::1` relies on local
+  isolation; any other address (including `0.0.0.0`) requires `daemon.api_key` (or `GUGU_API_KEY` / `--api-key`),
+  otherwise the daemon refuses to start. The check runs before the manager starts, so you never get a half-working
+  daemon whose panel opens but whose terminal cannot
+- **Auth and same-origin** — terminal routes live under the protected router and inherit API Key auth; the browser
+  passes it as `?token=`. WebSockets are not constrained by the browser same-origin policy, so the handshake also
+  requires `Origin` to match `Host`; without an API Key, `Host` must be a loopback address, which blocks DNS rebinding
+  that points a malicious domain at 127.0.0.1. When disabled, `GET /api/v1/terminal` returns `{"enabled": false}` and
+  the WebSocket returns 403 before upgrading
+- **Session limits** — at most 4 concurrent sessions (the 5th gets 429); 30 minutes without input or output closes
+  the session and reclaims the PTY; closing the panel, losing the network or pressing Close kills the child and
+  releases the slot
+- **Audit** — opening records `terminal.open` (status 101); closing records `terminal.close` (status 200, detail
+  carries duration and shell). The User-Agent is the browser's; the source prefers `X-Forwarded-For` / `X-Real-IP` and
+  falls back to `-` because a WebSocket upgrade has no peer address. The upgrade request is a GET, so the audit
+  middleware does not see it; the terminal handler records it itself
+- **Working directory** — new sessions start in the config file's directory, so relative paths from the config can
+  be inspected directly with `cd logs`
+- **Assets** — xterm.js 5.3.0 and fit addon 0.8.0 are vendored under `web/vendor/` (MIT, licenses alongside),
+  embedded in the binary and never loaded from a CDN; upgrading them requires a rebuild
+- **Protocol** — client `{"type":"input","data":"..."}` and `{"type":"resize","cols":120,"rows":30}`; server
+  `{"type":"ready","shell","cwd","max_sessions","idle_timeout_secs"}`, `{"type":"data","data":"..."}` and
+  `{"type":"exit","code","reason"}`
 
 ### cgroup v2 Hard Limits
 

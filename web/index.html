@@ -6,6 +6,7 @@
     <title>咕咕鸽进程守护</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/vendor/xterm.css">
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -21,6 +22,10 @@
                 <svg viewBox="0 0 20 20" fill="currentColor" class="search-icon"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"/></svg>
                 <input type="text" id="search-input" placeholder="搜索进程..." autocomplete="off">
             </div>
+            <button class="btn" id="btn-terminal" hidden title="打开内置终端">
+                <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M6 8l2.5 2-2.5 2M11 12h3"/></svg>
+                终端
+            </button>
             <button class="btn" id="btn-audit" title="查看谁在何时对哪个进程做了什么（写操作才记录）">
                 <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm0 2h12v10H4V5zm2 2a1 1 0 000 2h5a1 1 0 100-2H6zm0 4a1 1 0 100 2h8a1 1 0 100-2H6z"/></svg>
                 操作审计
@@ -143,6 +148,8 @@
                         <option value="group.restart">重启分组</option>
                         <option value="config.reload">重新加载配置</option>
                         <option value="daemon.shutdown">停止守护进程</option>
+                        <option value="terminal.open">打开终端</option>
+                        <option value="terminal.close">关闭终端</option>
                     </select>
                     <select id="audit-range-filter" class="log-stream-select">
                         <option value="60">最近 60 分钟</option>
@@ -157,6 +164,26 @@
             </div>
             <div class="log-status" id="audit-status" hidden></div>
             <div class="audit-body" id="audit-body"></div>
+        </div>
+    </div>
+
+    <div class="terminal-overlay" id="terminal-overlay">
+        <div class="terminal-panel">
+            <div class="terminal-toolbar">
+                <div class="terminal-title">
+                    <span class="log-dot terminal-dot"></span>终端
+                    <span class="terminal-meta" id="terminal-meta"></span>
+                </div>
+                <div class="terminal-actions">
+                    <span class="terminal-status off" id="terminal-status">未连接</span>
+                    <button class="btn btn-sm" id="btn-terminal-reconnect">重连</button>
+                    <button class="btn btn-sm btn-close-log" id="btn-close-terminal" title="关闭">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="terminal-body" id="terminal-body"></div>
+            <div class="terminal-hint" id="terminal-hint" hidden></div>
         </div>
     </div>
 
@@ -393,11 +420,14 @@
         </div>
     </div>
 </div>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
 <script src="/js/core.js"></script>
 <script src="/js/render.js"></script>
 <script src="/js/history.js"></script>
 <script src="/js/logs.js"></script>
 <script src="/js/audit.js"></script>
+<script src="/js/terminal.js"></script>
 <script src="/js/form.js"></script>
 <script src="/js/app.js"></script>
 </body>

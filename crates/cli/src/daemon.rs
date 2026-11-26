@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use gugu_core::config::AppConfig;
 use std::io::IsTerminal;
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
@@ -80,6 +81,8 @@ log_dir = \"logs\"
 addr = \"{addr}\"
 port = {port}
 # cors_origins = [\"http://localhost:3000\"]
+# terminal = false   # 内置终端默认关闭；开启后浏览器里就是一个真实 shell。
+                   # 监听非回环地址时必须同时配置 daemon.api_key，否则拒绝启动。
 
 # 守护进程自身的运行日志按天写入 log_dir 下的 gugu-daemon.<日期>.log (保留最近 30 份)。
 # 操作审计写入 log_dir/audit.jsonl（保留 90 天，只记写操作，GET 不记）。
@@ -202,6 +205,25 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     };
     let config = AppConfig::load(config_path).context("加载配置文件失败")?;
 
+    let api_key = cli_api_key
+        .or(config.daemon.api_key.clone())
+        .or_else(|| std::env::var("GUGU_API_KEY").ok())
+        // 空白 Key 等同于没配置，否则「看起来有认证」实际可被空 Key 绕过。
+        .filter(|key| !key.trim().is_empty());
+    let addr_str = config.server_addr();
+    let addr: std::net::SocketAddr = addr_str
+        .to_socket_addrs()
+        .context(format!("解析地址失败: {addr_str}"))?
+        .next()
+        .context(format!("地址没有可用结果: {addr_str}"))?;
+
+    // 终端等于把 shell 交给任何能打开面板的人：对外监听时必须有 Key。
+    // 放在日志、PID 与 manager 之前，配置不安全就干净退出，不留下半启动状态。
+    if config.daemon.web.terminal {
+        gugu_server::terminal::check_exposure(addr.ip(), api_key.as_deref())
+            .map_err(anyhow::Error::msg)?;
+    }
+
     let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let log_base = config
         .daemon
@@ -220,10 +242,6 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     let pid = pid_path(&config, config_path);
     write_pid_file(&pid)?;
 
-    let api_key = cli_api_key
-        .or(config.daemon.api_key.clone())
-        .or_else(|| std::env::var("GUGU_API_KEY").ok());
-
     tracing::info!("咕咕鸽进程守护 v{} 启动中...", env!("CARGO_PKG_VERSION"));
     tracing::info!(
         "配置文件: {}",
@@ -234,14 +252,12 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     if api_key.is_some() {
         tracing::info!("API Key 认证已启用");
     }
+    if config.daemon.web.terminal {
+        tracing::info!("WebUI 内置终端已启用，工作目录: {}", config_dir.display());
+    }
 
     // 启动 manager actor（内部会自动启动所有 auto_start 进程和监控循环）
     let shared = gugu_core::manager::start(&config, Some(config_path.to_path_buf()));
-
-    let addr_str = config.server_addr();
-    let addr: std::net::SocketAddr = addr_str
-        .parse()
-        .context(format!("解析地址失败: {addr_str}"))?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -252,6 +268,9 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         cors_origins: config.daemon.web.cors_origins,
         // 审计与守护日志同处 log_dir，便于一并备份/清理
         audit_dir: Some(log_base),
+        terminal: config.daemon.web.terminal,
+        // 打开终端默认落在配置文件所在目录，相对路径与配置里的写法一致
+        terminal_cwd: Some(config_dir),
     };
     let server_handle = tokio::spawn(async move {
         if let Err(e) = gugu_server::run_server(

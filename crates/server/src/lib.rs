@@ -3,6 +3,7 @@ pub mod assets;
 pub mod audit;
 pub mod metrics;
 pub mod state;
+pub mod terminal;
 pub mod ws;
 
 use std::net::SocketAddr;
@@ -20,13 +21,17 @@ use gugu_core::manager::SharedManager;
 use state::AppState;
 use tower_http::cors::CorsLayer;
 
-/// Web 服务的可选配置：认证、跨域与审计落盘位置。
+/// Web 服务的可选配置：认证、跨域、审计落盘位置与内置终端。
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub api_key: Option<String>,
     pub cors_origins: Vec<String>,
     /// 审计文件目录；None 时审计只留内存。
     pub audit_dir: Option<PathBuf>,
+    /// 是否开放 WebUI 内置终端；默认关闭。
+    pub terminal: bool,
+    /// 终端会话的工作目录；None 时用当前目录。
+    pub terminal_cwd: Option<PathBuf>,
 }
 
 fn embedded_static_handler(req: Request) -> Response {
@@ -59,12 +64,19 @@ pub async fn run_server(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     api_shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> anyhow::Result<()> {
+    // 库调用方也不能绕过这条门槛：非回环监听 + 无 Key + 终端开启时不启动。
+    if options.terminal {
+        terminal::check_exposure(addr.ip(), options.api_key.as_deref())
+            .map_err(anyhow::Error::msg)?;
+    }
+
     let audit = options
         .audit_dir
         .map_or_else(AuditStore::disabled, AuditStore::new);
     let state = AppState::new(manager, options.api_key, options.cors_origins)
         .with_audit(Arc::new(audit))
-        .with_shutdown(api_shutdown_tx);
+        .with_shutdown(api_shutdown_tx)
+        .with_terminal(options.terminal, options.terminal_cwd);
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()
@@ -84,6 +96,7 @@ pub async fn run_server(
     let protected = api::routes()
         .merge(ws::routes())
         .merge(metrics::routes())
+        .merge(terminal::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth_middleware,

@@ -108,7 +108,8 @@ document.getElementById('process-grid').addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
+        if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
+        else if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
         else if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
         else if (document.getElementById('audit-overlay').classList.contains('open')) document.getElementById('audit-overlay').classList.remove('open');
         else if (document.getElementById('fs-backdrop').classList.contains('open')) { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); }
@@ -144,6 +145,7 @@ document.getElementById('btn-login').onclick = async () => {
         document.getElementById('login-backdrop').classList.remove('open');
         render(true);
         connectWS();
+        initTerminal();
     } catch {
         API_KEY = '';
         errEl.textContent = '无法连接到服务';
@@ -174,6 +176,7 @@ async function init() {
         } catch { /* 带宽只是补充读数，取不到就等 WS 推送 */ }
         render(true);
         connectWS();
+        initTerminal();
     } catch {
         document.getElementById('process-grid').innerHTML = '<div class="empty-state"><h3>连接失败</h3><p>无法连接到守护进程</p></div>';
     }

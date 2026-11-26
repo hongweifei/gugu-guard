@@ -20,6 +20,7 @@
 - **日志告警** — 命中关键字、或短时间内输出刷屏，按冷却时间推送通知，避免重试风暴刷爆机器人
 - **日志结构化与检索** — 每行解析出级别、正文、结构化字段与行内时间（JSON / logfmt / 文本启发式），日志面板带级别徽标与字段胶囊；按级别、关键字、输出流检索落盘的日志文件，返回命中与扫描范围
 - **操作审计** — 谁在何时对哪个进程做了什么：写操作（启停、增删改、重载、停止守护）连同结果、来源、客户端与耗时追加到 `logs/audit.jsonl`，保留 90 天；WebUI「操作审计」与 `gugu audit` 可按动作、结果、时间、关键字筛选
+- **WebUI 内置终端** — 浏览器里打开一个真实 PTY（Windows ConPTY / Unix openpty）：`cd`、分页器、彩色输出与交互式程序都照常工作，输出实时流式回传。默认关闭，开启后受 API Key 与回环监听两道安全门槛约束；单实例最多 4 个会话，空闲 30 分钟自动关闭，打开与关闭写入操作审计
 - **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
@@ -252,6 +253,8 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/processes/:name/exits?minutes=60&limit=50` | 退出事件与可用率统计 |
 | GET | `/api/v1/system?minutes=60` | 整机带宽时序与当前速率 |
 | GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=关键字&since_minutes=60` | 操作审计（写操作记录，新的在前） |
+| GET | `/api/v1/terminal` | 终端是否启用、shell、工作目录、会话上限与空闲超时 |
+| WS | `/api/v1/terminal/ws` | 内置终端会话（JSON 帧：`input` / `resize` / `data` / `exit`） |
 | GET | `/api/v1/stats` | 统计信息 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
 | POST | `/api/v1/reload` | 重新加载配置 |
@@ -292,6 +295,7 @@ gugu-guard/
 | `daemon.web.addr` | string | `0.0.0.0` | 监听地址 |
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
+| `daemon.web.terminal` | bool | `false` | 是否开放 WebUI 内置终端；非回环监听时必须同时配置 `api_key` |
 
 > 守护进程自身的运行日志按天写入 `log_dir` 下的 `gugu-daemon.<日期>.log`（保留最近 30 份），
 > 前台、开机自启任务、Windows 服务三种形态都会写文件；仅当 stdout 是终端时才额外打印到控制台。
@@ -402,6 +406,37 @@ gugu audit --action process.start --json
 - **查询** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`：
   `action` 为动作码，`ok=true/false` 只看成功或失败，`q` 匹配对象、路径、来源与原因，
   `since_minutes` 限定时间窗口
+
+### WebUI 内置终端
+
+```toml
+[daemon]
+api_key = "your-secret-key"      # 监听 0.0.0.0 / 局域网地址时必填，否则拒绝启动
+
+[daemon.web]
+terminal = true                  # 默认 false；开启后浏览器里就是一个真实 shell
+addr = "127.0.0.1"               # 只给本机用时，回环监听可以不带 API Key
+```
+
+- **真 PTY，不是逐行执行器** — Windows 走 ConPTY、Unix 走 `openpty`（`portable-pty`）：shell 认为自己在终端里，
+  `cd`、`less`、彩色输出、Tab 补全与需要 TTY 的程序都能正常工作；输出按块实时推给浏览器，xterm.js 负责渲染
+- **安全门槛** — 终端默认关闭。监听地址是 `127.0.0.1` / `localhost` / `::1` 时可以只靠本机隔离；
+  其余地址（含 `0.0.0.0`）必须配置 `daemon.api_key`（或 `GUGU_API_KEY` / `--api-key`），
+  否则守护进程在启动阶段直接报错退出。校验放在 manager 启动之前，避免出现「面板能开、终端打不开」的半可用状态
+- **认证与同源** — 终端路由挂在受保护路由下，继承 API Key 认证；浏览器 WebSocket 用 `?token=` 传 Key。
+  WebSocket 不受浏览器同源策略约束，所以握手还要求 `Origin` 与 `Host` 一致；没有 Key 时 `Host` 必须是回环地址，
+  挡住把恶意域名解析到 127.0.0.1 的 DNS rebinding。未启用时 `GET /api/v1/terminal` 返回 `{"enabled": false}`，WS 在升级前直接 403
+- **会话资源** — 单实例最多 4 个并发会话，第 5 个返回 429；无输入也无输出 30 分钟后自动结束并回收 PTY；
+  关闭面板、断网或点击「关闭」都会 kill 子进程并释放会话名额
+- **审计** — 打开写 `terminal.open`（状态 101），关闭写 `terminal.close`（状态 200，detail 记时长与 shell），
+  User-Agent 记浏览器；来源优先 `X-Forwarded-For` / `X-Real-IP`，WS 升级拿不到对端地址时记 `-`。
+  GET 升级请求不会被审计中间件拦到，由终端 handler 自己记录
+- **工作目录** — 新会话落在配置文件所在目录，配置里的相对路径可以直接 `cd logs` 查看
+- **前端资源** — xterm.js 5.3.0 与 fit addon 0.8.0 已 vendor 到 `web/vendor/`（MIT，许可证同目录），
+  随二进制嵌入，不访问 CDN；升级版本后需要重新编译程序
+- **协议** — 客户端 `{"type":"input","data":"..."}`、`{"type":"resize","cols":120,"rows":30}`；
+  服务端 `{"type":"ready","shell","cwd","max_sessions","idle_timeout_secs"}`、`{"type":"data","data":"..."}`、
+  `{"type":"exit","code","reason"}`
 
 ### cgroup v2 硬限
 

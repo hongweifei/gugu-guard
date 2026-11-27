@@ -207,6 +207,10 @@ fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
         ("POST", ["reload"]) => Some(("config.reload", "重新加载配置")),
         ("POST", ["shutdown"]) => Some(("daemon.shutdown", "停止守护进程")),
         ("POST", ["fs", "upload"]) => Some(("fs.upload", "上传文件")),
+        ("POST", ["fs", "upload", "session"]) => Some(("fs.upload.begin", "开始分片上传")),
+        ("PUT", ["fs", "upload", "session", _]) => Some(("fs.upload.chunk", "上传分片")),
+        ("POST", ["fs", "upload", "session", _, "finish"]) => Some(("fs.upload", "完成分片上传")),
+        ("DELETE", ["fs", "upload", "session", _]) => Some(("fs.upload.abort", "放弃上传")),
         ("PUT", ["fs", "write"]) => Some(("fs.write", "保存文件")),
         ("POST", ["fs", "mkdir"]) => Some(("fs.mkdir", "新建目录")),
         ("POST", ["fs", "touch"]) => Some(("fs.create", "新建文件")),
@@ -407,6 +411,41 @@ mod tests {
         ];
         for (method, target_uri, code, target) in cases {
             let action = classify(&method, &uri(target_uri)).expect("文件写操作应被审计");
+            assert_eq!(action.code, code, "{target_uri}");
+            assert_eq!(action.target.as_deref(), target, "{target_uri}");
+        }
+    }
+
+    #[test]
+    fn chunk_uploads_are_audited_by_stage() {
+        let cases: [(Method, &str, &str, Option<&str>); 4] = [
+            (
+                Method::POST,
+                "/api/v1/fs/upload/session?path=/srv/big.bin",
+                "fs.upload.begin",
+                Some("/srv/big.bin"),
+            ),
+            (
+                Method::PUT,
+                "/api/v1/fs/upload/session/abc?offset=0&path=/srv/big.bin",
+                "fs.upload.chunk",
+                Some("/srv/big.bin"),
+            ),
+            (
+                Method::POST,
+                "/api/v1/fs/upload/session/abc/finish",
+                "fs.upload",
+                None,
+            ),
+            (
+                Method::DELETE,
+                "/api/v1/fs/upload/session/abc",
+                "fs.upload.abort",
+                None,
+            ),
+        ];
+        for (method, target_uri, code, target) in cases {
+            let action = classify(&method, &uri(target_uri)).expect("分片上传应被审计");
             assert_eq!(action.code, code, "{target_uri}");
             assert_eq!(action.target.as_deref(), target, "{target_uri}");
         }

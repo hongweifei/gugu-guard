@@ -848,6 +848,264 @@ mod fs_management {
         assert!(!outside.path().join("x").exists());
     }
 
+    /// 每次请求都消费一个 Router，这里统一克隆。
+    async fn put_chunk(
+        app: axum::Router,
+        id: &str,
+        offset: u64,
+        path: &std::path::Path,
+        body: &str,
+    ) -> (StatusCode, String) {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/fs/upload/session/{id}?offset={offset}&path={}",
+                        encode(path)
+                    ))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        (status, text_of(resp).await)
+    }
+
+    async fn begin_session(
+        app: &axum::Router,
+        target: &std::path::Path,
+        size: u64,
+    ) -> serde_json::Value {
+        let resp = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/fs/upload/session?path={}", encode(target)),
+            serde_json::json!({ "path": uri_path(target), "size": size }),
+        )
+        .await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        serde_json::from_str(&text).expect("会话 JSON")
+    }
+    #[tokio::test]
+    async fn archive_packs_a_directory_under_its_own_name() {
+        let root = tempdir();
+        let dir = root.path().join("demo");
+        std::fs::create_dir_all(dir.join("sub")).expect("建目录");
+        std::fs::write(dir.join("a.txt"), b"alpha").expect("写文件");
+        std::fs::write(dir.join("sub/b.txt"), b"beta").expect("写文件");
+
+        let resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/archive?path={}", encode(&dir)),
+        )
+        .await;
+        let status = resp.status();
+        if status != StatusCode::OK {
+            panic!("{}", text_of(resp).await);
+        }
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok())
+            .expect("应带归档文件名");
+        assert!(disposition.contains("demo.zip"), "{disposition}");
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/zip")
+        );
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("读取归档");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("读取 zip");
+        let mut names = Vec::new();
+        for index in 0..archive.len() {
+            names.push(
+                archive
+                    .by_index(index)
+                    .expect("条目可读")
+                    .name()
+                    .to_string(),
+            );
+        }
+        assert!(names.contains(&"demo/a.txt".to_string()), "{names:?}");
+        assert!(names.contains(&"demo/sub/b.txt".to_string()), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn archive_refuses_single_files_and_outside_paths() {
+        let root = tempdir();
+        let file = root.path().join("a.txt");
+        std::fs::write(&file, b"a").expect("写文件");
+        let outside = tempdir();
+
+        let file_resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/archive?path={}", encode(&file)),
+        )
+        .await;
+        assert_eq!(
+            file_resp.status(),
+            StatusCode::BAD_REQUEST,
+            "单个文件走下载"
+        );
+
+        let outside_resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/archive?path={}", encode(outside.path())),
+        )
+        .await;
+        assert_eq!(
+            outside_resp.status(),
+            StatusCode::FORBIDDEN,
+            "越界目录应拒绝"
+        );
+    }
+
+    #[tokio::test]
+    async fn chunked_upload_assembles_the_file_and_cleans_up() {
+        let root = tempdir();
+        let target = root.path().join("big.bin");
+        let app = app_with(root.path(), true);
+        let session = begin_session(&app, &target, 11).await;
+        let id = session["id"].as_str().expect("会话编号").to_string();
+        assert_eq!(session["offset"], 0);
+
+        let (status, body) = put_chunk(app.clone(), &id, 0, &target, "hello ").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = put_chunk(app.clone(), &id, 6, &target, "world").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("\"offset\":11"), "{body}");
+
+        let finish = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/fs/upload/session/{id}/finish"),
+            serde_json::json!({}),
+        )
+        .await;
+        let status = finish.status();
+        let text = text_of(finish).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(
+            std::fs::read(&target).expect("完成后的文件"),
+            b"hello world"
+        );
+        assert!(!has_leftovers(root.path()), "临时文件应随完成一起消失");
+    }
+
+    #[tokio::test]
+    async fn chunk_with_a_wrong_offset_is_rejected_without_writing() {
+        let root = tempdir();
+        let target = root.path().join("big.bin");
+        let app = app_with(root.path(), true);
+        let session = begin_session(&app, &target, 11).await;
+        let id = session["id"].as_str().expect("会话编号").to_string();
+
+        let (status, _) = put_chunk(app.clone(), &id, 0, &target, "hello ").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = put_chunk(app.clone(), &id, 3, &target, "xxx").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("偏移不匹配"), "{body}");
+
+        // 偏移没被推进，后面的分片照旧接在 6 字节之后。
+        let (status, _) = put_chunk(app.clone(), &id, 6, &target, "world").await;
+        assert_eq!(status, StatusCode::OK);
+        let finish = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/fs/upload/session/{id}/finish"),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(finish.status(), StatusCode::OK);
+        assert_eq!(
+            std::fs::read(&target).expect("完成后的文件"),
+            b"hello world"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chunk_session_reports_its_offset_for_resuming() {
+        let root = tempdir();
+        let target = root.path().join("big.bin");
+        let app = app_with(root.path(), true);
+        let session = begin_session(&app, &target, 0).await;
+        let id = session["id"].as_str().expect("会话编号").to_string();
+        let (status, _) = put_chunk(app.clone(), &id, 0, &target, "abc").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let resp = send_get(app.clone(), &format!("/api/v1/fs/upload/session/{id}")).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let view: serde_json::Value =
+            serde_json::from_str(&text_of(resp).await).expect("会话 JSON");
+        assert_eq!(view["offset"], 3);
+        assert_eq!(view["path"].as_str(), Some(uri_path(&target).as_str()));
+    }
+
+    #[tokio::test]
+    async fn aborting_a_session_removes_the_partial_file() {
+        let root = tempdir();
+        let target = root.path().join("big.bin");
+        let app = app_with(root.path(), true);
+        let session = begin_session(&app, &target, 11).await;
+        let id = session["id"].as_str().expect("会话编号").to_string();
+        put_chunk(app.clone(), &id, 0, &target, "hello").await;
+
+        let resp = send_delete(app.clone(), &format!("/api/v1/fs/upload/session/{id}")).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!target.exists(), "放弃后目标不该出现");
+        assert!(!has_leftovers(root.path()), "临时文件应被删掉");
+    }
+
+    #[tokio::test]
+    async fn chunk_sessions_respect_read_only_and_the_whitelist() {
+        let root = tempdir();
+        let outside = tempdir();
+        let target = root.path().join("big.bin");
+
+        let read_only = send_json(
+            app_with(root.path(), false),
+            "POST",
+            &format!("/api/v1/fs/upload/session?path={}", encode(&target)),
+            serde_json::json!({ "path": uri_path(&target), "size": 1 }),
+        )
+        .await;
+        assert_eq!(read_only.status(), StatusCode::FORBIDDEN);
+
+        let escaped = send_json(
+            app_with(root.path(), true),
+            "POST",
+            &format!(
+                "/api/v1/fs/upload/session?path={}",
+                encode(&outside.path().join("x.bin"))
+            ),
+            serde_json::json!({ "path": uri_path(&outside.path().join("x.bin")), "size": 1 }),
+        )
+        .await;
+        assert_eq!(escaped.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// 目录里是否还留着传输中转文件。
+    fn has_leftovers(dir: &std::path::Path) -> bool {
+        std::fs::read_dir(dir)
+            .expect("读目录")
+            .flatten()
+            .any(|item| {
+                item.file_name()
+                    .to_string_lossy()
+                    .starts_with(gugu_core::fs::TEMP_PREFIX)
+            })
+    }
+
     #[tokio::test]
     async fn download_streams_the_file_with_its_name() {
         let root = tempdir();

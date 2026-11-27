@@ -65,10 +65,15 @@
 - **白名单是一切的前提** —— `daemon.web.fs_roots` 限定范围：请求路径先解析真实路径（`..` 与符号链接都已展开），再按路径分量与每个根比较，`/data` 不会放行 `/database`；相对条目以配置文件所在目录为基准。越界返回 403 并带上被拒绝的路径
 - **读写分权** —— 新增 `daemon.web.fs_write`（默认 `false`）：只读时浏览、预览、下载照常可用，写入口统一 403 并在消息里指出开启位置；开启后与内置终端同一道门槛——监听非回环地址必须配 `api_key`，否则拒绝启动
 - **浏览与预览** —— `GET /fs/list` 列出目录（目录优先、名称不区分大小写）、`GET /fs/stat` 取单个路径元信息、`GET /fs/read` 预览文本（1 MB 上限，UTF-8 失败按 GBK 解，前 8 KB 出现 0 字节判为二进制）、`GET /fs/download` 流式下载并带 RFC 5987 的 UTF-8 文件名
+- **目录打包下载** —— `GET /fs/archive` 把一个目录递归打成 zip：归档在系统临时目录生成，响应结束即删除，符号链接按链接自身跳过，原始内容超过 2 GB 时提示分目录下载
 - **写操作** —— `POST /fs/upload`（请求体即文件内容，边收边写同目录临时文件再改名就位，目标已存在需 `overwrite`）、`PUT /fs/write`（保存文本，8 MB 上限）、`POST /fs/mkdir` / `fs/touch` / `fs/rename` / `fs/copy`、`DELETE /fs`（目录需 `recursive=true`）。白名单根自身不允许删除或改名
+- **分片上传与续传** —— `POST /fs/upload/session` 开会话、`PUT /fs/upload/session/{id}?offset=N` 顺序追加、`GET` 查已收字节数、`POST .../finish` 校验总量后改名、`DELETE` 放弃并删除临时文件。偏移由服务端记录并校验，重发上一片返回 400，半片失败会截回上一次成功的偏移；空闲超过 24 小时的会话在下次开会话时回收
+- **进度与取消** —— WebUI 上传用 XHR 取实时进度，下载按 `Content-Length` 与已读字节算百分比；传输条显示文件名、百分比与大小。取消只中止请求，已传字节留在服务端会话里，重新选中同一个文件从断点接着传，「放弃」才删掉会话。WebUI 对超过 8 MB 的文件自动改走分片，单片失败从服务端偏移重试
+- **拖拽与整目录上传** —— 文件和文件夹拖进文件视图即上传，目录按原结构先建后传；「上传目录」按钮走同一套逻辑
+- **中转文件不外露** —— 上传与分片临时文件统一用 `.gugu-` 前缀，目录列表与打包都跳过它们，面板里不会出现半成品
 - **缺省与告警** —— 未给起始目录时取第一个根，避免默认工作目录不在白名单的情况；非回环监听且白名单为空时，启动日志提示这条能力的暴露面
-- **审计** —— 动作码细化到 `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径
-- **CLI 与 WebUI** —— `gugu fs ls / cat / get / put / mkdir / touch / mv / cp / rm`；侧栏新增「文件」视图，左侧目录、右侧预览编辑器，只读时关闭写入口
+- **审计** —— 动作码细化到 `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径
+- **CLI 与 WebUI** —— `gugu fs ls / cat / get / put / mkdir / touch / mv / cp / rm`，`get -r` 与 `put -r` 递归处理目录并保留结构，终端里的传输显示百分比；侧栏「文件」视图左侧目录、右侧预览编辑器，支持拖拽上传、整目录上传、打包下载与传输取消，只读时关闭写入口
 - **体检与模板** —— `gugu check` 打印每个根目录是否存在，空条目算配置错误；默认模板与 `config.example.toml` 给出根目录与 `fs_write` 的注释示例
 - **不写回文件** —— `AppConfig.unknown_keys` 标了 `#[serde(skip)]`，`gugu add` 等写回操作不会把它带进配置
 - **旧接口下线** —— `/api/v1/fs/browse` 与 `BrowseResponse` / `FsEntry` 一并移除，进程表单的「选择文件 / 选择目录」改用 `/fs/list`

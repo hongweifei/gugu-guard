@@ -77,6 +77,7 @@ pub(crate) async fn handle(
         .header("x-gugu-node", node.as_str());
     for name in [
         header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
         header::CONTENT_DISPOSITION,
         header::CACHE_CONTROL,
         header::ETAG,
@@ -91,9 +92,10 @@ pub(crate) async fn handle(
         .unwrap_or_else(|_| super::failure(StatusCode::BAD_GATEWAY, "构造代理响应失败".to_string()))
 }
 
-/// 文件上传按流转发；其余请求体照旧一次性读入并受上限约束。
+/// 文件上传按流转发：单请求上传与分片追加都不进内存；其余请求体照旧一次性读入并受上限约束。
 fn is_upload(rest: &str) -> bool {
-    rest.trim_matches('/') == "fs/upload"
+    let rest = rest.trim_matches('/');
+    rest == "fs/upload" || rest.starts_with("fs/upload/")
 }
 
 /// 逐跳头与认证头不转发：认证由中心节点按从节点的 Key 重新签发；
@@ -117,6 +119,15 @@ fn forward_request_header(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_paths_including_chunk_sessions_stream_through() {
+        assert!(is_upload("fs/upload"));
+        assert!(is_upload("fs/upload/"));
+        assert!(is_upload("fs/upload/session/abc"));
+        assert!(!is_upload("fs/write"));
+        assert!(!is_upload("fs/uploads"));
+    }
 
     #[test]
     fn auth_and_hop_by_hop_headers_are_not_forwarded() {

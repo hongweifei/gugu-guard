@@ -11,7 +11,7 @@ use gugu_core::fs;
 use tokio_util::io::ReaderStream;
 
 use super::types::PathQuery;
-use super::{failure, run};
+use super::{disposition, failure, run};
 use crate::state::AppState;
 
 pub(super) async fn read_fs(
@@ -73,65 +73,4 @@ pub(super) async fn download_fs(
 
 fn json_body(file: fs::TextFile) -> Response {
     (StatusCode::OK, axum::Json(file)).into_response()
-}
-
-/// `Content-Disposition`：ASCII 兜底名 + RFC 5987 的 UTF-8 名，中文文件名不乱码。
-fn disposition(name: &str) -> String {
-    let fallback: String = name
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_graphic() || ch == ' ' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!(
-        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
-        fallback.replace('"', "_"),
-        encode_component(name)
-    )
-}
-
-fn encode_component(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() * 3);
-    for byte in value.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(*byte as char);
-            }
-            other => out.push_str(&format!("%{other:02X}")),
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn disposition_keeps_the_chinese_name_in_the_extended_field() {
-        let value = disposition("日志 2026.log");
-        assert!(value.starts_with("attachment; filename=\""));
-        assert!(value.contains("filename*=UTF-8''"));
-        assert!(value.contains("%E6%97%A5%E5%BF%97"), "{value}");
-
-        // ASCII 兜底名只保留 ASCII 图形字符，中文在这里退化成下划线。
-        let fallback = value
-            .split("filename=\"")
-            .nth(1)
-            .and_then(|rest| rest.split('"').next())
-            .expect("应带 ASCII 兜底名");
-        assert!(fallback.is_ascii(), "{fallback}");
-        assert!(fallback.contains('_'), "{fallback}");
-
-        // 文件名里的引号会破坏头部语法，兜底名要把它替换掉。
-        let quoted = disposition("a\"b.txt");
-        assert!(
-            quoted.contains("filename=\"a_b.txt\""),
-            "兜底名里的引号应替换成下划线: {quoted}"
-        );
-    }
 }

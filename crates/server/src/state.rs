@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
 use crate::nodes::NodeRegistry;
+use crate::uploads::Uploads;
 
 /// Web 服务的全部运行时状态：启动参数在这里一次成型，处理函数只读。
 #[derive(Clone)]
@@ -27,6 +28,8 @@ pub struct AppState {
     pub terminal_cwd: Option<PathBuf>,
     /// 文件管理的作用域：允许的根目录与写权限。
     pub fs: Scope,
+    /// 分片上传的会话表；进程重启后未完成的上传作废。
+    pub uploads: Arc<Uploads>,
     /// `POST /api/v1/shutdown` 用以请求守护进程优雅停止；
     /// 由 CLI 的 run_core 注入，测试或不接 API 的形态下为 None。
     pub shutdown_tx: Option<mpsc::Sender<()>>,
@@ -47,6 +50,7 @@ impl AppState {
             terminal_enabled: false,
             terminal_cwd: None,
             fs: Scope::default(),
+            uploads: Arc::new(Uploads::default()),
             shutdown_tx: None,
             updates: None,
         }

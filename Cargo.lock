@@ -682,6 +682,7 @@ dependencies = [
  "chrono",
  "clap",
  "comfy-table",
+ "futures",
  "gugu-core",
  "gugu-server",
  "libc",
@@ -689,6 +690,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -742,6 +744,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "windows-sys 0.61.2",
+ "zip",
 ]
 
 [[package]]

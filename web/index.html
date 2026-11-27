@@ -209,12 +209,25 @@
                 <div class="files-tools">
                     <button type="button" class="btn btn-sm" id="files-refresh">刷新</button>
                     <button type="button" class="btn btn-sm" id="files-upload">上传</button>
+                    <button type="button" class="btn btn-sm" id="files-upload-dir">上传目录</button>
                     <button type="button" class="btn btn-sm" id="files-mkdir">新建目录</button>
                     <button type="button" class="btn btn-sm" id="files-touch">新建文件</button>
                     <input type="file" id="files-input" multiple hidden>
+                    <input type="file" id="files-dir-input" webkitdirectory multiple hidden>
                 </div>
             </div>
             <p class="note" id="files-mode" hidden></p>
+            <div class="transfer" id="files-transfer" hidden>
+                <span class="transfer-label" id="transfer-label">传输</span>
+                <div class="transfer-bar"><i id="transfer-fill"></i></div>
+                <span class="transfer-meta mono" id="transfer-meta"></span>
+                <button type="button" class="btn btn-sm btn-quiet" id="transfer-cancel">取消</button>
+            </div>
+            <div class="transfer transfer-resume" id="files-resume" hidden>
+                <span class="transfer-label" id="resume-label">有未完成的上传</span>
+                <button type="button" class="btn btn-sm" id="resume-go">继续</button>
+                <button type="button" class="btn btn-sm btn-quiet" id="resume-drop">放弃</button>
+            </div>
             <div class="files-body">
                 <div class="table-wrap files-table">
                     <table class="ftable" id="ftable">
@@ -242,6 +255,12 @@
                     <textarea class="files-editor" id="files-editor" spellcheck="false" placeholder="这个文件是空的，输入内容后点「保存」" hidden></textarea>
                     <p class="files-hint" id="files-hint">选择左侧文件查看内容</p>
                 </aside>
+            </div>
+            <div class="files-drop" id="files-drop" hidden>
+                <div class="files-drop-inner">
+                    <strong>松开鼠标开始上传</strong>
+                    <span>文件与文件夹都落在当前目录（<span id="files-drop-path"></span>）</span>
+                </div>
             </div>
         </section>
 

@@ -20,6 +20,41 @@ pub(super) struct UploadQuery {
     pub(super) overwrite: bool,
 }
 
+/// 创建分片上传会话。
+#[derive(Debug, Deserialize)]
+pub(super) struct BeginBody {
+    /// 目标路径；同时放在查询串里供审计记录对象。
+    pub(super) path: String,
+    /// 客户端声明的总字节数；0 表示不校验总量。
+    #[serde(default)]
+    pub(super) size: u64,
+    #[serde(default)]
+    pub(super) overwrite: bool,
+}
+
+/// 追加分片：偏移必须与服务端记录一致。
+///
+/// 审计对象来自原始查询串里的 `path`，不在这里解析。
+#[derive(Debug, Deserialize)]
+pub(super) struct ChunkQuery {
+    pub(super) offset: u64,
+}
+
+/// 分片上传会话的状态快照：续传前先取一次偏移。
+#[derive(Debug, Serialize)]
+pub(super) struct UploadSession {
+    pub(super) id: String,
+    pub(super) path: String,
+    pub(super) size: u64,
+    pub(super) offset: u64,
+}
+
+/// 追加分片的结果：服务端已收到的总字节数。
+#[derive(Debug, Serialize)]
+pub(super) struct ChunkResult {
+    pub(super) offset: u64,
+}
+
 /// 保存文本。
 #[derive(Debug, Deserialize)]
 pub(super) struct WriteBody {

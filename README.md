@@ -26,7 +26,7 @@
 - **版本更新** — 侧栏版本号即入口：检查最新发布、一键下载安装、替换后自动重启；自动更新可设为关闭 / 仅检查 / 自动安装，来源支持 GitHub、Gitee 与自建清单
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
-- **文件管理** — 白名单目录内的浏览器：目录浏览、文本预览（UTF-8 / GBK 自动解码）、原始文件下载、上传、新建目录与空文件、改名/移动、复制、删除；写操作默认关闭，开启后受白名单与 API Key 双重约束，所有写操作进审计
+- **文件管理** — 白名单目录内的浏览器：目录浏览、文本预览（UTF-8 / GBK 自动解码）、原始文件下载与目录打包下载（zip 流式）、上传（拖拽、整目录、大文件分片续传、实时进度与取消）、新建目录与空文件、改名/移动、复制、删除；写操作默认关闭，开启后受白名单与 API Key 双重约束，所有写操作进审计
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
 - **CORS 配置** — 可限制允许的跨域来源
@@ -204,8 +204,8 @@ gugu net [-m 60]                  # 整机带宽时序
 gugu audit [-l 100] [--failed]    # 操作审计（新的在前；--action 按动作码，--since 按分钟）
 gugu fs ls [PATH] [--json]        # 列出目录（缺省为白名单第一个根）
 gugu fs cat <PATH> [--limit 65536]  # 预览文本（UTF-8 / GBK 自动解码，超出上限只显开头）
-gugu fs get <PATH> [-o 本地文件]  # 下载原始文件，缺省存成同名文件
-gugu fs put <本地文件> <PATH>     # 上传，目标已存在需加 --overwrite
+gugu fs get <PATH> [-o 本地] [-r]  # 下载文件；-r 递归取目录并保留结构，终端里显示进度
+gugu fs put <本地> <PATH> [--overwrite] [-r]  # 上传；-r 递归传目录，终端里显示进度
 gugu fs mkdir <PATH> [-p]         # 新建目录，-p 逐级创建
 gugu fs touch <PATH>              # 新建空文件
 gugu fs mv <FROM> <TO> [--overwrite]   # 改名或移动
@@ -288,7 +288,13 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/fs/stat?path=...` | 单个路径的类型、大小、修改时间、只读标记 |
 | GET | `/api/v1/fs/read?path=...&limit=1048576` | 文本预览（UTF-8 / GBK 自动解码，二进制只回标记） |
 | GET | `/api/v1/fs/download?path=...` | 下载原始文件（流式；中文名走 RFC 5987） |
+| GET | `/api/v1/fs/archive?path=...` | 目录打包下载（zip 流式；符号链接跳过，原始内容超 2 GB 拒绝） |
 | POST | `/api/v1/fs/upload?path=...&overwrite=false` | 上传：请求体即文件内容，边收边写临时文件再改名就位 |
+| POST | `/api/v1/fs/upload/session?path=...` | 创建分片上传会话 `{path, size, overwrite}`，返回 `{id, offset}` |
+| GET | `/api/v1/fs/upload/session/{id}` | 查询会话已收字节数；续传前先取这个偏移 |
+| PUT | `/api/v1/fs/upload/session/{id}?offset=N` | 追加一片；偏移必须与服务端记录一致，否则 400 |
+| POST | `/api/v1/fs/upload/session/{id}/finish` | 校验总量后改名就位 |
+| DELETE | `/api/v1/fs/upload/session/{id}` | 放弃这次上传并删除临时文件 |
 | PUT | `/api/v1/fs/write` | 保存文本 `{path, content, create}` |
 | POST | `/api/v1/fs/mkdir` | 新建目录 `{path, parents}` |
 | POST | `/api/v1/fs/touch` | 新建空文件 `{path}` |
@@ -485,19 +491,23 @@ WebUI 侧栏的「文件」视图、进程表单里的「选择文件 / 选择�
 flowchart LR
     U["WebUI 文件视图<br/>gugu fs"] --> A["认证 + 审计中间件"]
     A --> S["Scope<br/>白名单 + 写权限"]
-    S -->|"list / read / download"| R["目录项与文件内容"]
+    S -->|"list / read / download / archive"| R["目录项、文件内容与 zip"]
     S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["同目录临时文件 → 改名就位"]
+    S -->|"upload/session 分片追加"| C["会话表<br/>偏移校验与续传"]
     S -.->|"越界或只读"| D["403"]
 ```
 
 - **只读是默认** — `fs_write` 缺省为 `false`，浏览、预览、下载始终可用；写入口统一返回 403，并在消息里指出在 `gugu.toml` 的哪一行开启。WebUI 在只读模式下隐藏「上传 / 新建 / 名称 / 删除」的可用状态，改成一条提示
 - **范围按路径分量判定** — `/data` 不把 `/database` 算作子目录；Windows 上大小写不敏感。缺省目录是白名单第一个根
 - **预览口径** — 单次最多读 1 MB；UTF-8 严格解码失败时按 GBK 解；前 8 KB 出现 0 字节即按二进制处理，只回标记不给正文。预览被截断时不开放编辑，保存上限 8 MB
-- **上传与下载都走流式** — 上传的请求体就是文件内容，边收边写同目录临时文件，收完改名就位；目标已存在需显式 `overwrite=true`。下载是流式响应，`Content-Disposition` 同时带 ASCII 兜底名与 RFC 5987 的 UTF-8 名，中文文件名不乱码
-- **写入不留半成品** — 保存文本与上传同样先写临时文件再改名，中途失败不会出现半个文件，也不会破坏原文件
+- **上传** — 请求体就是文件内容，边收边写同目录临时文件，收完改名就位；目标已存在需显式 `overwrite=true`。WebUI 对超过 8 MB 的文件自动改走分片会话：每片 8 MB 顺序追加，偏移由服务端校验，重发上一片会被明确拒绝，断线后以服务端记录的偏移重试。未完成的上传记在浏览器会话存储里，刷新页面后选同一个文件即可接着传
+- **下载** — 单文件是流式响应，`Content-Disposition` 同时带 ASCII 兜底名与 RFC 5987 的 UTF-8 名，中文文件名不乱码。目录走 `/fs/archive` 打包成 zip：归档在系统临时目录生成，响应结束即删除，符号链接按链接自身跳过，原始内容超过 2 GB 时提示分目录下载
+- **进度与取消** — 上传用 XHR 取上传进度，下载按 `Content-Length` 与已读字节算百分比；WebUI 顶部一行传输条显示文件名、百分比与已收字节，随时可取消。取消只中止请求，已收字节留在服务端会话里，重新选中同一个文件从断点接着传；「放弃」才删掉会话与临时文件
+- **拖拽与整目录上传** — 把文件或文件夹拖进文件视图即上传，目录按原结构先建目录再传文件；「上传目录」按钮走同一套逻辑
+- **写入不留半成品** — 保存文本、单请求上传与分片追加都先落到 `.gugu-` 前缀的临时文件，中途失败不会出现半个文件，也不会破坏原文件；列表与打包会跳过这些中转文件
 - **根与目录的保护** — 删除目录必须显式 `recursive=true`；白名单根自身不允许删除或改名，避免一次操作把整个视图的入口端掉
-- **审计动作码** — `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径。审计发生在读请求体之前，所以写操作把路径同时放在查询串的 `path` 或 `from` 参数里（CLI 与 WebUI 都这么做），自建客户端照此传即可让审计记下文件名
-- **多节点** — 选中从节点时，文件视图经中心节点代理访问那台机器的白名单；上传按流式转发，不受代理 4 MB 请求体上限约束
+- **审计动作码** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径。审计发生在读请求体之前，所以写操作把路径同时放在查询串的 `path` 或 `from` 参数里（CLI 与 WebUI 都这么做），自建客户端照此传即可让审计记下文件名
+- **多节点** — 选中从节点时，文件视图经中心节点代理访问那台机器的白名单；上传、分片追加与打包下载都按流转发，不受代理 4 MB 请求体上限约束
 - **安全门槛** — 开启写权限、监听非回环地址、又没有配置 `api_key` 时守护进程拒绝启动；只读模式不做这条限制。启动日志会打印白名单根数与「可读写 / 只读」
 - **体检** — `gugu check` 打印每个根目录是否存在；空条目直接算配置错误
 

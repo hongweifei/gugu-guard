@@ -4,7 +4,9 @@
 //! 参数不合法返回 400。列表与写操作放到阻塞线程池，避免大目录或递归复制占住运行时。
 //! 写操作由审计中间件统一记录。
 
+mod archive;
 mod read;
+mod session;
 mod transfer;
 mod types;
 mod write;
@@ -21,7 +23,9 @@ use std::net::IpAddr;
 use super::types::ApiError;
 use crate::state::AppState;
 
+use archive::archive_fs;
 use read::{download_fs, read_fs};
+use session::{abort_fs, begin_fs, chunk_fs, finish_fs, session_fs};
 use transfer::upload_fs;
 use types::{FsRoots, FsSuccess, PathQuery};
 use write::{copy_fs, mkdir_fs, remove_fs, rename_fs, touch_fs, write_fs};
@@ -33,7 +37,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/v1/fs/stat", get(stat_fs))
         .route("/api/v1/fs/read", get(read_fs))
         .route("/api/v1/fs/download", get(download_fs))
+        .route("/api/v1/fs/archive", get(archive_fs))
         .route("/api/v1/fs/upload", post(upload_fs))
+        .route("/api/v1/fs/upload/session", post(begin_fs))
+        .route(
+            "/api/v1/fs/upload/session/{id}",
+            get(session_fs).put(chunk_fs).delete(abort_fs),
+        )
+        .route("/api/v1/fs/upload/session/{id}/finish", post(finish_fs))
         .route("/api/v1/fs/write", put(write_fs))
         .route("/api/v1/fs/mkdir", post(mkdir_fs))
         .route("/api/v1/fs/touch", post(touch_fs))
@@ -125,6 +136,38 @@ pub(super) fn forward(path: &std::path::Path) -> String {
     gugu_core::config::path_to_forward_slashes(path)
 }
 
+/// `Content-Disposition`：ASCII 兜底名 + RFC 5987 的 UTF-8 名，中文文件名不乱码。
+pub(super) fn disposition(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_graphic() || ch == ' ' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!(
+        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+        fallback.replace('"', "_"),
+        encode_component(name)
+    )
+}
+
+fn encode_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 3);
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +207,30 @@ mod tests {
         assert_eq!(
             failure(GuguError::Io(std::io::Error::other("x"))).status(),
             StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn disposition_keeps_the_chinese_name_in_the_extended_field() {
+        let value = disposition("日志 2026.log");
+        assert!(value.starts_with("attachment; filename=\""));
+        assert!(value.contains("filename*=UTF-8''"));
+        assert!(value.contains("%E6%97%A5%E5%BF%97"), "{value}");
+
+        // ASCII 兜底名只保留 ASCII 图形字符，中文在这里退化成下划线。
+        let fallback = value
+            .split("filename=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("应带 ASCII 兜底名");
+        assert!(fallback.is_ascii(), "{fallback}");
+        assert!(fallback.contains('_'), "{fallback}");
+
+        // 文件名里的引号会破坏头部语法，兜底名要把它替换掉。
+        let quoted = disposition("a\"b.txt");
+        assert!(
+            quoted.contains("filename=\"a_b.txt\""),
+            "兜底名里的引号应替换成下划线: {quoted}"
         );
     }
 }

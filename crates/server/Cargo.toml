@@ -21,6 +21,7 @@ portable-pty = { workspace = true }
 rust-embed = { workspace = true }
 mime_guess = "2"
 socket2 = { workspace = true }
+zip = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # SetHandleInformation：监听套接字不交给子进程继承

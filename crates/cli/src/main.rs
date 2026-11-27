@@ -309,23 +309,29 @@ enum FsAction {
         limit: u64,
     },
 
-    #[command(about = "下载文件到本地")]
+    #[command(about = "下载文件或目录到本地")]
     Get {
         path: String,
-        /// 本地保存路径，缺省用远端文件名
+        /// 本地保存路径；文件缺省用远端文件名，目录缺省用目录名
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// 递归下载整个目录，保留子目录结构
+        #[arg(short, long)]
+        recursive: bool,
     },
 
-    #[command(about = "上传本地文件")]
+    #[command(about = "上传本地文件或目录")]
     Put {
-        /// 本地文件路径
+        /// 本地文件或目录路径
         local: PathBuf,
         /// 远端目标路径
         remote: String,
         /// 覆盖同名文件
         #[arg(long)]
         overwrite: bool,
+        /// 递归上传整个目录，保留子目录结构
+        #[arg(short, long)]
+        recursive: bool,
     },
 
     #[command(about = "新建目录")]

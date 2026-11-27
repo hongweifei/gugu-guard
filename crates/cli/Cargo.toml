@@ -21,6 +21,8 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 comfy-table = { workspace = true }
 reqwest = { workspace = true }
+futures = { workspace = true }
+tokio-util = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = { workspace = true }

@@ -886,6 +886,7 @@ select.control,
     gap: 12px;
     height: calc(100vh - var(--topbar-h));
     padding-bottom: 16px;
+    position: relative;
 }
 
 .files-bar {
@@ -1155,6 +1156,81 @@ select.control,
     color: var(--fg-3);
     font-size: .8rem;
     line-height: 1.65;
+}
+
+/* 传输条：上传与下载共用，进度未开始时整条隐藏 */
+.transfer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+}
+
+.transfer-label {
+    max-width: 280px;
+    overflow: hidden;
+    color: var(--fg-2);
+    font-size: .78rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.transfer-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--line);
+    overflow: hidden;
+}
+
+.transfer-bar i {
+    display: block;
+    width: 0;
+    height: 100%;
+    background: var(--accent);
+    transition: width .12s linear;
+}
+
+.transfer-meta {
+    min-width: 104px;
+    color: var(--fg-3);
+    font-size: .74rem;
+    text-align: right;
+}
+
+.transfer-resume {
+    border-color: var(--warn);
+    background: var(--warn-soft);
+}
+
+/* 拖拽遮罩：整块视图接收文件，松手后按原目录结构上传 */
+.files-drop {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    pointer-events: none;
+}
+
+.files-drop-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--fg-2);
+    font-size: .82rem;
+    text-align: center;
+}
+
+.files-drop-inner strong {
+    color: var(--fg);
+    font-size: .95rem;
 }
 
 @media (max-width: 1180px) {

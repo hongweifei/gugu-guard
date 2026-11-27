@@ -26,7 +26,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Version Update** — the sidebar version is the entry point: check the latest release, install it in one click, and let the daemon restart itself; auto-update can be off, check-only or install, with sources from GitHub, Gitee or your own manifest
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
-- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads, uploads, creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
+- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads and zip archives of whole directories, uploads (drag and drop, whole folders, chunked resume for large files, live progress and cancel), creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
 - **CORS Config** — Configurable allowed cross-origin origins
@@ -203,8 +203,8 @@ gugu net [-m 60]                  # Host bandwidth time series
 gugu audit [-l 100] [--failed]    # Operation audit (newest first; --action by code, --since in minutes)
 gugu fs ls [PATH] [--json]        # List a directory (defaults to the first whitelist root)
 gugu fs cat <PATH> [--limit N]    # Preview text (UTF-8 / GBK auto-decoded; N bytes max)
-gugu fs get <PATH> [-o FILE]      # Download the raw file; keeps the remote name by default
-gugu fs put <LOCAL> <PATH>        # Upload; an existing target needs --overwrite
+gugu fs get <PATH> [-o DIR] [-r]   # Download a file; -r pulls a whole directory and keeps its layout
+gugu fs put <LOCAL> <PATH> [--overwrite] [-r]  # Upload; -r pushes a directory, both show progress
 gugu fs mkdir <PATH> [-p]         # Create a directory; -p creates parents
 gugu fs touch <PATH>              # Create an empty file
 gugu fs mv <FROM> <TO> [--overwrite]   # Rename or move
@@ -289,7 +289,13 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | GET | `/api/v1/fs/stat?path=...` | Kind, size, mtime and read-only flag of one path |
 | GET | `/api/v1/fs/read?path=...&limit=1048576` | Text preview (UTF-8 / GBK auto-decoded; binaries return a flag only) |
 | GET | `/api/v1/fs/download?path=...` | Stream the raw file (UTF-8 name via RFC 5987) |
+| GET | `/api/v1/fs/archive?path=...` | Zip a whole directory (streamed; symlinks skipped, raw content above 2 GB refused) |
 | POST | `/api/v1/fs/upload?path=...&overwrite=false` | Upload: the body is the content, streamed to a temp file then renamed |
+| POST | `/api/v1/fs/upload/session?path=...` | Open a chunked session `{path, size, overwrite}`, returns `{id, offset}` |
+| GET | `/api/v1/fs/upload/session/{id}` | Bytes received so far; read this offset before resuming |
+| PUT | `/api/v1/fs/upload/session/{id}?offset=N` | Append one chunk; the offset must match the server's, otherwise 400 |
+| POST | `/api/v1/fs/upload/session/{id}/finish` | Verify the total size and rename the temp file into place |
+| DELETE | `/api/v1/fs/upload/session/{id}` | Abandon the upload and delete the temp file |
 | PUT | `/api/v1/fs/write` | Save text `{path, content, create}` |
 | POST | `/api/v1/fs/mkdir` | Create a directory `{path, parents}` |
 | POST | `/api/v1/fs/touch` | Create an empty file `{path}` |
@@ -499,8 +505,9 @@ outside returns 403.
 flowchart LR
     U["WebUI Files view<br/>gugu fs"] --> A["Auth + audit middleware"]
     A --> S["Scope<br/>roots + write flag"]
-    S -->|"list / read / download"| R["Entries and file content"]
+    S -->|"list / read / download / archive"| R["Entries, file content and zip"]
     S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["Same-directory temp file → rename"]
+    S -->|"upload/session chunks"| C["Session table<br/>offset checks and resume"]
     S -.->|"outside roots or read-only"| D["403"]
 ```
 
@@ -512,19 +519,34 @@ flowchart LR
 - **Preview rules** — at most 1 MB per read; strict UTF-8 first, GBK as fallback; a NUL byte within the
   first 8 KB marks the file binary and no body is returned. A truncated preview is not editable; saves
   are capped at 8 MB
-- **Streaming both ways** — an upload's body *is* the file content, written to a same-directory temp file
-  and renamed into place; an existing target needs an explicit `overwrite=true`. Downloads stream the
-  file and set `Content-Disposition` with both an ASCII fallback and the RFC 5987 UTF-8 name
-- **No half-written files** — text saves use the same temp-file-then-rename path, so a failed write never
-  leaves a partial file or damages the original
+- **Uploads** — the body *is* the file content, written to a same-directory temp file and renamed into
+  place; an existing target needs an explicit `overwrite=true`. The WebUI switches files above 8 MB to a
+  chunked session: 8 MB chunks are appended in order, the server validates every offset, and a resend is
+  rejected outright. A dropped chunk resumes from the server's recorded offset. Unfinished uploads are
+  kept in the browser's session storage, so after a reload the same file can be picked and continued
+- **Downloads** — a single file streams with `Content-Disposition` carrying both an ASCII fallback and the
+  RFC 5987 UTF-8 name. Directories go through `/fs/archive`: the zip is built in the system temp
+  directory, deleted once the response ends, symlinks are skipped, and raw content above 2 GB is refused
+  with a hint to download subdirectories
+- **Progress and cancel** — uploads read progress from XHR, downloads compute a percentage from
+  `Content-Length` and the bytes read. The WebUI shows one transfer row with name, percentage and bytes
+  received, plus a cancel button. Cancelling only aborts the request: the bytes already received stay in
+  the server session, and re-picking the same file continues from that offset; "Discard" deletes the
+  session and its temp file
+- **Drag and drop** — dropping files or folders onto the Files view uploads them, creating directories
+  first and keeping the original layout; the "Upload folder" button uses the same path
+- **No half-written files** — text saves, single-request uploads and chunk appends all land in a temp file
+  prefixed `.gugu-`; a failure never leaves a partial file or damages the original. Listing and archiving
+  skip these transfer leftovers
 - **Root protection** — deleting a directory requires `recursive=true`; a whitelist root itself cannot be
   deleted or renamed, so no single click removes the whole view's entry point
-- **Audit codes** — `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` /
-  `fs.delete`, with the concrete path as the target. Audit runs before the request body is read, so write
-  calls carry the path in the `path` or `from` query parameter as well (the CLI and WebUI do); custom
-  clients can do the same to have the file name recorded
+- **Audit codes** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` /
+  `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`, with the concrete path as the target.
+  Audit runs before the request body is read, so write calls carry the path in the `path` or `from` query
+  parameter as well (the CLI and WebUI do); custom clients can do the same to have the file name recorded
 - **Multiple nodes** — on a remote node the view goes through the hub proxy to that machine's whitelist;
-  uploads are proxied as a stream and are not bound by the 4 MB proxy body limit
+  uploads, chunk appends and archive downloads are proxied as streams and are not bound by the 4 MB proxy
+  body limit
 - **Exposure gate** — enabling writes on a non-loopback bind without an `api_key` makes the daemon refuse
   to start; read-only mode has no such restriction. Startup logs print the root count and read/write mode
 - **Health check** — `gugu check` prints whether each root exists; an empty entry is a config error

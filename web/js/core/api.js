@@ -89,6 +89,59 @@ export async function rawError(resp) {
     }
 }
 
+/// 上传：`fetch` 拿不到上传进度，这里用 XMLHttpRequest；认证与节点前缀口径与 `api` 一致。
+export function uploadXhr(method, path, blob, { onProgress, signal } = {}) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(method, `${API_BASE}${apiPath(path)}`);
+        if (state.apiKey) xhr.setRequestHeader('Authorization', `Bearer ${state.apiKey}`);
+        xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) onProgress?.(event.loaded, event.total);
+        };
+        xhr.onload = () => {
+            let data = null;
+            try {
+                data = JSON.parse(xhr.responseText);
+            } catch {
+                data = null;
+            }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(data);
+                return;
+            }
+            if (xhr.status === 401) {
+                unauthorizedHandler();
+                reject(new Error('Unauthorized'));
+                return;
+            }
+            reject(new Error(data?.error || `请求失败（HTTP ${xhr.status}）`));
+        };
+        xhr.onerror = () => reject(new Error('传输中断'));
+        xhr.onabort = () => reject(Object.assign(new Error('已取消'), { name: 'AbortError' }));
+        if (signal) {
+            if (signal.aborted) {
+                xhr.abort();
+                return;
+            }
+            signal.addEventListener('abort', () => xhr.abort(), { once: true });
+        }
+        xhr.send(blob);
+    });
+}
+
+/// 下载：返回原始响应，正文由调用方逐块读取，边读边算进度。
+export async function fetchStream(path, { signal } = {}) {
+    const headers = {};
+    if (state.apiKey) headers.Authorization = `Bearer ${state.apiKey}`;
+    const resp = await fetch(`${API_BASE}${apiPath(path)}`, { headers, signal });
+    if (resp.status === 401) {
+        unauthorizedHandler();
+        throw new Error('Unauthorized');
+    }
+    if (!resp.ok) throw await rawError(resp);
+    return resp;
+}
+
 /// 只发给中心节点自身的接口（节点表），不跟随所选节点。
 export function hubApi(method, path, body) {
     return request(method, path, body);

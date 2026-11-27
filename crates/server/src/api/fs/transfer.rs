@@ -95,7 +95,8 @@ async fn abandon(temp: &Path) {
 
 fn temp_name() -> PathBuf {
     PathBuf::from(format!(
-        ".gugu-upload-{}-{}",
+        "{}{}-{}",
+        gugu_core::fs::TEMP_PREFIX,
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -112,7 +113,9 @@ mod tests {
     fn temp_names_are_hidden_and_unique() {
         let first = temp_name();
         let second = temp_name();
-        assert!(first.to_string_lossy().starts_with(".gugu-upload-"));
+        assert!(first
+            .to_string_lossy()
+            .starts_with(gugu_core::fs::TEMP_PREFIX));
         assert_ne!(first, second);
     }
 }

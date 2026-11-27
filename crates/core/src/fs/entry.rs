@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::config::path_to_forward_slashes;
 use crate::error::{GuguError, Result};
 
-use super::Scope;
+use super::{Scope, TEMP_PREFIX};
 
 /// 条目类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,10 @@ pub fn list(scope: &Scope, raw: &str) -> Result<Listing> {
     let mut entries = Vec::new();
     for item in read_dir.flatten() {
         let name = item.file_name().to_string_lossy().to_string();
+        // 传输中的半成品不出现在面板里。
+        if name.starts_with(TEMP_PREFIX) {
+            continue;
+        }
         let link_meta = item.metadata();
         let file_type = item.file_type();
         let (is_dir, kind, size, readonly) = match (&file_type, &link_meta) {

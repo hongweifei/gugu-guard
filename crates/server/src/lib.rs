@@ -6,6 +6,7 @@ pub mod nodes;
 mod peer;
 pub mod state;
 pub mod terminal;
+pub mod uploads;
 pub mod ws;
 
 use std::net::SocketAddr;

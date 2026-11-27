@@ -15,25 +15,41 @@ pub fn url_host(url: &str) -> Option<String> {
 /// 端口与 IPv6 方括号。主机名为空或端口不是合法端口号时返回 `None`。
 #[must_use]
 pub fn authority_host(authority: &str) -> Option<String> {
-    let rest = authority
-        .split_once("://")
-        .map_or(authority, |(_, rest)| rest);
+    split_authority(authority).map(|(host, _)| host)
+}
+
+/// 把 `host[:port]`（可带 scheme、userinfo 与路径）拆成主机与端口。
+///
+/// 主机统一转小写；IPv6 既接受 `[::1]:9090` 也接受裸 `::1`。
+/// 主机为空、端口不是合法端口号、或方括号没有闭合时返回 `None`。
+#[must_use]
+pub fn split_authority(input: &str) -> Option<(String, Option<u16>)> {
+    let rest = input.split_once("://").map_or(input, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next()?;
     let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
+
+    // 裸 IP（含无方括号的 IPv6）整体就是主机，没有可拆的端口。
     if let Ok(ip) = authority.parse::<std::net::IpAddr>() {
-        return Some(ip.to_string());
+        return Some((ip.to_string(), None));
     }
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split_once(']')?.0
-    } else {
-        match authority.rsplit_once(':') {
-            Some((host, port)) => port.parse::<u16>().ok().map(|_| host)?,
-            None => authority,
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, after) = rest.split_once(']')?;
+        let port = match after.strip_prefix(':') {
+            Some(port) => Some(port.parse::<u16>().ok()?),
+            None if after.is_empty() => None,
+            None => return None,
+        };
+        return (!host.is_empty()).then(|| (host.to_ascii_lowercase(), port));
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port)) => {
+            let port = port.parse::<u16>().ok()?;
+            (!host.is_empty()).then(|| (host.to_ascii_lowercase(), Some(port)))
         }
-    };
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+        None => (!authority.is_empty()).then(|| (authority.to_ascii_lowercase(), None)),
+    }
 }
 
 /// 主机是否为本机回环地址（`localhost`、`127.0.0.0/8`、`::1`）。
@@ -91,6 +107,31 @@ mod tests {
         assert_eq!(url_host("http:///path"), None);
         assert_eq!(url_host("http://"), None);
         assert_eq!(url_host("example.com"), None);
+    }
+
+    #[test]
+    fn split_authority_keeps_the_port() {
+        assert_eq!(
+            split_authority("http://10.0.0.12:9090/api"),
+            Some(("10.0.0.12".into(), Some(9090)))
+        );
+        assert_eq!(
+            split_authority("[::1]:9090"),
+            Some(("::1".into(), Some(9090)))
+        );
+        assert_eq!(split_authority("::1"), Some(("::1".into(), None)));
+        assert_eq!(
+            split_authority("https://user:pw@Gugu.Example:8443/x"),
+            Some(("gugu.example".into(), Some(8443)))
+        );
+        assert_eq!(
+            split_authority("localhost"),
+            Some(("localhost".into(), None))
+        );
+        assert_eq!(split_authority(":9090"), None);
+        assert_eq!(split_authority("[::1"), None);
+        assert_eq!(split_authority("host:port"), None);
+        assert_eq!(split_authority("http://"), None);
     }
 
     #[test]

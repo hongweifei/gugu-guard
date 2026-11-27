@@ -2,12 +2,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gugu_core::audit::AuditStore;
+use gugu_core::config::NodeConfig;
 use gugu_core::manager::SharedManager;
 use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
 use crate::nodes::NodeRegistry;
 
+/// Web 服务的全部运行时状态：启动参数在这里一次成型，处理函数只读。
 #[derive(Clone)]
 pub struct AppState {
     pub manager: SharedManager,
@@ -29,14 +31,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(manager: SharedManager, api_key: Option<String>, cors_origins: Vec<String>) -> Self {
+    /// 最小可用状态：只有本机节点表、内存审计、无认证、无跨域限制。
+    pub fn new(manager: SharedManager) -> Self {
         Self {
             manager,
             metrics: Arc::new(Metrics::new()),
             audit: Arc::new(AuditStore::disabled()),
             nodes: Arc::new(NodeRegistry::local_only()),
-            api_key,
-            cors_origins,
+            api_key: None,
+            cors_origins: Vec::new(),
             terminal_enabled: false,
             terminal_cwd: None,
             fs_roots: Vec::new(),
@@ -44,9 +47,40 @@ impl AppState {
         }
     }
 
-    /// 注入节点表；不调用时只有本机 `local`。
+    /// 设置 API Key；None 表示不认证。
     #[must_use]
-    pub fn with_nodes(mut self, nodes: Arc<NodeRegistry>) -> Self {
+    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
+        self.api_key = api_key;
+        self
+    }
+
+    /// 设置跨域白名单；空表示允许任意来源。
+    #[must_use]
+    pub fn with_cors_origins(mut self, origins: Vec<String>) -> Self {
+        self.cors_origins = origins;
+        self
+    }
+
+    /// 按配置构建节点表；配置有误时返回拼好的问题清单，不进入运行态。
+    ///
+    /// # Errors
+    /// 节点重名、地址不合法、对外地址缺 Key 时返回原因。
+    pub fn with_nodes(
+        mut self,
+        configs: &[NodeConfig],
+        node_name: Option<String>,
+    ) -> Result<Self, String> {
+        let problems = gugu_core::config::validate_nodes(configs);
+        if !problems.is_empty() {
+            return Err(problems.join("；"));
+        }
+        self.nodes = Arc::new(NodeRegistry::new(configs, node_name));
+        Ok(self)
+    }
+
+    /// 直接注入已构建的节点表，用于测试与自定义探测配置。
+    #[must_use]
+    pub fn with_registry(mut self, nodes: Arc<NodeRegistry>) -> Self {
         self.nodes = nodes;
         self
     }
@@ -55,6 +89,13 @@ impl AppState {
     #[must_use]
     pub fn with_audit(mut self, audit: Arc<AuditStore>) -> Self {
         self.audit = audit;
+        self
+    }
+
+    /// 按目录构建落盘审计；None 时审计只留内存。
+    #[must_use]
+    pub fn with_audit_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.audit = Arc::new(dir.map_or_else(AuditStore::disabled, AuditStore::new));
         self
     }
 
@@ -78,5 +119,48 @@ impl AppState {
     pub fn with_shutdown(mut self, shutdown_tx: Option<mpsc::Sender<()>>) -> Self {
         self.shutdown_tx = shutdown_tx;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gugu_core::config::AppConfig;
+
+    fn node(name: &str, url: &str, key: Option<&str>) -> NodeConfig {
+        NodeConfig {
+            name: name.to_string(),
+            label: None,
+            url: url.to_string(),
+            api_key: key.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn with_nodes_rejects_a_duplicated_name() {
+        let configs = [
+            node("web1", "http://127.0.0.1:9091", None),
+            node("web1", "http://127.0.0.1:9092", None),
+        ];
+        let err = AppState::new(gugu_core::manager::start(&AppConfig::default(), None))
+            .with_nodes(&configs, None)
+            .err()
+            .expect("重名应被拒绝");
+        assert!(err.contains("web1"), "问题清单应点名冲突的节点: {err}");
+    }
+
+    #[tokio::test]
+    async fn with_nodes_builds_a_normalized_registry() {
+        let mut config = node("web1", "  http://127.0.0.1:9091/  ", Some("  "));
+        config.label = Some("   ".to_string());
+        let state = AppState::new(gugu_core::manager::start(&AppConfig::default(), None))
+            .with_nodes(&[config], Some("中心机".to_string()))
+            .expect("配置有效");
+        assert_eq!(state.nodes.local_name(), "中心机");
+        let remote = state.nodes.remote("web1").expect("web1 应在表里");
+        assert_eq!(remote.base(), "http://127.0.0.1:9091");
+        // 空白标签与空白 Key 在构造时丢弃
+        assert_eq!(remote.display_name(), "web1");
+        assert_eq!(remote.api_key(), None);
     }
 }

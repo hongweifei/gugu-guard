@@ -967,3 +967,19 @@ fs_roots = ["/srv/apps"]
         assert!(config.daemon.web.validate().is_ok());
     }
 }
+
+// ── URL 端口 ──────────────────────────────────────────────
+
+mod port_from_url {
+    use super::*;
+
+    #[test]
+    fn takes_explicit_port_and_falls_back_to_scheme_default() {
+        assert_eq!(port_from_url("http://127.0.0.1:19090/x"), Some(19090));
+        assert_eq!(port_from_url("http://[::1]:9090"), Some(9090));
+        assert_eq!(port_from_url("https://example.com"), Some(443));
+        assert_eq!(port_from_url("http://example.com"), Some(80));
+        assert_eq!(port_from_url("ftp://example.com"), None);
+        assert_eq!(port_from_url("example.com"), None);
+    }
+}

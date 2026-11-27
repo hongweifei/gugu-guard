@@ -146,8 +146,9 @@ fn build_hub(node_addr: SocketAddr) -> (Router, Arc<NodeRegistry>) {
         }],
         Some("中心机".into()),
     ));
-    let state =
-        AppState::new(manager, Some(HUB_KEY.into()), Vec::new()).with_nodes(Arc::clone(&registry));
+    let state = AppState::new(manager)
+        .with_api_key(Some(HUB_KEY.into()))
+        .with_registry(Arc::clone(&registry));
     let app = gugu_server::nodes::routes()
         .merge(gugu_server::ws::routes())
         .layer(middleware::from_fn_with_state(

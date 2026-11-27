@@ -72,18 +72,47 @@ struct NodeStatus {
     info: Option<NodeInfo>,
 }
 
-/// 一台从节点。Key 只在这里与探测/代理请求里出现。
+/// 一台从节点：持有一份规范化后的配置，地址去掉末尾斜杠后单独缓存。
+/// Key 只在这里与探测/代理请求里出现。
 #[derive(Debug, Clone)]
 pub(crate) struct UpstreamNode {
-    pub(crate) name: String,
-    pub(crate) label: Option<String>,
-    pub(crate) base: String,
-    pub(crate) api_key: Option<String>,
+    config: NodeConfig,
+    base: String,
 }
 
 impl UpstreamNode {
+    fn new(node: &NodeConfig) -> Self {
+        let mut config = node.clone();
+        config.name = config.name.trim().to_string();
+        config.url = config.url.trim().to_string();
+        config.label = config
+            .label
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty());
+        config.api_key = config
+            .api_key
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty());
+        Self {
+            base: config.base_url(),
+            config,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.config.name
+    }
+
     pub(crate) fn display_name(&self) -> &str {
-        self.label.as_deref().unwrap_or(&self.name)
+        self.config.display_name()
+    }
+
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
+    pub(crate) fn api_key(&self) -> Option<&str> {
+        self.config.api_key.as_deref()
     }
 
     /// 连从节点 WebSocket 的地址：scheme 换成 ws(s)，Key 走 query，与浏览器同一条认证路径。
@@ -95,8 +124,8 @@ impl UpstreamNode {
         } else {
             self.base.clone()
         };
-        match &self.api_key {
-            Some(key) => format!("{base}/api/v1/ws?token={}", encode_path_segment(key.trim())),
+        match self.api_key() {
+            Some(key) => format!("{base}/api/v1/ws?token={}", encode_path_segment(key)),
             None => format!("{base}/api/v1/ws"),
         }
     }
@@ -119,25 +148,7 @@ impl NodeRegistry {
     pub fn new(nodes: &[NodeConfig], local_name: Option<String>) -> Self {
         let hostname = hostname();
         let local_name = local_name.unwrap_or_else(|| hostname.clone());
-        let remotes: Vec<UpstreamNode> = nodes
-            .iter()
-            .map(|node| UpstreamNode {
-                name: node.name.trim().to_string(),
-                label: node
-                    .label
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|label| !label.is_empty())
-                    .map(str::to_string),
-                base: node.base_url(),
-                api_key: node
-                    .api_key
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|key| !key.is_empty())
-                    .map(str::to_string),
-            })
-            .collect();
+        let remotes: Vec<UpstreamNode> = nodes.iter().map(UpstreamNode::new).collect();
         let user_agent = concat!("gugu-hub/", env!("CARGO_PKG_VERSION"));
         let probe = reqwest::Client::builder()
             .user_agent(user_agent)
@@ -176,7 +187,10 @@ impl NodeRegistry {
     /// 按标识找从节点；命中即返回可移交的副本，代理与中继共用。
     #[must_use]
     pub(crate) fn remote(&self, name: &str) -> Option<UpstreamNode> {
-        self.remotes.iter().find(|node| node.name == name).cloned()
+        self.remotes
+            .iter()
+            .find(|node| node.name() == name)
+            .cloned()
     }
 
     /// 代理请求用的 HTTP 客户端：复用一个连接池，超时口径见文件头。
@@ -211,7 +225,7 @@ impl NodeRegistry {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         views.extend(self.remotes.iter().map(|remote| {
-            let current = status.get(&remote.name).cloned().unwrap_or_default();
+            let current = status.get(remote.name()).cloned().unwrap_or_default();
             NodeView::remote(remote, &current)
         }));
         views
@@ -275,8 +289,8 @@ impl NodeRegistry {
 
     async fn probe(&self, node: &UpstreamNode) -> (String, NodeStatus) {
         let started = Instant::now();
-        let mut request = self.probe.get(format!("{}/api/v1/node", node.base));
-        if let Some(key) = &node.api_key {
+        let mut request = self.probe.get(format!("{}/api/v1/node", node.base()));
+        if let Some(key) = node.api_key() {
             request = request.bearer_auth(key);
         }
         let status = match request.send().await {
@@ -302,7 +316,7 @@ impl NodeRegistry {
                 e.to_string()
             }),
         };
-        (node.name.clone(), status)
+        (node.name().to_string(), status)
     }
 }
 
@@ -310,9 +324,9 @@ impl NodeView {
     fn remote(remote: &UpstreamNode, status: &NodeStatus) -> Self {
         let info = status.info.as_ref();
         Self {
-            id: remote.name.clone(),
+            id: remote.name().to_string(),
             name: remote.display_name().to_string(),
-            url: Some(remote.base.clone()),
+            url: Some(remote.base().to_string()),
             local: false,
             online: status.online,
             latency_ms: status.latency_ms,
@@ -375,22 +389,12 @@ mod tests {
 
     #[test]
     fn ws_url_switches_scheme_and_escapes_key() {
-        let remote = UpstreamNode {
-            name: "web1".into(),
-            label: None,
-            base: "https://gugu.example.com".into(),
-            api_key: Some("a b+c".into()),
-        };
+        let remote = UpstreamNode::new(&node("web1", "https://gugu.example.com", Some("a b+c")));
         assert_eq!(
             remote.ws_url(),
             "wss://gugu.example.com/api/v1/ws?token=a%20b%2Bc"
         );
-        let plain = UpstreamNode {
-            name: "web1".into(),
-            label: None,
-            base: "http://127.0.0.1:9092".into(),
-            api_key: None,
-        };
+        let plain = UpstreamNode::new(&node("web1", "http://127.0.0.1:9092", None));
         assert_eq!(plain.ws_url(), "ws://127.0.0.1:9092/api/v1/ws");
     }
 }

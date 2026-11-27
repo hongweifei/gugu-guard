@@ -756,12 +756,9 @@ pub fn default_fail_threshold() -> u32 {
 /// 只服务于「哪些端口归这个服务」这一个用途，因此不引入完整 URL 解析库。
 #[must_use]
 pub fn port_from_url(url: &str) -> Option<u16> {
-    let (scheme, rest) = url.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if let Some((_, port)) = authority.rsplit_once(':') {
-        if let Ok(port) = port.parse::<u16>() {
-            return Some(port);
-        }
+    let (scheme, _) = url.split_once("://")?;
+    if let Some(port) = crate::net::split_authority(url).and_then(|(_, port)| port) {
+        return Some(port);
     }
     match scheme.to_ascii_lowercase().as_str() {
         "https" => Some(443),

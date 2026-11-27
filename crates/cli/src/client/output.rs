@@ -262,16 +262,10 @@ fn new_table(header: Vec<&str>) -> Table {
     table
 }
 
+/// 终端表格的字节格式：口径与 `gugu_core::units::format_bytes` 一致（1024 进制、一位小数）。
+/// 负值在这里没有实际来源，按 0 处理以免出现怪异的负数单位。
 fn format_size(bytes: f64) -> String {
-    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
-    let mut value = bytes.abs();
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    let sign = if bytes < 0.0 { "-" } else { "" };
-    format!("{sign}{value:.1}{}", UNITS[unit])
+    gugu_core::units::format_bytes(bytes.max(0.0) as u64)
 }
 
 fn format_rate(bytes_per_sec: f64) -> String {

@@ -9,8 +9,6 @@ pub mod terminal;
 pub mod ws;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::Request;
@@ -18,30 +16,8 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Router;
-use gugu_core::audit::AuditStore;
-use gugu_core::config::NodeConfig;
-use gugu_core::manager::SharedManager;
 use state::AppState;
 use tower_http::cors::CorsLayer;
-
-/// Web 服务的可选配置：认证、跨域、审计落盘位置、内置终端与从节点表。
-#[derive(Debug, Clone, Default)]
-pub struct ServerOptions {
-    pub api_key: Option<String>,
-    pub cors_origins: Vec<String>,
-    /// 审计文件目录；None 时审计只留内存。
-    pub audit_dir: Option<PathBuf>,
-    /// 是否开放 WebUI 内置终端；默认关闭。
-    pub terminal: bool,
-    /// 终端会话的工作目录；None 时用当前目录。
-    pub terminal_cwd: Option<PathBuf>,
-    /// 文件浏览允许的根目录；空表示不限制。
-    pub fs_roots: Vec<PathBuf>,
-    /// 由本节点纳管的从节点；空表示只有本机。
-    pub nodes: Vec<NodeConfig>,
-    /// 本机在节点表里的显示名；None 时用主机名。
-    pub node_name: Option<String>,
-}
 
 fn embedded_static_handler(req: Request) -> Response {
     let path = req.uri().path().trim_start_matches('/');
@@ -68,39 +44,16 @@ fn embedded_static_handler(req: Request) -> Response {
 /// 端口绑定失败或服务器运行异常时返回错误。
 pub async fn run_server(
     addr: SocketAddr,
-    manager: SharedManager,
-    options: ServerOptions,
+    state: AppState,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-    api_shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> anyhow::Result<()> {
     // 库调用方也不能绕过这条门槛：非回环监听 + 无 Key + 终端开启时不启动。
-    if options.terminal {
-        terminal::check_exposure(addr.ip(), options.api_key.as_deref())
+    if state.terminal_enabled {
+        terminal::check_exposure(addr.ip(), state.api_key.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
-    // 节点表配错（重名、地址不合法、对外地址没 Key）同样直接拒绝启动。
-    let node_problems = gugu_core::config::validate_nodes(&options.nodes);
-    if !node_problems.is_empty() {
-        return Err(anyhow::anyhow!(
-            "节点配置有误: {}",
-            node_problems.join("；")
-        ));
-    }
 
-    let audit = options
-        .audit_dir
-        .map_or_else(AuditStore::disabled, AuditStore::new);
-    let nodes = Arc::new(nodes::NodeRegistry::new(
-        &options.nodes,
-        options.node_name.clone(),
-    ));
-    let poller_target = Arc::clone(&nodes);
-    let state = AppState::new(manager, options.api_key, options.cors_origins)
-        .with_audit(Arc::new(audit))
-        .with_nodes(nodes)
-        .with_shutdown(api_shutdown_tx)
-        .with_terminal(options.terminal, options.terminal_cwd)
-        .with_fs_roots(options.fs_roots);
+    let poller_target = std::sync::Arc::clone(&state.nodes);
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()

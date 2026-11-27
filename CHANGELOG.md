@@ -104,6 +104,13 @@
 - **落盘不变** —— 日志文件始终写程序输出的原始字节，导出下载对得上原样；解码只作用于面板、WebSocket 与检索
 - **接口与工具** —— 进程配置新增 `encoding`（默认 `auto`），`POST/PUT /api/v1/processes/:name` 接受该字段，`gugu add` 增加 `--encoding`，WebUI 表单新增「日志编码」下拉
 
+### 结构去重（内部）
+
+- **字节格式化** —— 新增 `core::units::format_bytes` 作为唯一实现（1024 进制，非 B 单位保留一位小数，覆盖到 TB）；cgroup 限值描述、进程资源用量与 CLI 的体积列都调用它，三处各自的格式化代码随之删除，数值口径保持一致
+- **URL 权威段** —— 新增 `core::net::split_authority`，从任意写法里取出主机与端口（去 scheme、userinfo 与路径，IPv6 支持 `[::1]:9090` 与裸 `::1`）；`authority_host` 与 `config::port_from_url` 都由它派生，端口缺失时按 scheme 回落 80/443
+- **从节点表** —— `UpstreamNode` 持有一份 `NodeConfig` 并在构造时统一裁剪空白、丢弃空标签与空 Key，字段通过方法读取；节点表、探测、代理与视图四处共用这一份配置模型，不再各自搬运四个平行字段
+- **服务状态** —— 删除 `ServerOptions`，认证、跨域、审计目录、终端、白名单与节点表都收进 `AppState`，由链式构造一次成型；节点配置在 `with_nodes` 里完成校验，`run_server` 只接收 `AppState` 与停止信号
+
 ### 修复
 
 - `gugu add` 与 `POST /api/v1/processes/:name` 接受 `log_format: null`：CLI 未指定日志格式时发的就是 null，此前会被请求体校验拒绝（返回 400）

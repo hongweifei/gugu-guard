@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+/// 字节数的短格式（1024 进制，保留一位小数）。
+pub use crate::units::format_bytes;
+
 /// 单核的默认调度周期（微秒），与内核默认值一致。
 const CPU_PERIOD_US: u64 = 100_000;
 /// 内核要求的最小配额（微秒）。
@@ -172,23 +175,6 @@ impl CgroupSpec {
             parts.push(format!("pids {pids}"));
         }
         parts.join("、")
-    }
-}
-
-/// 字节数的短格式（1024 进制，保留一位小数）。
-#[must_use]
-pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
     }
 }
 

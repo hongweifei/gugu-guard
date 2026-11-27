@@ -38,8 +38,8 @@ pub(crate) async fn handle(
     };
 
     let url = match query {
-        Some(query) => format!("{}/api/v1/{rest}?{query}", remote.base),
-        None => format!("{}/api/v1/{rest}", remote.base),
+        Some(query) => format!("{}/api/v1/{rest}?{query}", remote.base()),
+        None => format!("{}/api/v1/{rest}", remote.base()),
     };
     let mut builder = state.nodes.http_client().request(method, &url);
     for (name, value) in &headers {
@@ -50,7 +50,7 @@ pub(crate) async fn handle(
     if let Some(forwarded) = forwarded {
         builder = builder.header("x-forwarded-for", forwarded);
     }
-    if let Some(key) = &remote.api_key {
+    if let Some(key) = remote.api_key() {
         builder = builder.bearer_auth(key);
     }
 

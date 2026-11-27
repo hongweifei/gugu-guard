@@ -51,7 +51,9 @@ fn build_app(dir: &std::path::Path, api_key: Option<String>) -> (Router, Arc<Aud
     let config = AppConfig::default();
     let shared = gugu_core::manager::start(&config, None);
     let audit = Arc::new(AuditStore::new(dir.to_path_buf()));
-    let state = AppState::new(shared, api_key, Vec::new()).with_audit(Arc::clone(&audit));
+    let state = AppState::new(shared)
+        .with_api_key(api_key)
+        .with_audit(Arc::clone(&audit));
 
     let protected = gugu_server::api::routes()
         .merge(gugu_server::ws::routes())

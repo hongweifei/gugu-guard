@@ -10,6 +10,7 @@ pub mod net;
 pub mod notify;
 pub mod process;
 pub mod sockets;
+pub mod units;
 
 pub use config::AppConfig;
 pub use error::{GuguError, Result};

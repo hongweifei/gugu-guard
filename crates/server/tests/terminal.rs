@@ -16,7 +16,8 @@ use tower::ServiceExt;
 fn build_app(terminal: bool, api_key: Option<String>) -> Router {
     let config = AppConfig::default();
     let shared = gugu_core::manager::start(&config, None);
-    let state = AppState::new(shared, api_key, Vec::new())
+    let state = AppState::new(shared)
+        .with_api_key(api_key)
         .with_audit(Arc::new(AuditStore::disabled()))
         .with_terminal(terminal, Some(PathBuf::from(".")));
     let protected = gugu_server::terminal::routes().layer(middleware::from_fn_with_state(

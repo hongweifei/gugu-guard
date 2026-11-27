@@ -294,36 +294,27 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-    let server_shared = shared.clone();
-    let server_options = gugu_server::ServerOptions {
-        api_key,
-        cors_origins: config.daemon.web.cors_origins.clone(),
-        // 审计与守护日志同处 log_dir，便于一并备份/清理
-        audit_dir: Some(log_base),
-        terminal: config.daemon.web.terminal,
-        // 打开终端默认落在配置文件所在目录，相对路径与配置里的写法一致
-        terminal_cwd: Some(config_dir.clone()),
-        // 白名单与 log_dir 同一套基准：相对路径相对配置文件所在目录解析
-        fs_roots: config
-            .daemon
-            .web
-            .fs_roots
-            .iter()
-            .map(|root| gugu_core::config::resolve_relative_path(root, &config_dir))
-            .collect(),
-        nodes: config.nodes.clone(),
-        node_name: config.local_node_name(),
-    };
+    // 审计与守护日志同处 log_dir，便于一并备份/清理
+    // 打开终端默认落在配置文件所在目录，相对路径与配置里的写法一致
+    // 白名单与 log_dir 同一套基准：相对路径相对配置文件所在目录解析
+    let fs_roots: Vec<PathBuf> = config
+        .daemon
+        .web
+        .fs_roots
+        .iter()
+        .map(|root| gugu_core::config::resolve_relative_path(root, &config_dir))
+        .collect();
+    let state = gugu_server::state::AppState::new(shared.clone())
+        .with_api_key(api_key)
+        .with_cors_origins(config.daemon.web.cors_origins.clone())
+        .with_audit_dir(Some(log_base))
+        .with_terminal(config.daemon.web.terminal, Some(config_dir))
+        .with_fs_roots(fs_roots)
+        .with_nodes(&config.nodes, config.local_node_name())
+        .map_err(anyhow::Error::msg)?
+        .with_shutdown(Some(api_shutdown_tx));
     let server_handle = tokio::spawn(async move {
-        if let Err(e) = gugu_server::run_server(
-            addr,
-            server_shared,
-            server_options,
-            shutdown_rx,
-            Some(api_shutdown_tx),
-        )
-        .await
-        {
+        if let Err(e) = gugu_server::run_server(addr, state, shutdown_rx).await {
             tracing::error!("Web 服务错误: {e}");
         }
     });

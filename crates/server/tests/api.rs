@@ -90,7 +90,8 @@ fn build_router_with_roots(
     shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
     fs_roots: Vec<std::path::PathBuf>,
 ) -> axum::Router {
-    let state = AppState::new(shared, api_key, Vec::new())
+    let state = AppState::new(shared)
+        .with_api_key(api_key)
         .with_shutdown(shutdown_tx)
         .with_fs_roots(fs_roots);
     let cors_layer = tower_http::cors::CorsLayer::permissive();

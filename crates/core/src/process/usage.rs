@@ -7,6 +7,9 @@
 
 use std::time::Instant;
 
+/// 人类可读的字节数（日志与 UI 提示用）。
+pub use crate::units::format_bytes;
+
 /// 一次进程树采样结果。`cpu_percent` 是**相对单核**的百分比（多线程可 >100）。
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct UsageSample {
@@ -56,24 +59,6 @@ fn percent_from_delta(prev_cpu: u64, cpu: u64, elapsed_secs: f64, ticks_per_sec:
     }
     let delta = cpu.saturating_sub(prev_cpu) as f64;
     (delta / ticks_per_sec as f64 / elapsed_secs * 100.0) as f32
-}
-
-/// 人类可读的字节数（日志与 UI 提示用）。
-#[must_use]
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let b = bytes as f64;
-    if b >= GB {
-        format!("{:.2} GB", b / GB)
-    } else if b >= MB {
-        format!("{:.1} MB", b / MB)
-    } else if b >= KB {
-        format!("{:.1} KB", b / KB)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 #[cfg(windows)]
@@ -355,14 +340,6 @@ mod tests {
             proc_stat::parse("1 (x) S abc 1").is_none(),
             "字段非数字应返回 None"
         );
-    }
-
-    #[test]
-    fn format_bytes_uses_human_units() {
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(2048), "2.0 KB");
-        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
-        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.00 GB");
     }
 
     #[cfg(windows)]

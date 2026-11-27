@@ -285,7 +285,7 @@ gugu-guard/
 ├── web/            # WebUI (无构建步骤，直接内嵌进二进制)
 │   ├── index.html
 │   ├── style.css
-│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / form(表单) / nodes(节点切换) / app(接线与启动)
+│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / audit(审计) / terminal(终端) / nodes(节点切换) / form(表单) / form-health(健康检查与网络) / form-fs(文件浏览) / app(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
 ```

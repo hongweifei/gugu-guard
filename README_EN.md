@@ -285,7 +285,7 @@ gugu-guard/
 ├── web/            # WebUI (no build step, embedded into the binary)
 │   ├── index.html
 │   ├── style.css
-│   └── js/         # core(state/utils) / render(list) / history(metrics) / logs(viewer) / form(modals) / app(wiring+boot)
+│   └── js/         # core(state/utils) / render(list) / history(metrics) / logs(viewer) / audit(audit trail) / terminal(PTY panel) / nodes(node switch) / form(modals) / form-health(health & network) / form-fs(file browser) / app(wiring+boot)
 ├── config.example.toml
 └── Cargo.toml      # Workspace root config
 ```

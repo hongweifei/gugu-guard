@@ -116,6 +116,13 @@
 - **配置模块** —— 原 `config.rs` 914 行按职责拆成 `config/{mod,daemon,node,process,paths,unknown,write}`：`AppConfig` 只保留加载、保存与告警；守护进程与 Web 配置、从节点与节点表校验、进程配置与健康检查、路径查找、未知键检出、写回合并各自成文件。对外路径由 `mod.rs` 统一 re-export，调用方无需改动
 - **进程状态机** —— 原 `process/managed.rs` 694 行按动作拆成 `managed/{mod,spawn,lifecycle,observe,view}`：字段与基础访问留在 `mod`，启动（命令构造、硬限落地、日志采集接线）、停止与存活检查、节拍采样、对外视图分块实现同一类型，单个文件都不再承载整条生命周期
 
+### 安装、套接字与表单拆分（内部）
+
+- **安装命令** —— 原 `install.rs` 616 行拆成 `install/{mod,units,windows,unix}`：`mod` 只留模式解析与安装/卸载入口、配置模板生成和跨平台小工具；`units` 放外部命令执行与 systemd 单元文本构造（连同其构造测试）；`windows` 放任务计划、Run 键与 Windows 服务；`unix` 放 systemd 系统级与用户级单元的安装卸载。平台分支各归其文件，`--mode service` 在 Unix 上明确拒绝
+- **套接字** —— 原 `sockets.rs` 464 行拆成 `sockets/{mod,parse,windows,unix}`：`mod` 保留 `Socket`/`Listener` 与公共查询；`parse` 放 `/proc/net/tcp` 行解析与 `TcpState`；`windows` 与 `unix` 分别承载 `GetExtendedTcpTable`/ToolHelp 与 `/proc` 读取，两个平台同名挂为 `platform`，公共函数签名不变
+- **指标渲染** —— 原 `metrics.rs` 400 行拆成 `metrics/{mod,render,tests}`：`mod` 只保留快照容器、路由与处理器；`render` 按指标族拆成函数（CPU、健康、内存、连接、重启、状态、时长、聚合、带宽），拼装顺序与输出文本保持不变；渲染测试独立成 `tests`
+- **前端表单** —— 原 `web/js/form.js` 434 行拆成三个脚本：`form.js` 保留模态框、动态参数与环境变量行、命令预览、重名检查、编辑回填与提交；`form-health.js` 放健康检查与网络设置的收集/回填/重置；`form-fs.js` 放文件系统浏览器整体。`index.html` 按依赖顺序引入，共享全局作用域
+
 ### 修复
 
 - `gugu add` 与 `POST /api/v1/processes/:name` 接受 `log_format: null`：CLI 未指定日志格式时发的就是 null，此前会被请求体校验拒绝（返回 400）

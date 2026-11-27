@@ -1,5 +1,6 @@
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -8,6 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::peer::PeerAddr;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +29,8 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Query(query): Query<WsQuery>,
+    peer: PeerAddr,
+    headers: HeaderMap,
 ) -> Response {
     let node = query
         .node
@@ -42,8 +46,9 @@ async fn ws_handler(
         Ok(remote) => remote,
         Err(e) => return e.into_response(),
     };
+    let forwarded = crate::nodes::forwarded_for(&headers, peer.0);
     let node = node.to_string();
-    ws.on_upgrade(move |socket| crate::nodes::relay(remote, socket, node))
+    ws.on_upgrade(move |socket| crate::nodes::relay(remote, socket, node, forwarded))
         .into_response()
 }
 

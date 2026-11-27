@@ -3,6 +3,7 @@ pub mod assets;
 pub mod audit;
 pub mod metrics;
 pub mod nodes;
+mod peer;
 pub mod state;
 pub mod terminal;
 pub mod ws;

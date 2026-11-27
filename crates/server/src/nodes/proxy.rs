@@ -7,6 +7,8 @@ use axum::extract::{Path, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 
+use super::forwarded_for;
+use crate::peer::PeerAddr;
 use crate::state::AppState;
 
 /// 代理请求体上限；写配置的 JSON 远小于此值。
@@ -16,6 +18,7 @@ const MAX_PROXY_BODY: usize = 4 * 1024 * 1024;
 pub(crate) async fn handle(
     State(state): State<AppState>,
     Path((node, rest)): Path<(String, String)>,
+    peer: PeerAddr,
     req: Request,
 ) -> Response {
     let remote = match super::upstream_of(&state, &node) {
@@ -26,6 +29,7 @@ pub(crate) async fn handle(
     let method = req.method().clone();
     let query = req.uri().query().map(str::to_string);
     let headers = req.headers().clone();
+    let forwarded = forwarded_for(&headers, peer.0);
     let Ok(body) = to_bytes(req.into_body(), MAX_PROXY_BODY).await else {
         return super::failure(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -42,6 +46,9 @@ pub(crate) async fn handle(
         if forward_request_header(name.as_str()) {
             builder = builder.header(name, value);
         }
+    }
+    if let Some(forwarded) = forwarded {
+        builder = builder.header("x-forwarded-for", forwarded);
     }
     if let Some(key) = &remote.api_key {
         builder = builder.bearer_auth(key);
@@ -75,7 +82,8 @@ pub(crate) async fn handle(
         .unwrap_or_else(|_| super::failure(StatusCode::BAD_GATEWAY, "构造代理响应失败".to_string()))
 }
 
-/// 逐跳头与认证头不转发：认证由中心节点按从节点的 Key 重新签发。
+/// 逐跳头与认证头不转发：认证由中心节点按从节点的 Key 重新签发；
+/// `x-forwarded-for` 也不透传，由中心节点按「原链路 + 直连对端」重写一份。
 fn forward_request_header(name: &str) -> bool {
     !matches!(
         name,
@@ -88,6 +96,7 @@ fn forward_request_header(name: &str) -> bool {
             | "upgrade"
             | "keep-alive"
             | "proxy-connection"
+            | "x-forwarded-for"
     )
 }
 
@@ -101,6 +110,7 @@ mod tests {
         assert!(!forward_request_header("host"));
         assert!(!forward_request_header("content-length"));
         assert!(!forward_request_header("accept-encoding"));
+        assert!(!forward_request_header("x-forwarded-for"));
         assert!(forward_request_header("content-type"));
         assert!(forward_request_header("accept"));
         assert!(forward_request_header("user-agent"));

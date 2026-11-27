@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::ws::{Message, WebSocketUpgrade};
-use axum::extract::{Path, Query};
+use axum::extract::{ConnectInfo, Path, Query};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
@@ -71,6 +71,18 @@ async fn upstream_large(headers: HeaderMap) -> Response {
     "x".repeat(300 * 1024).into_response()
 }
 
+/// 回显中心节点带来的 `x-forwarded-for`：来源链路是否转交直接观察。
+async fn upstream_forwarded(headers: HeaderMap) -> Response {
+    if !upstream_ok(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let forwarded = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    Json(json!({ "x_forwarded_for": forwarded })).into_response()
+}
+
 async fn upstream_start(headers: HeaderMap, Path(name): Path<String>, body: String) -> Response {
     if !upstream_ok(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -80,13 +92,24 @@ async fn upstream_start(headers: HeaderMap, Path(name): Path<String>, body: Stri
 
 async fn upstream_ws(
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
     if params.get("token").map(String::as_str) != Some(NODE_KEY) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    ws.on_upgrade(|mut socket| async move {
-        let hello = json!({ "type": "status", "processes": [], "node": "edge" }).to_string();
+    let forwarded = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    ws.on_upgrade(move |mut socket| async move {
+        let hello = json!({
+            "type": "status",
+            "processes": [],
+            "node": "edge",
+            "x_forwarded_for": forwarded,
+        })
+        .to_string();
         let _ = socket.send(Message::Text(hello.into())).await;
         while let Some(Ok(_)) = socket.recv().await {}
     })
@@ -97,6 +120,7 @@ async fn spawn_upstream() -> SocketAddr {
         .route("/api/v1/node", get(upstream_info))
         .route("/api/v1/processes", get(upstream_processes))
         .route("/api/v1/large", get(upstream_large))
+        .route("/api/v1/forwarded", get(upstream_forwarded))
         .route("/api/v1/processes/{name}/start", post(upstream_start))
         .route("/api/v1/ws", get(upstream_ws));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -276,6 +300,52 @@ async fn rejects_unknown_and_local_proxy_targets() {
 }
 
 #[tokio::test]
+async fn forwards_the_client_address_to_the_node() {
+    let addr = spawn_upstream().await;
+    let (app, _) = build_hub(addr);
+
+    // 直连对端 + 请求自带的代理链：从节点应收到「原链路, 直连对端」。
+    let mut request = Request::builder()
+        .uri("/api/v1/nodes/edge/forwarded")
+        .header("Authorization", format!("Bearer {HUB_KEY}"))
+        .header("x-forwarded-for", "10.9.9.9, 10.9.9.10")
+        .body(Body::empty())
+        .expect("构造请求失败");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5000))));
+    let response = app.clone().oneshot(request).await.expect("请求处理失败");
+    let body: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 1024)
+            .await
+            .expect("读取响应体失败"),
+    )
+    .unwrap_or(Value::Null);
+    assert_eq!(
+        body["x_forwarded_for"], "10.9.9.9, 10.9.9.10, 127.0.0.1",
+        "原有链路保留，中心节点追加直连对端"
+    );
+
+    // 请求没带代理链：只写直连对端，从节点的审计据此记下真实客户端。
+    let mut request = Request::builder()
+        .uri("/api/v1/nodes/edge/forwarded")
+        .header("Authorization", format!("Bearer {HUB_KEY}"))
+        .body(Body::empty())
+        .expect("构造请求失败");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([192, 168, 1, 7], 5000))));
+    let response = app.oneshot(request).await.expect("请求处理失败");
+    let body: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 1024)
+            .await
+            .expect("读取响应体失败"),
+    )
+    .unwrap_or(Value::Null);
+    assert_eq!(body["x_forwarded_for"], "192.168.1.7");
+}
+
+#[tokio::test]
 async fn relays_websocket_from_the_selected_node() {
     let upstream = spawn_upstream().await;
     let (app, _) = build_hub(upstream);
@@ -284,7 +354,11 @@ async fn relays_websocket_from_the_selected_node() {
         .expect("绑定中心节点端口失败");
     let hub_addr = listener.local_addr().expect("读取中心节点地址失败");
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
     });
 
     let url = format!("ws://{hub_addr}/api/v1/ws?token={HUB_KEY}&node=edge");
@@ -300,4 +374,8 @@ async fn relays_websocket_from_the_selected_node() {
     let value: Value = serde_json::from_str(&text).expect("中继消息应为 JSON");
     assert_eq!(value["type"], "status");
     assert_eq!(value["node"], "edge");
+    assert_eq!(
+        value["x_forwarded_for"], "127.0.0.1",
+        "浏览器地址应随升级请求带给从节点"
+    );
 }

@@ -14,8 +14,10 @@ mod proxy;
 mod registry;
 mod relay;
 
+use std::net::SocketAddr;
+
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -24,10 +26,27 @@ use serde_json::json;
 
 use crate::state::AppState;
 
+/// 传给从节点的 `x-forwarded-for`：请求自带代理链就追加直连对端，否则只写直连对端。
+///
+/// 从节点的审计取第一段，看到的是原始客户端而不是中心节点的地址；中心节点前面还有
+/// 反向代理时，原来那一段链原样保留下来，诊断时能看出请求经过了几层。
+pub(crate) fn forwarded_for(headers: &HeaderMap, peer: Option<SocketAddr>) -> Option<String> {
+    let incoming = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let peer = peer.map(|addr| addr.ip().to_string());
+    match (incoming, peer) {
+        (Some(chain), Some(peer)) => Some(format!("{chain}, {peer}")),
+        (Some(chain), None) => Some(chain.to_string()),
+        (None, peer) => peer,
+    }
+}
+
 pub(crate) use registry::UpstreamNode;
 pub use registry::{NodeInfo, NodeRegistry, NodeView};
 pub(crate) use relay::relay;
-
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/nodes", get(list_nodes))
@@ -89,4 +108,55 @@ async fn self_node(State(state): State<AppState>) -> Json<NodeInfo> {
             .nodes
             .self_info(&state.manager, state.terminal_enabled),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers(value: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+        }
+        headers
+    }
+
+    fn peer(ip: &str) -> Option<SocketAddr> {
+        Some(format!("{ip}:5000").parse().unwrap())
+    }
+
+    #[test]
+    fn appends_the_peer_to_an_existing_chain() {
+        assert_eq!(
+            forwarded_for(&headers(Some("10.9.9.9")), peer("127.0.0.1")).as_deref(),
+            Some("10.9.9.9, 127.0.0.1")
+        );
+        assert_eq!(
+            forwarded_for(&headers(Some("10.9.9.9, 10.9.9.10")), peer("127.0.0.1")).as_deref(),
+            Some("10.9.9.9, 10.9.9.10, 127.0.0.1")
+        );
+    }
+
+    #[test]
+    fn writes_the_peer_when_the_request_carries_no_chain() {
+        assert_eq!(
+            forwarded_for(&headers(None), peer("127.0.0.1")).as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            forwarded_for(&headers(Some("   ")), peer("192.168.1.7")).as_deref(),
+            Some("192.168.1.7")
+        );
+    }
+
+    #[test]
+    fn keeps_the_chain_when_the_peer_is_unknown() {
+        assert_eq!(
+            forwarded_for(&headers(Some("10.9.9.9")), None).as_deref(),
+            Some("10.9.9.9")
+        );
+        assert_eq!(forwarded_for(&headers(None), None), None);
+    }
 }

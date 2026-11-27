@@ -111,6 +111,11 @@
 - **从节点表** —— `UpstreamNode` 持有一份 `NodeConfig` 并在构造时统一裁剪空白、丢弃空标签与空 Key，字段通过方法读取；节点表、探测、代理与视图四处共用这一份配置模型，不再各自搬运四个平行字段
 - **服务状态** —— 删除 `ServerOptions`，认证、跨域、审计目录、终端、白名单与节点表都收进 `AppState`，由链式构造一次成型；节点配置在 `with_nodes` 里完成校验，`run_server` 只接收 `AppState` 与停止信号
 
+### 配置与进程状态机拆分（内部）
+
+- **配置模块** —— 原 `config.rs` 914 行按职责拆成 `config/{mod,daemon,node,process,paths,unknown,write}`：`AppConfig` 只保留加载、保存与告警；守护进程与 Web 配置、从节点与节点表校验、进程配置与健康检查、路径查找、未知键检出、写回合并各自成文件。对外路径由 `mod.rs` 统一 re-export，调用方无需改动
+- **进程状态机** —— 原 `process/managed.rs` 694 行按动作拆成 `managed/{mod,spawn,lifecycle,observe,view}`：字段与基础访问留在 `mod`，启动（命令构造、硬限落地、日志采集接线）、停止与存活检查、节拍采样、对外视图分块实现同一类型，单个文件都不再承载整条生命周期
+
 ### 修复
 
 - `gugu add` 与 `POST /api/v1/processes/:name` 接受 `log_format: null`：CLI 未指定日志格式时发的就是 null，此前会被请求体校验拒绝（返回 400）

@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use super::logwatch::LogWatcher;
 use super::types::{LogEntry, LogStream};
-use crate::logs::{clean, parse_line, LogFormat};
+use crate::logs::{clean, parse_line, LogEncoding, LogFormat};
 
 const MAX_LOG_LINES: usize = 1000;
 
@@ -24,6 +24,8 @@ pub(crate) struct StreamTarget<'a> {
     pub(crate) max_log_size_mb: Option<u64>,
     pub(crate) watcher: Option<Arc<LogWatcher>>,
     pub(crate) format: LogFormat,
+    /// 解码这一行要用的编码；落盘仍是原始字节。
+    pub(crate) encoding: LogEncoding,
 }
 
 pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
@@ -39,6 +41,7 @@ pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
         max_log_size_mb,
         watcher,
         format,
+        encoding,
     } = target;
     let mut buf_reader = BufReader::new(reader);
     let mut raw: Vec<u8> = Vec::with_capacity(1024);
@@ -51,7 +54,7 @@ pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
         match buf_reader.read_until(b'\n', &mut raw).await {
             Ok(0) => break,
             Ok(_) => {
-                // 按字节切行，容忍非 UTF-8（GBK 等）输出：内存/广播走 lossy 转换，
+                // 按字节切行，可容忍非 UTF-8 输出：内存/广播按配置的编码解码，
                 // 文件保留原始字节，不丢任何一行。
                 let mut body: &[u8] = &raw;
                 if body.last() == Some(&b'\n') {
@@ -62,7 +65,7 @@ pub(crate) async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 }
                 // 内存与广播里的这一份先洗掉 ANSI 转义与不可见控制符，
                 // 落盘字节仍是原始内容，导出的文件可以对得上原样。
-                let line = clean(&String::from_utf8_lossy(body));
+                let line = clean(&encoding.decode(body));
                 let parsed = parse_line(&line, format);
                 let parsed = (!parsed.is_empty()).then_some(parsed);
                 if let Some(ref watcher) = watcher {

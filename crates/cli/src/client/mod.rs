@@ -7,7 +7,7 @@ mod output;
 
 use anyhow::{Context, Result};
 use gugu_core::config::{AppConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT, LOCALHOST};
-use gugu_core::logs::LogSearchReport;
+use gugu_core::logs::{LogEncoding, LogSearchReport};
 use gugu_core::net::{encode_path_segment, node_path_segment};
 use gugu_core::process::LogEntry;
 use std::collections::HashMap;
@@ -172,58 +172,43 @@ pub(crate) async fn run_client(
             print_api_response(resp).await?;
         }
 
-        Commands::Add {
-            name,
-            command,
-            args,
-            dir,
-            env,
-            no_auto_start,
-            no_auto_restart,
-            max_restarts,
-            restart_delay,
-            stop_timeout,
-            stdout_log,
-            stderr_log,
-            log_format,
-            cpu_max,
-            memory_max,
-            pids_max,
-            port,
-            no_port_check,
-            ready_timeout,
-            start,
-        } => {
+        Commands::Add { name, opts } => {
             let mut env_map = HashMap::new();
-            for e in env {
+            for e in &opts.env {
                 if let Some((k, v)) = e.split_once('=') {
                     env_map.insert(k.to_string(), v.to_string());
                 }
             }
-            let log_format = match log_format.as_deref() {
+            let log_format = match opts.log_format.as_deref() {
                 None => None,
                 Some(raw) => Some(parse_log_format(raw)?),
             };
+            let encoding = opts
+                .encoding
+                .as_deref()
+                .map(|raw| raw.parse::<LogEncoding>().map_err(anyhow::Error::msg))
+                .transpose()?;
             let body = serde_json::json!({
-                "command": command,
-                "args": args,
-                "working_dir": dir,
+                "command": opts.command,
+                "args": opts.args,
+                "working_dir": opts.dir,
                 "env": env_map,
-                "auto_start": !no_auto_start,
-                "auto_restart": !no_auto_restart,
-                "max_restarts": max_restarts,
-                "restart_delay_secs": restart_delay,
-                "stop_timeout_secs": stop_timeout,
-                "stdout_log": stdout_log,
-                "stderr_log": stderr_log,
+                "auto_start": !opts.no_auto_start,
+                "auto_restart": !opts.no_auto_restart,
+                "max_restarts": opts.max_restarts,
+                "restart_delay_secs": opts.restart_delay,
+                "stop_timeout_secs": opts.stop_timeout,
+                "stdout_log": opts.stdout_log,
+                "stderr_log": opts.stderr_log,
                 "log_format": log_format,
-                "cpu_max": cpu_max,
-                "memory_max": memory_max,
-                "pids_max": pids_max,
-                "listen_ports": port,
-                "port_check": !no_port_check,
-                "ready_timeout_secs": ready_timeout,
-                "start_now": start,
+                "encoding": encoding,
+                "cpu_max": opts.cpu_max,
+                "memory_max": opts.memory_max,
+                "pids_max": opts.pids_max,
+                "listen_ports": opts.port,
+                "port_check": !opts.no_port_check,
+                "ready_timeout_secs": opts.ready_timeout,
+                "start_now": opts.start,
             });
             let resp = api
                 .post(&format!("/api/v1/processes/{name}"))

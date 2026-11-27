@@ -36,6 +36,7 @@ comfy-table = "7"
 rust-embed = "8"
 portable-pty = "0.8"
 windows-service = "0.8"
+encoding_rs = "0.8"
 
 [workspace.lints.clippy]
 redundant_clone = "warn"

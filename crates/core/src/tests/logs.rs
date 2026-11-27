@@ -263,6 +263,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stdout, path)],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &query,
             SearchOptions::new(4096, 10),
         );
@@ -304,6 +305,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stdout, path)],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &query,
             SearchOptions::new(4096, 1),
         );
@@ -332,6 +334,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stdout, path)],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &query,
             SearchOptions::new(full_len - 30, 10),
         );
@@ -356,6 +359,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stdout, out), (LogStream::Stderr, err)],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &LogQuery::default(),
             SearchOptions::default(),
         );
@@ -383,6 +387,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stdout, path)],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &LogQuery::default(),
             SearchOptions::default(),
         );
@@ -401,6 +406,7 @@ mod search_files {
         let report = search_files(
             &[(LogStream::Stderr, dir.path().join("absent.log"))],
             LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
             &LogQuery::default(),
             SearchOptions::default(),
         );

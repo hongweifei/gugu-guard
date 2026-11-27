@@ -28,6 +28,7 @@ fn minimal_config() -> ProcessConfig {
         stdout_log: None,
         stderr_log: None,
         log_format: Default::default(),
+        encoding: Default::default(),
         listen_ports: Vec::new(),
         port_check: true,
         ready_timeout_secs: 60,
@@ -88,6 +89,32 @@ terminal = true
 "#;
         let config: AppConfig = toml::from_str(toml).unwrap();
         assert!(config.daemon.web.terminal, "terminal = true 应被解析");
+    }
+
+    #[test]
+    fn parses_log_encoding_with_aliases() {
+        let toml = r#"
+[processes.svc]
+command = "echo hello"
+"#;
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert_eq!(
+            config.processes["svc"].encoding,
+            crate::logs::LogEncoding::Auto,
+            "未配置时按 UTF-8 优先、GBK 兜底"
+        );
+
+        for (value, expected) in [
+            ("utf-8", crate::logs::LogEncoding::Utf8),
+            ("utf8", crate::logs::LogEncoding::Utf8),
+            ("gbk", crate::logs::LogEncoding::Gbk),
+            ("cp936", crate::logs::LogEncoding::Gbk),
+        ] {
+            let toml =
+                format!("[processes.svc]\ncommand = \"echo hello\"\nencoding = \"{value}\"\n");
+            let config: AppConfig = toml::from_str(&toml).unwrap();
+            assert_eq!(config.processes["svc"].encoding, expected, "{value}");
+        }
     }
 
     #[test]

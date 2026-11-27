@@ -338,6 +338,7 @@ gugu-guard/
 | `stdout_log` | string | — | stdout log file path |
 | `stderr_log` | string | — | stderr log file path |
 | `log_format` | string | `auto` | Structured format for log lines: `auto` / `json` / `logfmt` / `text` |
+| `encoding` | string | `auto` | Text encoding for logs: `auto` (UTF-8 first, GBK fallback) / `utf-8` / `gbk` (`cp936`) |
 
 ### Health Check
 
@@ -382,7 +383,13 @@ notification is sent.
 stdout_log = "logs/my-app-stdout.log"
 stderr_log = "logs/my-app-stderr.log"
 log_format = "auto"       # auto: try JSON → logfmt → text per line; pin it with json / logfmt / text
+encoding = "auto"         # auto: UTF-8 first, GBK fallback; pin it with utf-8 / gbk
 ```
+
+- **Encoding** — the panel, WebSocket broadcasts and search decode with `encoding`: `auto` tries
+  strict UTF-8 first and falls back to GBK (code page 936 on Chinese Windows). GBK output from
+  `ping`, cmd built-ins and Python now reads correctly; log files always keep the raw bytes the
+  process wrote, so downloads match the original
 
 - **Parsing** — each line yields a level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`;
   numeric levels accept both syslog 0-7 and bunyan/pino 10-60), a message, structured fields and an

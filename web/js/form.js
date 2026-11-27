@@ -341,6 +341,7 @@ window.editProc = async function(name) {
         f('f-stdout').value = cfg.stdout_log || '';
         f('f-stderr').value = cfg.stderr_log || '';
         f('f-log-format').value = cfg.log_format || 'auto';
+        f('f-encoding').value = cfg.encoding || 'auto';
         f('f-cpu-max').value = cfg.cpu_max || '';
         f('f-memory-max').value = cfg.memory_max || '';
         f('f-pids-max').value = cfg.pids_max || '';
@@ -367,6 +368,7 @@ window.editProc = async function(name) {
         f('f-stdout').value = '';
         f('f-stderr').value = '';
         f('f-log-format').value = 'auto';
+        f('f-encoding').value = 'auto';
         f('f-cpu-max').value = '';
         f('f-memory-max').value = '';
         f('f-pids-max').value = '';
@@ -406,6 +408,7 @@ document.getElementById('process-form').onsubmit = async (e) => {
         stdout_log: document.getElementById('f-stdout').value || null,
         stderr_log: document.getElementById('f-stderr').value || null,
         log_format: document.getElementById('f-log-format').value || 'auto',
+        encoding: document.getElementById('f-encoding').value || 'auto',
         cpu_max: document.getElementById('f-cpu-max').value.trim() || null,
         memory_max: document.getElementById('f-memory-max').value.trim() || null,
         pids_max: document.getElementById('f-pids-max').value.trim() || null,

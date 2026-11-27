@@ -270,7 +270,15 @@
                         </select>
                         <div class="field-hint">结构化解析口径：决定日志面板的级别徽标与字段胶囊从哪里来</div>
                     </div>
-                    <div class="field"></div>
+                    <div class="field">
+                        <label>日志编码</label>
+                        <select id="f-encoding">
+                            <option value="auto">auto（UTF-8 优先，GBK 兜底）</option>
+                            <option value="utf-8">utf-8</option>
+                            <option value="gbk">gbk（中文 Windows 代码页 936）</option>
+                        </select>
+                        <div class="field-hint">面板、广播与检索的解码口径；日志文件始终保存程序输出的原始字节</div>
+                    </div>
                 </div>
 
                 <div class="section-title">网络、就绪与告警</div>

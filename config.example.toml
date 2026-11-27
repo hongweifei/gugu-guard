@@ -58,6 +58,9 @@ stdout_log = "logs/example-web-stdout.log"
 stderr_log = "logs/example-web-stderr.log"
 # log_format = "auto"        # 日志行结构化格式：auto 逐行识别 JSON → logfmt → 文本；
 #                            # 也可写死 json / logfmt / text，级别徽标与字段胶囊据此提取
+# encoding = "auto"          # 日志文本编码：auto 先按 UTF-8 严格解码、失败回落 GBK (代码页 936)；
+#                            # 中文 Windows 的 ping / cmd / Python 输出用 auto 即可正常显示；
+#                            # 也可写死 utf-8 / gbk。只影响面板、广播与检索，日志文件始终存原始字节
 
 # 监听端口：启动前检查占用、运行中统计连接数、作为依赖时判断是否就绪
 listen_ports = [8080]

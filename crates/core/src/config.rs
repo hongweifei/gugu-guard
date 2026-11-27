@@ -361,6 +361,10 @@ pub struct ProcessConfig {
     /// 日志行的结构化格式；默认 auto：逐行按 JSON → logfmt → 文本 逐档回退。
     #[serde(default)]
     pub log_format: crate::logs::LogFormat,
+    /// 日志文本编码；默认 auto：UTF-8 严格解码失败时按 GBK 解码。
+    /// 只影响面板、广播与检索，落盘文件仍是程序输出的原始字节。
+    #[serde(default)]
+    pub encoding: crate::logs::LogEncoding,
     /// 服务监听的端口：启动前做占用预检，运行期统计连接数，也作为就绪判定依据。
     #[serde(default)]
     pub listen_ports: Vec<u16>,

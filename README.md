@@ -340,6 +340,7 @@ gugu-guard/
 | `stdout_log` | string | — | stdout 日志文件路径 |
 | `stderr_log` | string | — | stderr 日志文件路径 |
 | `log_format` | string | `auto` | 日志行结构化格式：`auto` / `json` / `logfmt` / `text` |
+| `encoding` | string | `auto` | 日志文本编码：`auto`（UTF-8 优先、GBK 兜底）/ `utf-8` / `gbk`（`cp936`） |
 
 ### 健康检查
 
@@ -382,7 +383,13 @@ cooldown_secs = 300       # 同类告警的静默时长，防止重试风暴刷�
 stdout_log = "logs/my-app-stdout.log"
 stderr_log = "logs/my-app-stderr.log"
 log_format = "auto"       # auto: 逐行按 JSON → logfmt → 文本 回退；也可写死 json / logfmt / text
+encoding = "auto"         # auto: UTF-8 优先、GBK 兜底；也可写死 utf-8 / gbk
 ```
+
+- **编码口径** — 面板、WebSocket 广播与检索都按 `encoding` 解码：`auto` 先按 UTF-8
+  严格解码，失败再按 GBK（中文 Windows 的代码页 936）。`ping`、cmd 内部命令、
+  Python 默认的 GBK 输出都因此能正常显示中文；日志文件始终写程序输出的原始字节，
+  下载出来对得上原样
 
 - **解析口径** — 每行提取级别（`trace` / `debug` / `info` / `warn` / `error` / `fatal`，数字级别兼容
   syslog 0-7 与 bunyan/pino 10-60）、正文、结构化字段与行内时间。JSON 与 logfmt 的

@@ -30,6 +30,7 @@ fn test_config() -> ProcessConfig {
         stdout_log: None,
         stderr_log: None,
         log_format: Default::default(),
+        encoding: Default::default(),
         listen_ports: Vec::new(),
         port_check: true,
         ready_timeout_secs: 60,
@@ -456,6 +457,7 @@ mod read_stream_non_utf8 {
                 max_log_size_mb: None,
                 watcher: None,
                 format: crate::logs::LogFormat::Auto,
+                encoding: crate::logs::LogEncoding::Auto,
             },
         )
         .await;

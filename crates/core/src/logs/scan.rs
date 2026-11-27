@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::process::LogStream;
 
+use super::encoding::LogEncoding;
 use super::parse::{clean, parse_line, LogFormat, ParsedLine};
 use super::query::LogQuery;
 
@@ -85,6 +86,7 @@ pub struct LogSearchReport {
 pub fn search_files(
     files: &[(LogStream, PathBuf)],
     format: LogFormat,
+    encoding: LogEncoding,
     query: &LogQuery,
     options: SearchOptions,
 ) -> LogSearchReport {
@@ -96,6 +98,7 @@ pub fn search_files(
             path,
             stream,
             format,
+            encoding,
             query,
             options.budget_bytes,
             options.limit,
@@ -137,6 +140,7 @@ fn scan_file(
     path: &Path,
     stream: &LogStream,
     format: LogFormat,
+    encoding: LogEncoding,
     query: &LogQuery,
     budget_bytes: u64,
     limit: usize,
@@ -148,27 +152,25 @@ fn scan_file(
 
     let mut buffer = Vec::with_capacity(usize::try_from(len - start).unwrap_or(0) + 1);
     file.read_to_end(&mut buffer).ok()?;
-    let mut text = String::from_utf8_lossy(&buffer).into_owned();
+
+    // 按字节切行再逐行解码：GBK 双字节不会跨行，整块 lossy 反而会把每行都糊掉。
+    let mut lines = buffer.split(|byte| *byte == b'\n');
     if start > 0 {
-        // 从文件中段开始读，第一行可能被截断：丢掉这半行，别当成完整日志。
-        match text.find('\n') {
-            Some(pos) => {
-                text.drain(..=pos);
-            }
-            None => text.clear(),
-        }
+        // 从文件中段开始读，第一段一定是半行：丢掉它，别当成完整日志。
+        lines.next();
     }
 
     let mut hits: VecDeque<SearchHit> = VecDeque::new();
     let mut matched = 0_u64;
     let mut scanned_lines = 0_u64;
 
-    for raw in text.split('\n') {
+    for raw in lines {
+        let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
         if raw.is_empty() {
             continue;
         }
         scanned_lines += 1;
-        let line = clean(raw);
+        let line = clean(&encoding.decode(raw));
         if line.is_empty() {
             continue;
         }

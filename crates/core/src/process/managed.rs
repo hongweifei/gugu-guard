@@ -440,6 +440,7 @@ impl ManagedProcess {
                 let stderr = child.stderr.take();
                 let max_log_size = self.config.max_log_size_mb;
                 let format = self.config.log_format;
+                let encoding = self.config.encoding;
 
                 if let Some(stdout) = stdout {
                     let name = self.name.clone();
@@ -459,6 +460,7 @@ impl ManagedProcess {
                                 max_log_size_mb: max_log_size,
                                 watcher,
                                 format,
+                                encoding,
                             },
                         )
                         .await;
@@ -484,6 +486,7 @@ impl ManagedProcess {
                                 max_log_size_mb: max_log_size,
                                 watcher,
                                 format,
+                                encoding,
                             },
                         )
                         .await;

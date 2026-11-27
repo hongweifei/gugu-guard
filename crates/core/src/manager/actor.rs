@@ -294,11 +294,12 @@ async fn do_search_logs(
         )));
     }
     let format = proc.config().log_format;
+    let encoding = proc.config().encoding;
     let options = SearchOptions::new(budget_bytes, query.limit);
     let query = query.clone();
     // 读文件是同步 I/O：挪到阻塞线程池，别把 tokio 工作线程占住。
     let report = tokio::task::spawn_blocking(move || {
-        crate::logs::search_files(&files, format, &query, options)
+        crate::logs::search_files(&files, format, encoding, &query, options)
     })
     .await
     .map_err(|e| GuguError::ConfigError(format!("日志检索任务失败: {e}")))?;

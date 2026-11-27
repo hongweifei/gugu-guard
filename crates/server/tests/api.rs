@@ -704,6 +704,7 @@ mod create_process_nullable_fields {
             "auto_start": false,
             "start_now": false,
             "log_format": null,
+            "encoding": null,
             "stdout_log": null,
             "stderr_log": null,
             "cpu_max": null,
@@ -728,6 +729,10 @@ mod create_process_nullable_fields {
         assert!(
             saved.contains("log_format = \"auto\""),
             "落盘配置应写入默认的 auto 格式，实际:\n{saved}"
+        );
+        assert!(
+            saved.contains("encoding = \"auto\""),
+            "落盘配置应写入默认的 auto 编码，实际:\n{saved}"
         );
     }
 }

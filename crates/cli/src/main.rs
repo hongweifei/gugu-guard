@@ -114,51 +114,8 @@ enum Commands {
     #[command(about = "添加一个新进程")]
     Add {
         name: String,
-        #[arg(short = 'x', long)]
-        command: String,
-        #[arg(short, long, value_delimiter = ',')]
-        args: Vec<String>,
-        #[arg(short, long)]
-        dir: Option<String>,
-        #[arg(long, value_delimiter = ',')]
-        env: Vec<String>,
-        #[arg(long)]
-        no_auto_start: bool,
-        #[arg(long)]
-        no_auto_restart: bool,
-        #[arg(long, default_value_t = 3)]
-        max_restarts: u32,
-        #[arg(long, default_value_t = 5)]
-        restart_delay: u64,
-        #[arg(long, default_value_t = 10)]
-        stop_timeout: u64,
-        #[arg(long)]
-        stdout_log: Option<String>,
-        #[arg(long)]
-        stderr_log: Option<String>,
-        /// 日志格式：auto / json / logfmt / text（默认 auto 逐档尝试）
-        #[arg(long)]
-        log_format: Option<String>,
-        /// cgroup v2 硬限：CPU，如 50% / 0.5（核数）/ "50000 100000"（仅 Linux）
-        #[arg(long)]
-        cpu_max: Option<String>,
-        /// cgroup v2 硬限：内存，如 512M / 2G（仅 Linux）
-        #[arg(long)]
-        memory_max: Option<String>,
-        /// cgroup v2 硬限：任务数，防 fork 炸弹（仅 Linux）
-        #[arg(long)]
-        pids_max: Option<String>,
-        /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断
-        #[arg(short = 'p', long, value_delimiter = ',')]
-        port: Vec<u16>,
-        /// 关闭启动前的端口占用预检
-        #[arg(long)]
-        no_port_check: bool,
-        /// 依赖就绪的最长等待秒数
-        #[arg(long, default_value_t = 60)]
-        ready_timeout: u64,
-        #[arg(short, long)]
-        start: bool,
+        #[command(flatten)]
+        opts: Box<AddOptions>,
     },
 
     #[command(about = "移除一个进程")]
@@ -243,6 +200,59 @@ enum Commands {
 
     #[command(about = "重新加载配置文件")]
     Reload,
+}
+
+/// `gugu add` 的进程参数：字段多，单独成组，`Commands` 保持轻量。
+#[derive(clap::Args)]
+struct AddOptions {
+    #[arg(short = 'x', long)]
+    command: String,
+    #[arg(short, long, value_delimiter = ',')]
+    args: Vec<String>,
+    #[arg(short, long)]
+    dir: Option<String>,
+    #[arg(long, value_delimiter = ',')]
+    env: Vec<String>,
+    #[arg(long)]
+    no_auto_start: bool,
+    #[arg(long)]
+    no_auto_restart: bool,
+    #[arg(long, default_value_t = 3)]
+    max_restarts: u32,
+    #[arg(long, default_value_t = 5)]
+    restart_delay: u64,
+    #[arg(long, default_value_t = 10)]
+    stop_timeout: u64,
+    #[arg(long)]
+    stdout_log: Option<String>,
+    #[arg(long)]
+    stderr_log: Option<String>,
+    /// 日志格式：auto / json / logfmt / text（默认 auto 逐档尝试）
+    #[arg(long)]
+    log_format: Option<String>,
+    /// 日志文本编码：auto / utf-8 / gbk（默认 auto：UTF-8 优先、GBK 兜底）
+    #[arg(long)]
+    encoding: Option<String>,
+    /// cgroup v2 硬限：CPU，如 50% / 0.5（核数）/ "50000 100000"（仅 Linux）
+    #[arg(long)]
+    cpu_max: Option<String>,
+    /// cgroup v2 硬限：内存，如 512M / 2G（仅 Linux）
+    #[arg(long)]
+    memory_max: Option<String>,
+    /// cgroup v2 硬限：任务数，防 fork 炸弹（仅 Linux）
+    #[arg(long)]
+    pids_max: Option<String>,
+    /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断
+    #[arg(short = 'p', long, value_delimiter = ',')]
+    port: Vec<u16>,
+    /// 关闭启动前的端口占用预检
+    #[arg(long)]
+    no_port_check: bool,
+    /// 依赖就绪的最长等待秒数
+    #[arg(long, default_value_t = 60)]
+    ready_timeout: u64,
+    #[arg(short, long)]
+    start: bool,
 }
 
 #[derive(Subcommand)]

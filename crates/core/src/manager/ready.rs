@@ -98,6 +98,7 @@ mod tests {
             stdout_log: None,
             stderr_log: None,
             log_format: Default::default(),
+            encoding: Default::default(),
             listen_ports: Vec::new(),
             port_check: true,
             ready_timeout_secs: 60,

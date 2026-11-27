@@ -969,6 +969,98 @@ mod fs_management {
         );
     }
 
+    fn write_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).expect("建归档");
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in entries {
+            zip.start_file(*name, options).expect("写条目");
+            zip.write_all(body).expect("写内容");
+        }
+        zip.finish().expect("收尾");
+    }
+
+    fn extract_body(path: &std::path::Path) -> (String, serde_json::Value) {
+        (
+            format!("/api/v1/fs/extract?path={}", encode(path)),
+            serde_json::json!({ "path": uri_path(path) }),
+        )
+    }
+
+    #[tokio::test]
+    async fn extract_unpacks_the_archive_beside_it() {
+        let root = tempdir();
+        let archive = root.path().join("资料.zip");
+        write_zip(&archive, &[("a.txt", b"alpha"), ("sub/中文.txt", b"beta")]);
+        let (uri, body) = extract_body(&archive);
+
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, body).await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(text.contains("已解压"), "{text}");
+
+        let target = root.path().join("资料");
+        assert_eq!(std::fs::read(target.join("a.txt")).expect("读回"), b"alpha");
+        assert_eq!(
+            std::fs::read(target.join("sub/中文.txt")).expect("读回"),
+            b"beta"
+        );
+        assert!(!has_leftovers(root.path()), "解压不该留下中转目录");
+    }
+
+    #[tokio::test]
+    async fn extract_needs_overwrite_and_respects_read_only() {
+        let root = tempdir();
+        let archive = root.path().join("data.zip");
+        write_zip(&archive, &[("fresh.txt", b"new")]);
+        std::fs::create_dir_all(root.path().join("data")).expect("建旧目录");
+        std::fs::write(root.path().join("data/stale.txt"), b"old").expect("写旧文件");
+        let (uri, body) = extract_body(&archive);
+
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, body.clone()).await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains("目标已存在"), "{text}");
+
+        let readonly = send_json(app_with(root.path(), false), "POST", &uri, body.clone()).await;
+        assert_eq!(readonly.status(), StatusCode::FORBIDDEN, "只读模式应拒绝");
+
+        let mut overwrite = body;
+        overwrite["overwrite"] = serde_json::Value::Bool(true);
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, overwrite).await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(root.path().join("data/fresh.txt").is_file());
+        assert!(
+            !root.path().join("data/stale.txt").exists(),
+            "覆盖是整目录替换"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_refuses_unknown_formats_and_outside_paths() {
+        let root = tempdir();
+        let unsupported = root.path().join("a.7z");
+        std::fs::write(&unsupported, b"7z").expect("写文件");
+        let (uri, body) = extract_body(&unsupported);
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, body).await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert!(text.contains("不支持"), "{text}");
+
+        let outside = tempdir();
+        let escape = outside.path().join("x.zip");
+        std::fs::write(&escape, b"PK").expect("写越界文件");
+        let (uri, body) = extract_body(&escape);
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, body).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "越界路径应拒绝");
+    }
+
     #[tokio::test]
     async fn chunked_upload_assembles_the_file_and_cleans_up() {
         let root = tempdir();

@@ -83,6 +83,26 @@ pub(super) async fn dispatch(api: &ApiHelper<'_>, action: &FsAction) -> Result<(
             }
         }
 
+        FsAction::Extract {
+            path,
+            dest,
+            overwrite,
+        } => {
+            // 路径同时放进查询串：审计中间件在读完请求体之前就要记下对象。
+            let url = format!("/api/v1/fs/extract?path={}", encode_query(path));
+            let resp = api
+                .post(&url)
+                .json(&serde_json::json!({
+                    "path": path,
+                    "dest": dest,
+                    "overwrite": overwrite,
+                }))
+                .send()
+                .await
+                .context("无法连接到守护进程")?;
+            print_api_response(resp).await?;
+        }
+
         FsAction::Mkdir { path, parents } => {
             // 路径同时放进查询串：审计中间件在读完请求体之前就要记下对象。
             let url = format!("/api/v1/fs/mkdir?path={}", encode_query(path));

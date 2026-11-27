@@ -334,6 +334,17 @@ enum FsAction {
         recursive: bool,
     },
 
+    #[command(about = "解压 zip、tar 或 tar.gz 归档")]
+    Extract {
+        path: String,
+        /// 目标目录；缺省为归档旁的同名目录
+        #[arg(short, long)]
+        dest: Option<String>,
+        /// 覆盖已存在的目标目录（整目录替换）
+        #[arg(long)]
+        overwrite: bool,
+    },
+
     #[command(about = "新建目录")]
     Mkdir {
         path: String,

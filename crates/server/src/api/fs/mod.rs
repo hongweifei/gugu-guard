@@ -9,6 +9,7 @@ mod read;
 mod session;
 mod transfer;
 mod types;
+mod unpack;
 mod write;
 
 use axum::extract::{Query, State};
@@ -28,6 +29,7 @@ use read::{download_fs, read_fs};
 use session::{abort_fs, begin_fs, chunk_fs, finish_fs, session_fs};
 use transfer::upload_fs;
 use types::{FsRoots, FsSuccess, PathQuery};
+use unpack::extract_fs;
 use write::{copy_fs, mkdir_fs, remove_fs, rename_fs, touch_fs, write_fs};
 
 pub(super) fn routes() -> Router<AppState> {
@@ -46,6 +48,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/api/v1/fs/upload/session/{id}/finish", post(finish_fs))
         .route("/api/v1/fs/write", put(write_fs))
+        .route("/api/v1/fs/extract", post(extract_fs))
         .route("/api/v1/fs/mkdir", post(mkdir_fs))
         .route("/api/v1/fs/touch", post(touch_fs))
         .route("/api/v1/fs/rename", post(rename_fs))

@@ -211,6 +211,10 @@ function rowHtml(entry, index) {
     const actions = [];
     // 目录下载在服务端打包成 zip；符号链接的目标可能在白名单之外，不提供下载。
     if (entry.kind !== 'link') actions.push(actionButton('download', entry.is_dir ? '打包' : '下载', false));
+    // 归档解压到旁边的同名目录；只读模式与符号链接都不提供入口。
+    if (writable && entry.kind !== 'link' && isArchive(entry.name)) {
+        actions.push(actionButton('extract', '解压', false));
+    }
     actions.push(actionButton('rename', '改名', !writable));
     actions.push(actionButton('copy', '复制', !writable));
     // 白名单根自身不提供删除：删掉根等于把整个视图删空。
@@ -226,6 +230,14 @@ function rowHtml(entry, index) {
         <td class="ft-time mono">${esc(fmtDateTime(entry.modified))}</td>
         <td class="ft-actions">${actions.join('')}</td>
     </tr>`;
+}
+
+/// 可解压的归档后缀，与服务端支持的范围一致。
+const ARCHIVE_SUFFIXES = ['.zip', '.tar', '.tar.gz', '.tgz'];
+
+function isArchive(name) {
+    const lower = String(name || '').toLowerCase();
+    return ARCHIVE_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
 function actionButton(act, label, disabled, danger = false) {
@@ -247,6 +259,7 @@ function onRowClick(event) {
         return;
     }
     if (act === 'download') download(entry);
+    if (act === 'extract') extractEntry(entry, button);
     if (act === 'rename') renameEntry(entry);
     if (act === 'copy') copyEntry(entry);
     if (act === 'remove') removeEntry(entry);
@@ -797,6 +810,54 @@ function fileOf(entry) {
 /// 上传冲突由服务端按 400 返回，消息里带「已存在」。
 function isExistsError(error) {
     return String(error?.message || '').includes('已存在');
+}
+
+// ── 解压 ──────────────────────────────────────────────
+
+/// 解压归档到旁边的同名目录；目标已存在时先确认整目录覆盖。
+///
+/// 进行中把按钮置成「解压中」，比飘一条提示更贴位置，重绘后按钮自然恢复。
+async function extractEntry(entry, button) {
+    if (!writable) return;
+    const url = `/fs/extract?path=${encodeURIComponent(entry.path)}`;
+    const busy = (on) => {
+        if (!button) return;
+        button.disabled = on;
+        button.textContent = on ? '解压中' : '解压';
+    };
+    busy(true);
+    try {
+        const result = await api('POST', url, { path: entry.path });
+        toast(result?.message || `已解压 ${entry.name}`, 'success');
+        await reload();
+        return;
+    } catch (error) {
+        if (error?.message === 'Unauthorized') return;
+        if (!String(error?.message || '').includes('目标已存在')) {
+            toast(error?.message || `解压 ${entry.name} 失败`, 'error');
+            return;
+        }
+    } finally {
+        busy(false);
+    }
+
+    const ok = await confirmAction({
+        title: '覆盖解压目标',
+        text: `「${entry.name}」对应的目标目录已经存在，确认删掉它并重新解压？`,
+        okText: '覆盖',
+        danger: true,
+    });
+    if (!ok) return;
+    busy(true);
+    try {
+        const result = await api('POST', url, { path: entry.path, overwrite: true });
+        toast(result?.message || `已解压 ${entry.name}`, 'success');
+        await reload();
+    } catch (error) {
+        if (error?.message !== 'Unauthorized') toast(error?.message || `解压 ${entry.name} 失败`, 'error');
+    } finally {
+        busy(false);
+    }
 }
 
 // ── 新建、改名、复制与删除 ─────────────────────────────

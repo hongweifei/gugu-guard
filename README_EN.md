@@ -26,7 +26,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Version Update** — the sidebar version is the entry point: check the latest release, install it in one click, and let the daemon restart itself; auto-update can be off, check-only or install, with sources from GitHub, Gitee or your own manifest
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
-- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads and zip archives of whole directories, uploads (drag and drop, whole folders, chunked resume for large files, live progress and cancel), creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
+- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads and zip archives of whole directories, uploads (drag and drop, whole folders, chunked resume for large files, live progress and cancel), archive extraction (zip / tar / tar.gz into a sibling folder, overwrite confirmed), creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
 - **CORS Config** — Configurable allowed cross-origin origins
@@ -205,6 +205,7 @@ gugu fs ls [PATH] [--json]        # List a directory (defaults to the first whit
 gugu fs cat <PATH> [--limit N]    # Preview text (UTF-8 / GBK auto-decoded; N bytes max)
 gugu fs get <PATH> [-o DIR] [-r]   # Download a file; -r pulls a whole directory and keeps its layout
 gugu fs put <LOCAL> <PATH> [--overwrite] [-r]  # Upload; -r pushes a directory, both show progress
+gugu fs extract <PATH> [-d DEST] [--overwrite]  # Unpack zip / tar / tar.gz into a sibling folder by default
 gugu fs mkdir <PATH> [-p]         # Create a directory; -p creates parents
 gugu fs touch <PATH>              # Create an empty file
 gugu fs mv <FROM> <TO> [--overwrite]   # Rename or move
@@ -290,6 +291,7 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | GET | `/api/v1/fs/read?path=...&limit=1048576` | Text preview (UTF-8 / GBK auto-decoded; binaries return a flag only) |
 | GET | `/api/v1/fs/download?path=...` | Stream the raw file (UTF-8 name via RFC 5987) |
 | GET | `/api/v1/fs/archive?path=...` | Zip a whole directory (streamed; symlinks skipped, raw content above 2 GB refused) |
+| POST | `/api/v1/fs/extract?path=...` | Unpack an archive `{path, dest?, overwrite}` (zip / tar / tar.gz; sibling folder by default) |
 | POST | `/api/v1/fs/upload?path=...&overwrite=false` | Upload: the body is the content, streamed to a temp file then renamed |
 | POST | `/api/v1/fs/upload/session?path=...` | Open a chunked session `{path, size, overwrite}`, returns `{id, offset}` |
 | GET | `/api/v1/fs/upload/session/{id}` | Bytes received so far; read this offset before resuming |
@@ -508,6 +510,7 @@ flowchart LR
     S -->|"list / read / download / archive"| R["Entries, file content and zip"]
     S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["Same-directory temp file → rename"]
     S -->|"upload/session chunks"| C["Session table<br/>offset checks and resume"]
+    S -->|"extract an archive"| X["Unpack into a temp folder<br/>→ rename into place"]
     S -.->|"outside roots or read-only"| D["403"]
 ```
 
@@ -528,6 +531,17 @@ flowchart LR
   RFC 5987 UTF-8 name. Directories go through `/fs/archive`: the zip is built in the system temp
   directory, deleted once the response ends, symlinks are skipped, and raw content above 2 GB is refused
   with a hint to download subdirectories
+- **Extraction** — zip, tar and tar.gz / tgz are supported. The target defaults to a sibling folder named
+  after the archive (`foo.zip` → `foo/`) and can be given explicitly; an existing target needs an explicit
+  overwrite, and overwriting replaces the whole directory instead of merging. Entries are unpacked into a
+  `.gugu-unpack-` folder next to the target and renamed into place only after every entry succeeds, so a
+  failure leaves no half-built directory. A single top-level directory carrying the target's own name is
+  folded up, so `foo.zip` holding `foo/` unpacks to `foo/` rather than `foo/foo/`; a differently named
+  top level is kept as the author laid it out
+- **Extraction limits** — `..`, absolute paths and drive letters in entry names are skipped, and symlink
+  and device entries are skipped as well (a link pointing outside the roots would bypass the scope check).
+  Unpacked content is capped at 2 GB and 20,000 entries; compression ratio is not limited, the byte cap
+  covers zip bombs
 - **Progress and cancel** — uploads read progress from XHR, downloads compute a percentage from
   `Content-Length` and the bytes read. The WebUI shows one transfer row with name, percentage and bytes
   received, plus a cancel button. Cancelling only aborts the request: the bytes already received stay in
@@ -541,12 +555,13 @@ flowchart LR
 - **Root protection** — deleting a directory requires `recursive=true`; a whitelist root itself cannot be
   deleted or renamed, so no single click removes the whole view's entry point
 - **Audit codes** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` /
-  `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`, with the concrete path as the target.
-  Audit runs before the request body is read, so write calls carry the path in the `path` or `from` query
-  parameter as well (the CLI and WebUI do); custom clients can do the same to have the file name recorded
+  `fs.extract` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`, with the concrete path as
+  the target. Audit runs before the request body is read, so write calls carry the path in the `path` or
+  `from` query parameter as well (the CLI and WebUI do); custom clients can do the same to have the file
+  name recorded
 - **Multiple nodes** — on a remote node the view goes through the hub proxy to that machine's whitelist;
-  uploads, chunk appends and archive downloads are proxied as streams and are not bound by the 4 MB proxy
-  body limit
+  uploads, chunk appends, extraction and archive downloads are proxied as streams and are not bound by the
+  4 MB proxy body limit
 - **Exposure gate** — enabling writes on a non-loopback bind without an `api_key` makes the daemon refuse
   to start; read-only mode has no such restriction. Startup logs print the root count and read/write mode
 - **Health check** — `gugu check` prints whether each root exists; an empty entry is a config error

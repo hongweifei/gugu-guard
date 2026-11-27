@@ -464,9 +464,9 @@ async fn print_api_response(resp: reqwest::Response) -> Result<()> {
         return Err(api_error(status, &text));
     }
     let body: serde_json::Value = resp.json().await?;
-    if let Some(msg) = body.get("message") {
+    if let Some(msg) = body.get("message").and_then(serde_json::Value::as_str) {
         println!("{msg}");
-    } else if let Some(err) = body.get("error") {
+    } else if let Some(err) = body.get("error").and_then(serde_json::Value::as_str) {
         eprintln!("错误: {err}");
     }
     Ok(())

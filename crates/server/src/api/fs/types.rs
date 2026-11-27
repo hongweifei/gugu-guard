@@ -80,6 +80,20 @@ pub(super) struct PathBody {
     pub(super) path: String,
 }
 
+/// 解压归档：归档路径、可选的目标目录与覆盖意图。
+///
+/// 归档路径同时放在查询串里供审计记录对象，体里的 `path` 是兼容写法。
+#[derive(Debug, Deserialize)]
+pub(super) struct ExtractBody {
+    #[serde(default)]
+    pub(super) path: String,
+    /// 缺省为归档旁的同名目录。
+    #[serde(default)]
+    pub(super) dest: Option<String>,
+    #[serde(default)]
+    pub(super) overwrite: bool,
+}
+
 /// 改名、移动与复制的共同形状。
 #[derive(Debug, Deserialize)]
 pub(super) struct PairBody {

@@ -7,11 +7,13 @@ mod entry;
 mod guard;
 mod ops;
 mod text;
+mod unpack;
 
 pub use entry::{list, stat, Entry, EntryKind, Listing};
 pub use guard::Scope;
 pub use ops::{copy, create_dir, create_file, relocate, remove};
 pub use text::{read, write, TextFile, MAX_PREVIEW_BYTES, MAX_WRITE_BYTES};
+pub use unpack::{extract, Extracted, MAX_EXTRACT_BYTES};
 
 /// 传输中转文件的前缀：上传与分片会话在目标同目录写临时文件，
 /// 列表与打包都跳过这些名字，面板里因此不会出现半成品。

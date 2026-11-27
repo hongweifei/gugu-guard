@@ -212,6 +212,7 @@ fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
         ("POST", ["fs", "upload", "session", _, "finish"]) => Some(("fs.upload", "完成分片上传")),
         ("DELETE", ["fs", "upload", "session", _]) => Some(("fs.upload.abort", "放弃上传")),
         ("PUT", ["fs", "write"]) => Some(("fs.write", "保存文件")),
+        ("POST", ["fs", "extract"]) => Some(("fs.extract", "解压归档")),
         ("POST", ["fs", "mkdir"]) => Some(("fs.mkdir", "新建目录")),
         ("POST", ["fs", "touch"]) => Some(("fs.create", "新建文件")),
         ("POST", ["fs", "rename"]) => Some(("fs.rename", "移动或重命名")),

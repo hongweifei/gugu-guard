@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-服务可观测性、日志结构化、cgroup v2 硬限、操作审计、内置终端、多节点与日志编码七批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
+服务可观测性、日志结构化、资源硬限、操作审计、内置终端、多节点与日志编码七批，不追求向后兼容：配置新增字段、API 新增接口、结构体新增字段。
 
 ### 新增
 
@@ -43,13 +43,15 @@
 - **配置** —— 进程配置新增 `log_format`（`auto` / `json` / `logfmt` / `text`）；`LogEntry` 增加可选 `parsed` 字段，WS 载荷在纯文本行上保持原样
 - **仓库** —— `.gitignore` 的 `logs/` 改为锚定根目录的 `/logs/`，源码目录 `crates/core/src/logs` 不再被误忽略
 
-### 资源硬限（cgroup v2）
+### 资源硬限（cgroup v2 / Job Object）
 
 - **每进程独立 cgroup** —— Linux 下启动前创建 `<cgroup_root>/gugu/<名>-<哈希>`，把 `cpu.max` / `memory.max` / `pids.max` 写好后，子进程在 `fork` 之后、`exec` 之前写入自己的 pid：进程树从第一条指令起就在限值内，没有「先跑再搬」的空窗
 - **限值写法** —— `cpu_max` 支持 `50%`、`0.5`（核数）与 `50000 100000`（quota period），换算与内核校验（周期 1000..=1000000µs、配额 ≥1000µs）在解析层完成；`memory_max` 支持 `512M` / `2G` / 字节数（1024 进制，最低一页）；`pids_max` 为正整数。空白或 `max` 表示不限
-- **内存语义** —— `memory.max` 由内核执行，越过即整组 OOM（`memory.oom.group = 1`），并写 `memory.swap.max = 0` 防止靠换页绕过上限；守护进程只观测到进程退出，`auto_restart` 照常生效
+- **内存语义** —— Linux 的 `memory.max` 由内核执行，越过即整组 OOM（`memory.oom.group = 1`），并写 `memory.swap.max = 0` 防止靠换页绕过上限；守护进程只观测到进程退出，`auto_restart` 照常生效
 - **继承与清理** —— 子进程与孙进程留在同一 cgroup；进程退出、停止或启动失败时对整个 cgroup 执行 `cgroup.kill`、等其清空后删目录；上次运行留下的同名目录在下次启动前先清空
-- **接口** —— 进程配置新增 `cpu_max` / `memory_max` / `pids_max`，守护进程配置新增 `cgroup_root`；POST/PUT 进程接口接受这三个字段，`gugu add` 增加 `--cpu-max` / `--memory-max` / `--pids-max`，WebUI 表单新增「资源硬限」区块。非 Linux 平台配置硬限会在启动时明确失败，不静默忽略
+- **Windows 映射** —— 同一组字段落到 Job Object：`memory_max` 是 Job 提交内存上限（`JobMemoryLimit`），`pids_max` 是活动进程数上限（`ActiveProcessLimit`），`cpu_max` 是 CPU 速率硬顶（`JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP`）。限值在创建 Job 时写入，主进程 `spawn` 后立即分配进 Job，之后派生的子进程自动继承
+- **Windows 口径** —— CPU 按整机占比节流（`cpu_max = "10%"` 在 16 逻辑核机器上是整机 0.625%，启动日志打印实际占比），是限速而不是杀进程；内存越界时新的分配失败，进程通常自行报错退出；进程数只统计进程，不统计线程
+- **接口** —— 进程配置新增 `cpu_max` / `memory_max` / `pids_max`，守护进程配置新增 `cgroup_root`；POST/PUT 进程接口接受这三个字段，`gugu add` 增加 `--cpu-max` / `--memory-max` / `--pids-max`，WebUI 表单新增「资源硬限」区块。既不是 Linux 也不是 Windows 的平台配置硬限会在启动时明确失败，不静默忽略
 
 ### 操作审计
 

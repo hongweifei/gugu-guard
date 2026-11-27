@@ -233,13 +233,13 @@ struct AddOptions {
     /// 日志文本编码：auto / utf-8 / gbk（默认 auto：UTF-8 优先、GBK 兜底）
     #[arg(long)]
     encoding: Option<String>,
-    /// cgroup v2 硬限：CPU，如 50% / 0.5（核数）/ "50000 100000"（仅 Linux）
+    /// 资源硬限：CPU，如 50% / 0.5（核数）/ "50000 100000"；Linux 走 cgroup 配额，Windows 按整机占比节流
     #[arg(long)]
     cpu_max: Option<String>,
-    /// cgroup v2 硬限：内存，如 512M / 2G（仅 Linux）
+    /// 资源硬限：内存，如 512M / 2G；Linux 越界整组 OOM，Windows 限制 Job 提交内存
     #[arg(long)]
     memory_max: Option<String>,
-    /// cgroup v2 硬限：任务数，防 fork 炸弹（仅 Linux）
+    /// 资源硬限：进程/任务数，防 fork 炸弹；Windows 只统计进程
     #[arg(long)]
     pids_max: Option<String>,
     /// 进程监听的端口（逗号分隔）：用于启动前端口预检、连接数统计与就绪判断

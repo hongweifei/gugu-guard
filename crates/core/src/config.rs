@@ -143,7 +143,7 @@ pub struct DaemonConfig {
     /// webhook 载荷格式，默认 dingtalk（钉钉与企微同形）。
     #[serde(default)]
     pub webhook_format: WebhookFormat,
-    /// cgroup v2 硬限的落地目录；默认 `/sys/fs/cgroup`。
+    /// Linux 上 cgroup v2 硬限的落地目录；默认 `/sys/fs/cgroup`。
     /// 容器或 systemd 委派环境里指向自己有写权限的子树。
     #[serde(default)]
     pub cgroup_root: Option<PathBuf>,
@@ -343,13 +343,15 @@ pub struct ProcessConfig {
     /// 进程树内存上限 (MB)：超过则按自动重启路径重启（防泄漏）。
     #[serde(default)]
     pub max_memory_mb: Option<u64>,
-    /// cgroup v2 硬限：CPU 带宽，`50%` / `0.5`（核数）/ `50000 100000`（quota period）。
+    /// 资源硬限：CPU 带宽，`50%` / `0.5`（核数）/ `50000 100000`（quota period）。
+    /// Linux 写进 cgroup 配额，Windows 按整机占比折算成节流上限。
     #[serde(default)]
     pub cpu_max: Option<String>,
-    /// cgroup v2 硬限：内存，`512M` / `2G` / 字节数；越界由内核整组 OOM。
+    /// 资源硬限：内存，`512M` / `2G` / 字节数。
+    /// Linux 越界由内核整组 OOM，Windows 限制 Job 的提交内存。
     #[serde(default)]
     pub memory_max: Option<String>,
-    /// cgroup v2 硬限：任务数（防 fork 炸弹），如 `128`。
+    /// 资源硬限：进程/任务数（防 fork 炸弹），如 `128`。Windows 只统计进程。
     #[serde(default)]
     pub pids_max: Option<String>,
     #[serde(default)]

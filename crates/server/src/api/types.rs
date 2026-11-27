@@ -271,13 +271,13 @@ pub(super) struct CreateProcessRequest {
     group: Option<String>,
     #[serde(default)]
     max_memory_mb: Option<u64>,
-    /// cgroup v2 硬限：CPU（`50%` / `0.5` / `50000 100000`）。
+    /// 资源硬限：CPU（`50%` / `0.5` / `50000 100000`）；Linux 走 cgroup 配额，Windows 按整机占比节流。
     #[serde(default)]
     cpu_max: Option<String>,
-    /// cgroup v2 硬限：内存（`512M` / `2G` / 字节数）。
+    /// 资源硬限：内存（`512M` / `2G` / 字节数）；Linux 越界整组 OOM，Windows 限制 Job 提交内存。
     #[serde(default)]
     memory_max: Option<String>,
-    /// cgroup v2 硬限：任务数。
+    /// 资源硬限：进程/任务数。Windows 只统计进程。
     #[serde(default)]
     pids_max: Option<String>,
     #[serde(default)]

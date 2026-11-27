@@ -1,7 +1,7 @@
 //! `ManagedProcess`：单个被守护进程的生命周期状态机。
 //!
 //! 平台机制不在此文件：启动命令构造在 [`command`]，停止/强杀在 [`terminate`]，
-//! 输出采集在 [`capture`]，Windows 进程树在 [`job`]。
+//! 输出采集在 [`capture`]，资源硬限在 [`crate::cgroup`]。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::cgroup::{Cgroup, DEFAULT_BASE};
+use crate::cgroup::{self, Limiter, DEFAULT_BASE};
 use crate::config::ProcessConfig;
 use crate::error::{GuguError, Result};
 use crate::history::History;
@@ -28,8 +28,6 @@ use super::{UsageSample, UsageSampler, MAX_EXIT_HISTORY};
 
 #[cfg(windows)]
 use super::command::{is_bat_cmd, resolve_program, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
-#[cfg(windows)]
-use super::job;
 
 const LOG_BROADCAST_CAPACITY: usize = 256;
 
@@ -37,8 +35,6 @@ pub struct ManagedProcess {
     name: String,
     config: ProcessConfig,
     child: Option<Child>,
-    #[cfg(windows)]
-    job: Option<job::Job>,
     status: ProcessStatus,
     crash_restart_count: u32,
     health_failures: u32,
@@ -60,9 +56,9 @@ pub struct ManagedProcess {
     log_watcher: Option<Arc<LogWatcher>>,
     /// 监听端口上的已建立连接数（由监控循环刷新）。
     connections: u32,
-    /// 本进程当前所在 cgroup（只在配置了 cpu_max / memory_max / pids_max 时存在）。
-    cgroup: Option<Cgroup>,
-    /// cgroup v2 挂载点，来自 `daemon.cgroup_root`。
+    /// 本进程当前所在的硬限载体（Linux 的 cgroup、Windows 的 Job Object）。
+    limiter: Option<Limiter>,
+    /// 硬限落地目录，来自 `daemon.cgroup_root`；仅 Linux 使用。
     cgroup_base: PathBuf,
 }
 
@@ -74,8 +70,6 @@ impl ManagedProcess {
             name,
             config,
             child: None,
-            #[cfg(windows)]
-            job: None,
             status: ProcessStatus::Stopped,
             crash_restart_count: 0,
             health_failures: 0,
@@ -92,7 +86,7 @@ impl ManagedProcess {
             history: Arc::new(History::disabled()),
             log_watcher,
             connections: 0,
-            cgroup: None,
+            limiter: None,
             cgroup_base: PathBuf::from(DEFAULT_BASE),
         }
     }
@@ -298,7 +292,7 @@ impl ManagedProcess {
         self.status = ProcessStatus::Starting;
         self.abort_log_tasks();
 
-        // 硬限先落地：cgroup 建不出来或限值写不进去，就不该让进程跑起来。
+        // 硬限先落地：载体建不出来或限值写不进去，就不该让进程跑起来。
         let spec = match self.config.cgroup_spec() {
             Ok(spec) => spec,
             Err(e) => {
@@ -308,20 +302,13 @@ impl ManagedProcess {
                 return Err(GuguError::StartFailed(self.name.clone(), reason));
             }
         };
-        let mut cgroup = if spec.is_active() {
-            match Cgroup::create(&self.cgroup_base, &self.name, &spec) {
-                Ok(cgroup) => {
-                    tracing::info!("[{}] cgroup 硬限已就绪: {}", self.name, spec.describe());
-                    Some(cgroup)
-                }
-                Err(reason) => {
-                    tracing::error!("[{}] cgroup 硬限创建失败: {}", self.name, reason);
-                    self.status = ProcessStatus::Failed(reason.clone());
-                    return Err(GuguError::StartFailed(self.name.clone(), reason));
-                }
+        let mut limiter = match cgroup::prepare(&self.cgroup_base, &self.name, &spec) {
+            Ok(limiter) => limiter,
+            Err(reason) => {
+                tracing::error!("[{}] 硬限创建失败: {}", self.name, reason);
+                self.status = ProcessStatus::Failed(reason.clone());
+                return Err(GuguError::StartFailed(self.name.clone(), reason));
             }
-        } else {
-            None
         };
 
         // shell=true 时保持旧行为：command+args 拼接后交给 shell (支持管道等)。
@@ -392,12 +379,15 @@ impl ManagedProcess {
             cmd.current_dir(dir);
         }
 
-        // fork 之后、exec 之前把自己写进 cgroup.procs：进程树从第一条指令起就受限。
+        // Linux：fork 之后、exec 之前把自己写进 cgroup.procs，进程树从第一条指令起就受限。
         #[cfg(target_os = "linux")]
-        if let Some(cg) = cgroup.as_ref() {
-            if let Err(reason) = cg.attach(&mut cmd) {
-                if let Some(cg) = cgroup.take() {
-                    cg.kill_and_remove();
+        if limiter.is_some() {
+            let attached = limiter
+                .as_ref()
+                .map_or(Ok(()), |limiter| limiter.attach(&mut cmd));
+            if let Err(reason) = attached {
+                if let Some(limiter) = limiter.take() {
+                    limiter.kill_and_remove();
                 }
                 tracing::error!("[{}] 无法把进程加入 cgroup: {}", self.name, reason);
                 self.status = ProcessStatus::Failed(reason.clone());
@@ -408,33 +398,22 @@ impl ManagedProcess {
         match cmd.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
-                if let Some(cg) = cgroup.as_mut() {
-                    cg.finish_spawn();
-                }
-                self.cgroup = cgroup;
-
-                // Windows: 将子进程分配到 Job Object，确保进程树可控终止
-                #[cfg(windows)]
-                {
-                    match job::create_kill_on_close_job() {
-                        Ok(job) => {
-                            if let Some(pid) = pid {
-                                if let Err(e) = job.assign_process(pid) {
-                                    tracing::warn!(
-                                        "[{}] 无法将进程 {} 分配到 Job Object: {}",
-                                        self.name,
-                                        pid,
-                                        e
-                                    );
-                                }
+                // Windows：在这里把主进程分配进 Job；Linux 的子进程已在 exec 前落位。
+                if let Some(active) = limiter.as_mut() {
+                    if let Err(reason) = active.finish_spawn(pid) {
+                        // 配了硬限就必须真的生效；只有未配限值时的 Job 失败可以降级运行。
+                        if spec.is_active() {
+                            if let Some(active) = limiter.take() {
+                                active.kill_and_remove();
                             }
-                            self.job = Some(job);
+                            tracing::error!("[{}] 硬限未生效: {}", self.name, reason);
+                            self.status = ProcessStatus::Failed(reason.clone());
+                            return Err(GuguError::StartFailed(self.name.clone(), reason));
                         }
-                        Err(e) => {
-                            tracing::warn!("[{}] 创建 Job Object 失败: {}", self.name, e);
-                        }
+                        tracing::warn!("[{}] {}", self.name, reason);
                     }
                 }
+                self.limiter = limiter;
 
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
@@ -508,8 +487,8 @@ impl ManagedProcess {
                 Ok(())
             }
             Err(e) => {
-                if let Some(cg) = cgroup {
-                    cg.kill_and_remove();
+                if let Some(limiter) = limiter {
+                    limiter.kill_and_remove();
                 }
                 self.status = ProcessStatus::Failed(e.to_string());
                 tracing::error!("[{}] 启动失败: {}", self.name, e);
@@ -518,10 +497,11 @@ impl ManagedProcess {
         }
     }
 
-    /// 结束 cgroup：杀掉还留在里面的子进程并删除目录。进程退出后也要调用。
-    fn drop_cgroup(&mut self) {
-        if let Some(cgroup) = self.cgroup.take() {
-            cgroup.kill_and_remove();
+    /// 释放硬限载体：Linux 杀掉还留在 cgroup 里的子进程并删除目录，
+    /// Windows 终止 Job 里的进程树。进程退出后也要调用。
+    fn drop_limiter(&mut self) {
+        if let Some(limiter) = self.limiter.take() {
+            limiter.kill_and_remove();
         }
     }
 
@@ -545,7 +525,7 @@ impl ManagedProcess {
                 // Windows: 优先通过 Job Object 终止整棵进程树
                 #[cfg(windows)]
                 {
-                    let terminated_via_job = self.job.as_ref().is_some_and(job::Job::terminate);
+                    let terminated_via_job = self.limiter.as_ref().is_some_and(Limiter::terminate);
                     if terminated_via_job {
                         tracing::debug!("[{}] 已通过 Job Object 终止进程树", name);
                     } else {
@@ -575,15 +555,11 @@ impl ManagedProcess {
         if let Some(code) = stopped_code {
             self.record_exit(code, true);
         }
-        // 主进程停了，cgroup 里可能还有它拉起的子进程：一并结束并删除目录
-        self.drop_cgroup();
+        // 主进程停了，硬限载体里可能还有它拉起的子进程：一并结束
+        self.drop_limiter();
         self.usage = None;
         self.connections = 0;
         self.abort_log_tasks();
-        #[cfg(windows)]
-        {
-            self.job = None;
-        }
 
         self.child = None;
         self.status = ProcessStatus::Stopped;
@@ -605,27 +581,19 @@ impl ManagedProcess {
                 Ok(Some(status)) => {
                     tracing::info!("[{}] 进程已退出 (退出码: {:?})", self.name, status.code());
                     self.record_exit(status.code(), false);
-                    self.drop_cgroup();
+                    self.drop_limiter();
                     self.usage = None;
                     self.connections = 0;
                     self.abort_log_tasks();
                     self.child = None;
-                    #[cfg(windows)]
-                    {
-                        self.job = None;
-                    }
                     self.status = ProcessStatus::Stopped;
                     false
                 }
                 Ok(None) => true,
                 Err(_) => {
                     self.abort_log_tasks();
-                    self.drop_cgroup();
+                    self.drop_limiter();
                     self.child = None;
-                    #[cfg(windows)]
-                    {
-                        self.job = None;
-                    }
                     self.status = ProcessStatus::Failed("检查进程状态失败".into());
                     false
                 }

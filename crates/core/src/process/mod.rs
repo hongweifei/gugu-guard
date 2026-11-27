@@ -12,7 +12,7 @@
 mod capture;
 mod command;
 #[cfg(windows)]
-mod job;
+pub(crate) mod job;
 mod logwatch;
 mod managed;
 mod terminate;

@@ -13,7 +13,7 @@
 - **健康检查** — TCP 端口 / HTTP 请求检测，连续失败达到阈值才判定重启，瞬时抖动不误伤
 - **崩溃历史** — 最近 5 次退出（时间、退出码、是否被自动拉起）在卡片与 API 都能看到；每次启动/退出/拉起另外追加到 30 天滚动日志，跨守护重启保留，可算可用率与崩溃频次
 - **资源监控** — 按进程树采样 CPU/内存（含 conhost 等子进程），卡片与 `/metrics` 可见；`max_memory_mb` 超限自动重启，防内存泄漏
-- **资源硬限（cgroup v2）** — Linux 下每个进程独占一个 cgroup，`cpu_max` / `memory_max` / `pids_max` 由内核执行：内存越界整组 OOM、任务数封顶，启动前生效，退出即清理
+- **资源硬限（cgroup v2 / Job Object）** — Linux 下每个进程独占一个 cgroup，`cpu_max` / `memory_max` / `pids_max` 由内核执行：内存越界整组 OOM、任务数封顶，启动前生效，退出即清理；Windows 下同一组字段落到进程树的 Job Object（CPU 速率硬顶、提交内存上限、活动进程数上限）
 - **指标时序** — 每分钟一桶保留 24 小时，CPU/内存均值与峰值、连接数随 WebUI「指标」面板与 `GET /api/v1/processes/:name/history` 查看
 - **端口预检与连接数** — 配置 `listen_ports` 后启动前检查端口是否被别的进程占用（占用时直接失败并报出占用者），运行中统计这些端口上的已建立连接数
 - **就绪探针** — `depends_on` 现在等上游真的可用（健康检查通过或端口进入监听）再拉起下游，最多等 `ready_timeout_secs`
@@ -237,7 +237,7 @@ gugu add frontend -x "bun run dev" \
 
 `--port` 可重复或逗号分隔；填了端口才会做启动前占用预检并统计连接数。
 `--no-port-check` 关掉预检，`--ready-timeout` 调整等依赖就绪的上限（默认 60 秒）。
-`--cpu-max` / `--memory-max` / `--pids-max` 是 cgroup v2 硬限（仅 Linux，详见[资源硬限](#cgroup-v2-硬限)）。
+`--cpu-max` / `--memory-max` / `--pids-max` 是资源硬限（Linux 走 cgroup v2，Windows 走 Job Object，详见[资源硬限](#资源硬限)）。
 
 ## REST API
 
@@ -302,7 +302,7 @@ gugu-guard/
 | `daemon.api_key` | string | — | API Key，设置后启用认证 |
 | `daemon.webhook_url` | string | — | 异常通知的 webhook 地址（钉钉/企微/飞书机器人或自建端） |
 | `daemon.webhook_format` | string | `dingtalk` | 载荷格式：`dingtalk`（钉钉与企微同形）/ `feishu` / `raw` |
-| `daemon.cgroup_root` | string | `/sys/fs/cgroup` | cgroup v2 硬限的落地目录；容器或 systemd 委派环境指向有写权限的子树 |
+| `daemon.cgroup_root` | string | `/sys/fs/cgroup` | Linux 上 cgroup v2 硬限的落地目录；容器或 systemd 委派环境指向有写权限的子树 |
 | `daemon.web.addr` | string | `0.0.0.0` | 监听地址 |
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
@@ -328,9 +328,9 @@ gugu-guard/
 | `stop_timeout_secs` | u64 | `10` | 停止超时（秒） |
 | `depends_on` | string[] | `[]` | 依赖的进程名，按依赖顺序启动 |
 | `max_memory_mb` | u64 | — | 进程树内存上限，超限按自动重启路径重启（防泄漏） |
-| `cpu_max` | string | — | cgroup v2 硬限：CPU 上限，`50%` / `0.5`（核数）/ `50000 100000`（quota period）；仅 Linux |
-| `memory_max` | string | — | cgroup v2 硬限：内存上限，`512M` / `2G` / 字节数；越界由内核整组 OOM；仅 Linux |
-| `pids_max` | string | — | cgroup v2 硬限：任务数上限，防 fork 炸弹；仅 Linux |
+| `cpu_max` | string | — | 资源硬限：CPU 上限，`50%` / `0.5`（核数）/ `50000 100000`（quota period）；Linux 走 cgroup 配额，Windows 按整机占比节流 |
+| `memory_max` | string | — | 资源硬限：内存上限，`512M` / `2G` / 字节数；Linux 越界整组 OOM，Windows 限制 Job 提交内存 |
+| `pids_max` | string | — | 资源硬限：进程/任务数上限，防 fork 炸弹；Windows 只统计进程 |
 | `max_log_size_mb` | u64 | — | 日志文件大小上限 (MB)，超限自动轮转 |
 | `unhealthy_restart` | bool | `false` | 健康检查失败时自动重启 |
 | `listen_ports` | u16[] | `[]` | 该进程监听的端口：启动前占用预检、连接数统计、依赖就绪判断都用它 |
@@ -480,29 +480,37 @@ api_key = "从节点的 daemon.api_key"   # 指向非回环地址时必填
 - **终端** — 内置终端操作的是跑着 gugu 的那台机器，只对本机开放；选中从节点时入口隐藏，要在从节点上开终端就访问它自己的面板
 - **生效时机** — 节点表在守护进程启动时读取；改动 `[[nodes]]` 后重启守护进程（`gugu reload` 只重载进程配置与守护参数，不重建节点表）
 
-### cgroup v2 硬限
+### 资源硬限
 
 ```toml
 [daemon]
-cgroup_root = "/sys/fs/cgroup"   # 默认值；容器或 systemd 委派环境指向有写权限的子树
+cgroup_root = "/sys/fs/cgroup"   # 仅 Linux；容器或 systemd 委派环境指向有写权限的子树
 
 [processes.my-app]
 cpu_max = "50%"                  # 单核的一半；也可写 0.5（核数）或 "50000 100000"
-memory_max = "512M"              # 越界由内核整组 OOM，不是「超限重启」
-pids_max = "128"                 # 任务数上限，防 fork 炸弹
+memory_max = "512M"              # 越过即被硬限拦住，不是「超限重启」
+pids_max = "128"                 # 进程/任务数上限，防 fork 炸弹
 ```
 
-- **前提** — Linux + cgroup v2 统一层次（挂载点下有 `cgroup.controllers`），守护进程有写权限：
+Linux 用 cgroup v2，Windows 用 Job Object；两套机制都在启动阶段落地，配了就必须生效，建不出来直接失败。
+
+- **Linux 前提** — cgroup v2 统一层次（挂载点下有 `cgroup.controllers`），守护进程有写权限：
   以 root 运行，或 `cgroup_root` 指向 systemd 委派给自己的子树。cpu / memory / pids 控制器缺失时启动直接失败并说明缺哪个
-- **生效时机** — 启动前建好 `<cgroup_root>/gugu/<进程名>-<哈希>`、写入限值，子进程在 `fork` 之后、`exec` 之前
+- **Linux 生效时机** — 启动前建好 `<cgroup_root>/gugu/<进程名>-<哈希>`、写入限值，子进程在 `fork` 之后、`exec` 之前
   把自己写进 `cgroup.procs`：进程树从第一条指令起就在限值内，没有「先跑起来再搬进去」的空窗
-- **继承与清理** — 子进程、孙进程都落在同一 cgroup；进程退出或被停止时对整个 cgroup 执行 `cgroup.kill` 再删目录，
+- **Linux 继承与清理** — 子进程、孙进程都落在同一 cgroup；进程退出或被停止时对整个 cgroup 执行 `cgroup.kill` 再删目录，
   不留脱管的孤儿。上次运行留下的同名目录会在下次启动时先清空
-- **内存语义** — `memory.max` 是内核硬限：越过即触发该 cgroup 的 OOM，整组进程一起被杀（`memory.oom.group = 1`），
+- **Linux 内存语义** — `memory.max` 是内核硬限：越过即触发该 cgroup 的 OOM，整组进程一起被杀（`memory.oom.group = 1`），
   同时 `memory.swap.max = 0`，避免靠换页绕过上限。守护进程只会看到进程退出（通常是 137），配了 `auto_restart` 会被拉起
-- **与 `max_memory_mb` 的区别** — `max_memory_mb` 是守护进程的看护逻辑：采样超限后走自动重启；`memory_max` 由内核执行，
+- **Windows 映射** — `memory_max` 落到 Job 的提交内存上限（`JobMemoryLimit`），`pids_max` 落到活动进程数（`ActiveProcessLimit`），
+  `cpu_max` 落到 CPU 速率硬顶（`JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP`）。限值在创建 Job 时写入，主进程 `spawn` 后立即分配进 Job，
+  之后派生的子进程自动继承
+- **Windows 口径** — CPU 是节流而不是杀进程，`CpuRate` 按整机占比计量：`cpu_max = "10%"` 在 16 逻辑核机器上折算为整机 0.625%，
+  启动日志会打印实际占比；`memory_max` 是提交内存（Job 内合计），越界时新的分配失败，进程通常自行报错退出；
+  `pids_max` 只统计进程，不统计线程
+- **与 `max_memory_mb` 的区别** — `max_memory_mb` 是守护进程的看护逻辑：采样超限后走自动重启；`memory_max` 由操作系统执行，
   进程在被杀之前不可能超用。两者可以同时配
-- **非 Linux** — 配置了任一硬限时启动会明确报「仅支持 Linux」，不会静默忽略
+- **其它平台** — 既不是 Linux 也不是 Windows 时，配置任一硬限会在启动时明确报错，不会静默忽略
 
 ## 持续集成与发布
 

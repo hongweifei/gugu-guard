@@ -86,8 +86,13 @@ impl Cgroup {
     }
 
     /// spawn 结束后关掉父进程这一侧的 `cgroup.procs` 句柄（子进程的 fd 随 exec 关闭）。
-    pub fn finish_spawn(&mut self) {
+    /// 子进程已经在 `exec` 之前写进 cgroup，这里没有额外操作，也没有失败路径。
+    ///
+    /// # Errors
+    /// 不会返回错误。
+    pub fn finish_spawn(&mut self, _pid: Option<u32>) -> Result<(), String> {
         self.procs = None;
+        Ok(())
     }
 
     /// 杀掉 cgroup 里所有进程并删除目录。用于进程退出、停止与启动失败。

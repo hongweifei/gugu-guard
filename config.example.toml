@@ -48,10 +48,10 @@ restart_delay_secs = 5
 # restart_reset_secs = 60   # 稳定运行达该秒数后崩溃计数归零 (默认 60，守护长期有效)
 # shell = false             # true 时 command/args 拼接后经 shell 执行 (支持管道等)
 # max_memory_mb = 512       # 进程树内存超限则自动重启 (防内存泄漏)
-# cgroup v2 硬限 (仅 Linux，需 root 或已委派的 cgroup 目录)：
-# cpu_max = "50%"           # 占单核 50%；也可写 0.5 (核数) 或 "50000 100000"
-# memory_max = "512M"       # 越界由内核整组 OOM — 这是硬限，不是上面的「超限重启」
-# pids_max = "128"          # 任务数上限，防 fork 炸弹
+# 资源硬限 (Linux 走 cgroup v2，需 root 或已委派的 cgroup 目录；Windows 走 Job Object)：
+# cpu_max = "50%"           # 占单核 50%；也可写 0.5 (核数) 或 "50000 100000"。Windows 上按整机占比节流
+# memory_max = "512M"       # Linux 越界整组 OOM，Windows 限制 Job 提交内存 — 这是硬限，不是上面的「超限重启」
+# pids_max = "128"          # 进程/任务数上限，防 fork 炸弹。Windows 只统计进程
 # stop_command = "kill $(lsof -t -i:8080)"  # 自定义停止命令 (可选，留空则使用默认信号终止)
 max_log_size_mb = 10
 stdout_log = "logs/example-web-stdout.log"

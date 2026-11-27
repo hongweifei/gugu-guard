@@ -110,10 +110,10 @@ port = {port}
 # shell = false
 # max_memory_mb = 512
 # max_log_size_mb = 10
-# cgroup v2 硬限 (仅 Linux，需 root 或已委派的 cgroup 目录)：
-# cpu_max = \"50%\"          # 占单核 50%；也可写 0.5（核数）或 \"50000 100000\"
-# memory_max = \"512M\"       # 越界由内核整组 OOM，不是重启
-# pids_max = \"128\"          # 任务数上限，防 fork 炸弹
+# 资源硬限 (Linux 走 cgroup v2，需 root 或已委派的 cgroup 目录；Windows 走 Job Object)：
+# cpu_max = \"50%\"          # 占单核 50%；也可写 0.5（核数）或 \"50000 100000\"。Windows 上按整机占比节流
+# memory_max = \"512M\"       # Linux 越界整组 OOM，Windows 限制 Job 提交内存，不是重启
+# pids_max = \"128\"          # 进程/任务数上限，防 fork 炸弹。Windows 只统计进程
 # stdout_log = \"logs/my-app-stdout.log\"
 # stderr_log = \"logs/my-app-stderr.log\"
 

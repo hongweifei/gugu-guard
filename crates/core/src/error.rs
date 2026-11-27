@@ -18,6 +18,9 @@ pub enum GuguError {
     Unauthorized,
     #[error("路径不在 daemon.web.fs_roots 允许的范围内: {0}")]
     PathDenied(String),
+    /// 远端节点已经给出的完整拒绝文案：中心节点原样转发，不再套本地前缀。
+    #[error("{0}")]
+    PathRefused(String),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]

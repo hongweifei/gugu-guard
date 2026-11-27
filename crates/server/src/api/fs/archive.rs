@@ -2,6 +2,9 @@
 //!
 //! zip 写入器要回填中央目录，因而不能直接写进 HTTP 响应体；这里先生成临时文件，
 //! 响应结束后由 [`TempGuard`] 删掉。符号链接按链接自身跳过，链接指向哪里都不会被打进去。
+//!
+//! 目录默认套一层同名目录，`flat=true` 时内容直接位于 zip 根；单个文件打成一个条目。
+//! 跨节点搬运复用同一套打包，见 [`bundle`]。
 
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
@@ -17,7 +20,7 @@ use gugu_core::fs::TEMP_PREFIX;
 use tokio::io::AsyncReadExt;
 use zip::write::SimpleFileOptions;
 
-use super::types::PathQuery;
+use super::types::ArchiveQuery;
 use super::{disposition, failure};
 use crate::state::AppState;
 
@@ -28,23 +31,18 @@ const CHUNK: usize = 64 * 1024;
 
 pub(super) async fn archive_fs(
     State(state): State<AppState>,
-    Query(query): Query<PathQuery>,
+    Query(query): Query<ArchiveQuery>,
 ) -> Response {
     let Some(target) = query.path.filter(|path| !path.trim().is_empty()) else {
         return failure(GuguError::InvalidPath("缺少 path 参数".to_string()));
     };
-    let dir = match state.fs.resolve(&target) {
+    let source = match state.fs.resolve(&target) {
         Ok(path) => path,
         Err(error) => return failure(error),
     };
-    if !dir.is_dir() {
-        return failure(GuguError::InvalidPath(format!(
-            "只有目录可以打包下载，单个文件请用下载接口: {}",
-            dir.display()
-        )));
-    }
+    let flat = query.flat;
 
-    let built = tokio::task::spawn_blocking(move || build(&dir)).await;
+    let built = tokio::task::spawn_blocking(move || build(&source, flat)).await;
     let Built { temp, size, name } = match built {
         Ok(Ok(built)) => built,
         Ok(Err(error)) => return failure(error),
@@ -101,15 +99,10 @@ fn stream(
     })
 }
 
-fn build(dir: &Path) -> gugu_core::Result<Built> {
-    let name = dir
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "archive".to_string());
-    measure(dir, 0)?;
-
+fn build(source: &Path, flat: bool) -> gugu_core::Result<Built> {
+    let name = source_name(source);
     let path = temp_path();
-    match write_zip(dir, &name, &path) {
+    match bundle(source, flat, &path) {
         Ok(size) => Ok(Built {
             temp: Arc::new(TempGuard { path }),
             size,
@@ -122,35 +115,66 @@ fn build(dir: &Path) -> gugu_core::Result<Built> {
     }
 }
 
+/// 把来源（目录或单个文件）打包到指定文件，返回归档字节数。
+///
+/// 目录在 `flat` 时把内容直接放在 zip 根，否则套一层同名目录；单个文件打成一个条目。
+pub(super) fn bundle(source: &Path, flat: bool, path: &Path) -> gugu_core::Result<u64> {
+    measure(source, 0)?;
+    write_zip(source, &source_name(source), flat, path)
+}
+
+fn source_name(source: &Path) -> String {
+    source
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "archive".to_string())
+}
+
 /// 统计待打包的原始字节：先量一遍，超限时不必写半个归档再删。
-fn measure(dir: &Path, mut total: u64) -> gugu_core::Result<u64> {
-    for item in std::fs::read_dir(dir)? {
+fn measure(source: &Path, total: u64) -> gugu_core::Result<u64> {
+    let meta = std::fs::symlink_metadata(source)?;
+    if !meta.is_dir() {
+        return checked(total.saturating_add(meta.len()));
+    }
+    let mut total = total;
+    for item in std::fs::read_dir(source)? {
         let item = item?;
         let file_type = item.file_type()?;
         if file_type.is_symlink() || skipped(&item.file_name()) {
             continue;
         }
-        if file_type.is_dir() {
-            total = measure(&item.path(), total)?;
-        } else if file_type.is_file() {
-            total = total.saturating_add(item.metadata()?.len());
-            if total > MAX_ARCHIVE_BYTES {
-                return Err(GuguError::InvalidPath(format!(
-                    "目录内容超过 {} GB，请分目录下载",
-                    MAX_ARCHIVE_BYTES / 1024 / 1024 / 1024
-                )));
-            }
-        }
+        total = measure(&item.path(), total)?;
     }
     Ok(total)
 }
 
-fn write_zip(dir: &Path, top: &str, path: &Path) -> gugu_core::Result<u64> {
+fn checked(total: u64) -> gugu_core::Result<u64> {
+    if total > MAX_ARCHIVE_BYTES {
+        return Err(GuguError::InvalidPath(format!(
+            "内容超过 {} GB，请分目录下载",
+            MAX_ARCHIVE_BYTES / 1024 / 1024 / 1024
+        )));
+    }
+    Ok(total)
+}
+
+fn write_zip(source: &Path, top: &str, flat: bool, path: &Path) -> gugu_core::Result<u64> {
     let file = std::fs::File::create(path)?;
     let mut zip = zip::ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    add_dir(&mut zip, top, options)?;
-    walk(&mut zip, dir, top, options)?;
+    if std::fs::symlink_metadata(source)?.is_dir() {
+        let prefix = if flat {
+            String::new()
+        } else {
+            add_dir(&mut zip, top, options)?;
+            top.to_string()
+        };
+        walk(&mut zip, source, &prefix, options)?;
+    } else {
+        zip.start_file(top, options).map_err(pack)?;
+        let mut reader = std::fs::File::open(source)?;
+        std::io::copy(&mut reader, &mut zip)?;
+    }
 
     let mut file = zip.finish().map_err(pack)?;
     file.flush()?;
@@ -160,7 +184,7 @@ fn write_zip(dir: &Path, top: &str, path: &Path) -> gugu_core::Result<u64> {
 fn walk<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     root: &Path,
-    top: &str,
+    prefix: &str,
     options: SimpleFileOptions,
 ) -> gugu_core::Result<()> {
     let mut stack = vec![root.to_path_buf()];
@@ -175,7 +199,12 @@ fn walk<W: Write + Seek>(
             let rel = path.strip_prefix(root).map_err(|_| {
                 GuguError::InvalidPath(format!("路径不在打包目录内: {}", path.display()))
             })?;
-            let name = format!("{top}/{}", rel.to_string_lossy().replace('\\', "/"));
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let name = if prefix.is_empty() {
+                rel
+            } else {
+                format!("{prefix}/{rel}")
+            };
             if file_type.is_dir() {
                 add_dir(zip, &name, options)?;
                 stack.push(path);
@@ -252,7 +281,7 @@ mod tests {
         std::fs::write(root.join(format!("{TEMP_PREFIX}part-1")), b"half").expect("写临时文件");
 
         let path = sandbox.path().join("out.zip");
-        let size = write_zip(&root, "打包 目录", &path).expect("打包成功");
+        let size = write_zip(&root, "打包 目录", false, &path).expect("打包成功");
         assert!(size > 0);
 
         let file = std::fs::File::open(&path).expect("打开归档");
@@ -276,6 +305,50 @@ mod tests {
             !names.iter().any(|name| name.contains(TEMP_PREFIX)),
             "中转文件不该进归档: {names:?}"
         );
+    }
+
+    #[test]
+    fn flat_bundles_lay_content_at_the_root() {
+        let sandbox = Sandbox::new();
+        let root = sandbox.path().join("src");
+        std::fs::create_dir_all(root.join("sub")).expect("建目录");
+        std::fs::write(root.join("a.txt"), b"alpha").expect("写文件");
+        std::fs::write(root.join("sub/b.txt"), b"beta").expect("写文件");
+
+        let path = sandbox.path().join("flat.zip");
+        bundle(&root, true, &path).expect("平铺打包");
+        let names = entry_names(&path);
+        assert!(names.contains(&"a.txt".to_string()), "{names:?}");
+        assert!(names.contains(&"sub/b.txt".to_string()), "{names:?}");
+        assert!(
+            !names.iter().any(|name| name.starts_with("src/")),
+            "平铺打包不该带顶层目录: {names:?}"
+        );
+    }
+
+    #[test]
+    fn single_files_become_one_entry() {
+        let sandbox = Sandbox::new();
+        let file = sandbox.path().join("清单.txt");
+        std::fs::write(&file, b"rows").expect("写文件");
+
+        let path = sandbox.path().join("one.zip");
+        bundle(&file, true, &path).expect("打包单文件");
+        assert_eq!(entry_names(&path), vec!["清单.txt".to_string()]);
+    }
+
+    fn entry_names(path: &Path) -> Vec<String> {
+        let file = std::fs::File::open(path).expect("打开归档");
+        let mut archive = zip::ZipArchive::new(file).expect("读取归档");
+        (0..archive.len())
+            .map(|index| {
+                archive
+                    .by_index(index)
+                    .expect("条目可读")
+                    .name()
+                    .to_string()
+            })
+            .collect()
     }
 
     #[test]

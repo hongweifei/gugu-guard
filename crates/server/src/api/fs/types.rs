@@ -12,6 +12,15 @@ pub(super) struct PathQuery {
     pub(super) limit: Option<u64>,
 }
 
+/// 打包下载：目录或单个文件，`flat` 表示不套一层同名目录。
+#[derive(Debug, Deserialize)]
+pub(super) struct ArchiveQuery {
+    #[serde(default)]
+    pub(super) path: Option<String>,
+    #[serde(default)]
+    pub(super) flat: bool,
+}
+
 /// 上传：目标路径与是否覆盖同名文件。
 #[derive(Debug, Deserialize)]
 pub(super) struct UploadQuery {
@@ -92,6 +101,38 @@ pub(super) struct ExtractBody {
     pub(super) dest: Option<String>,
     #[serde(default)]
     pub(super) overwrite: bool,
+    /// 是否把唯一且与目标同名的顶层目录提上来；搬运这类要原样落地的场景关掉。
+    #[serde(default = "yes")]
+    pub(super) collapse: bool,
+}
+
+/// 跨节点搬运：条目在源节点与目标节点上的完整路径。
+///
+/// 审计对象来自查询串里的 `from`，体里的 `from` 是同一份路径。
+#[derive(Debug, Deserialize)]
+pub(super) struct TransferBody {
+    #[serde(default)]
+    pub(super) from: String,
+    pub(super) to: String,
+    /// 源节点标识；缺省 `local`。
+    #[serde(default)]
+    pub(super) from_node: Option<String>,
+    /// 目标节点标识；缺省 `local`。
+    #[serde(default)]
+    pub(super) to_node: Option<String>,
+    #[serde(default)]
+    pub(super) overwrite: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// 跨节点搬运的查询参数：源路径放这里供审计记录对象。
+#[derive(Debug, Deserialize)]
+pub(super) struct TransferQuery {
+    #[serde(default)]
+    pub(super) from: Option<String>,
 }
 
 /// 改名、移动与复制的共同形状。

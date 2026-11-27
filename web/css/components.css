@@ -1206,6 +1206,25 @@ select.control,
     background: var(--warn-soft);
 }
 
+/* 剪贴条：只报来源与节点，粘贴目标由当前目录决定 */
+.transfer-clip {
+    border-color: var(--accent);
+}
+
+.transfer-clip .transfer-label {
+    flex: 1;
+    max-width: none;
+}
+
+/* 被剪切的条目：左侧留一条强调色，名称降一档，提示下次粘贴会把它移走 */
+.ftable tbody tr.ft-cut td:first-child {
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.ftable tbody tr.ft-cut .ft-open span {
+    color: var(--fg-3);
+}
+
 /* 拖拽遮罩：整块视图接收文件，松手后按原目录结构上传 */
 .files-drop {
     position: absolute;

@@ -91,7 +91,8 @@ impl Extracted {
 /// 解压归档到目标目录。
 ///
 /// `dest` 为空时解到归档旁的同名目录；目标已存在时必须显式声明 `overwrite`，
-/// 覆盖是整目录替换，不与旧内容合并。
+/// 覆盖是整目录替换，不与旧内容合并。`collapse` 为 true 时把「唯一且与目标同名」的
+/// 顶层目录提上来，避免 `foo.zip` 解成 `foo/foo/`；搬运这类要原样落地的场景传 false。
 ///
 /// # Errors
 /// 只读模式、路径越界、格式不支持、目标已存在、归档损坏或解压后超过上限时返回错误。
@@ -100,6 +101,7 @@ pub fn extract(
     archive: &str,
     dest: Option<&str>,
     overwrite: bool,
+    collapse: bool,
 ) -> Result<Extracted> {
     scope.ensure_writable()?;
     let source = scope.resolve(archive)?;
@@ -141,9 +143,11 @@ pub fn extract(
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
     }
-    if let Err(error) = collapse(&staging, &target) {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(error);
+    if collapse {
+        if let Err(error) = collapse_top(&staging, &target) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
     }
     if let Err(error) = place(&staging, &target) {
         let _ = fs::remove_dir_all(&staging);
@@ -196,7 +200,7 @@ fn staging_path(target: &Path) -> PathBuf {
 /// 归档里只有一个与目标同名的顶层目录时把它提上来，避免 `pkg/pkg/...` 的双层嵌套。
 ///
 /// 顶层目录名与目标名不同就不动：那多半是作者有意保留的一层，比如 `data.zip` 里的 `data-2026/`。
-fn collapse(staging: &Path, target: &Path) -> Result<()> {
+fn collapse_top(staging: &Path, target: &Path) -> Result<()> {
     let Some(wanted) = target.file_name() else {
         return Ok(());
     };
@@ -479,7 +483,7 @@ mod tests {
         let archive = dir.path().join("资料.zip");
         write_zip(&archive, &[("a.txt", b"alpha"), ("sub/中文.txt", b"beta")]);
 
-        let done = extract(&scope, &slash(&archive), None, false).expect("解压");
+        let done = extract(&scope, &slash(&archive), None, false, true).expect("解压");
         assert_eq!(done.files, 2);
         assert_eq!(done.bytes, 9);
         assert_eq!(done.skipped, 0);
@@ -500,7 +504,7 @@ mod tests {
         let archive = dir.path().join("包.tar.gz");
         write_tar_gz(&archive, &[("x/y.txt", b"gamma")], true);
 
-        let done = extract(&scope, &slash(&archive), None, false).expect("解压");
+        let done = extract(&scope, &slash(&archive), None, false, true).expect("解压");
         assert_eq!(done.files, 1);
         assert_eq!(done.skipped, 1);
         let target = dir.path().join("包");
@@ -515,7 +519,7 @@ mod tests {
         let archive = dir.path().join("evil.zip");
         write_zip(&archive, &[("../逃逸.txt", b"bad"), ("ok.txt", b"good")]);
 
-        let done = extract(&scope, &slash(&archive), None, false).expect("解压");
+        let done = extract(&scope, &slash(&archive), None, false, true).expect("解压");
         assert_eq!(done.skipped, 1);
         assert!(!dir.path().join("逃逸.txt").exists());
         assert!(dir.path().join("evil/ok.txt").is_file());
@@ -539,10 +543,10 @@ mod tests {
         fs::create_dir_all(&target).expect("建目录");
         fs::write(target.join("stale.txt"), b"old").expect("写旧文件");
 
-        let error = extract(&scope, &slash(&archive), None, false).expect_err("应拒绝");
+        let error = extract(&scope, &slash(&archive), None, false, true).expect_err("应拒绝");
         assert!(error.to_string().contains("目标已存在"), "{error}");
 
-        let done = extract(&scope, &slash(&archive), None, true).expect("覆盖");
+        let done = extract(&scope, &slash(&archive), None, true, true).expect("覆盖");
         assert_eq!(done.files, 1);
         assert!(target.join("fresh.txt").is_file());
         assert!(!target.join("stale.txt").exists(), "覆盖是整目录替换");
@@ -561,7 +565,7 @@ mod tests {
         let archive = dir.path().join("broken.zip");
         fs::write(&archive, b"not a zip").expect("写坏文件");
 
-        let error = extract(&scope, &slash(&archive), None, false).expect_err("应失败");
+        let error = extract(&scope, &slash(&archive), None, false, true).expect_err("应失败");
         assert!(error.to_string().contains("zip"), "{error}");
         assert!(!dir.path().join("broken").exists());
         assert!(!dir
@@ -578,16 +582,32 @@ mod tests {
         let writable = Scope::new(vec![dir.path().to_path_buf()], true);
         let archive = dir.path().join("a.7z");
         fs::write(&archive, b"7z").expect("写文件");
-        let error = extract(&writable, &slash(&archive), None, false).expect_err("不支持的格式");
+        let error =
+            extract(&writable, &slash(&archive), None, false, true).expect_err("不支持的格式");
         assert!(error.to_string().contains("不支持"), "{error}");
 
         let readonly = Scope::new(vec![dir.path().to_path_buf()], false);
         let zip = dir.path().join("b.zip");
         write_zip(&zip, &[("a", b"a")]);
         assert!(matches!(
-            extract(&readonly, &slash(&zip), None, false),
+            extract(&readonly, &slash(&zip), None, false, true),
             Err(GuguError::ReadOnly)
         ));
+    }
+
+    #[test]
+    fn collapse_can_be_turned_off_for_verbatim_layouts() {
+        let dir = tempdir();
+        let scope = Scope::new(vec![dir.path().to_path_buf()], true);
+        let archive = dir.path().join("pkg.zip");
+        write_zip(&archive, &[("pkg/a.txt", b"alpha")]);
+
+        extract(&scope, &slash(&archive), None, false, false).expect("解压");
+        let target = dir.path().join("pkg");
+        assert!(
+            target.join("pkg/a.txt").is_file(),
+            "关闭展开后应保留归档里的原结构"
+        );
     }
 
     #[test]
@@ -600,7 +620,7 @@ mod tests {
             &[("pkg/a.txt", b"alpha"), ("pkg/sub/b.txt", b"beta")],
         );
 
-        let done = extract(&scope, &slash(&archive), None, false).expect("解压");
+        let done = extract(&scope, &slash(&archive), None, false, true).expect("解压");
         assert_eq!(done.files, 2);
         let target = dir.path().join("pkg");
         assert!(target.join("a.txt").is_file(), "同名顶层目录应被提上来");
@@ -615,7 +635,7 @@ mod tests {
         let archive = dir.path().join("data.zip");
         write_zip(&archive, &[("data-2026/a.txt", b"alpha")]);
 
-        extract(&scope, &slash(&archive), None, false).expect("解压");
+        extract(&scope, &slash(&archive), None, false, true).expect("解压");
         let target = dir.path().join("data");
         assert!(
             target.join("data-2026/a.txt").is_file(),
@@ -630,7 +650,8 @@ mod tests {
         let archive = dir.path().join("pkg.zip");
         write_zip(&archive, &[("only.txt", b"x")]);
         let dest = dir.path().join("落点");
-        let done = extract(&scope, &slash(&archive), Some(&slash(&dest)), false).expect("解压");
+        let done =
+            extract(&scope, &slash(&archive), Some(&slash(&dest)), false, true).expect("解压");
         assert_eq!(done.path, slash(&dest));
         assert!(dest.join("only.txt").is_file());
     }

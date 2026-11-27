@@ -216,6 +216,7 @@ fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
         ("POST", ["fs", "mkdir"]) => Some(("fs.mkdir", "新建目录")),
         ("POST", ["fs", "touch"]) => Some(("fs.create", "新建文件")),
         ("POST", ["fs", "rename"]) => Some(("fs.rename", "移动或重命名")),
+        ("POST", ["fs", "transfer"]) => Some(("fs.transfer", "跨节点搬运")),
         ("POST", ["fs", "copy"]) => Some(("fs.copy", "复制文件")),
         ("DELETE", ["fs"]) => Some(("fs.delete", "删除文件")),
         // 以后新增的写接口至少会留下痕迹，不会静默漏记。

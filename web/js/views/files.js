@@ -2,7 +2,7 @@
 // 列表与预览同屏：左侧目录，右侧文本内容；只读模式下写入口全部关闭。
 
 import { $, busy } from '../ui/dom.js';
-import { api, fetchStream, uploadXhr } from '../core/api.js';
+import { api, fetchStream, request, uploadXhr } from '../core/api.js';
 import { state } from '../core/state.js';
 import { esc, fmtBytes, fmtDateTime } from '../core/format.js';
 import { confirmAction } from '../ui/dialog.js';
@@ -23,6 +23,11 @@ let dirty = false;
 /// 请求序号：目录切换与预览读取互相作废，晚到的响应不覆盖新状态。
 let seq = 0;
 let loaded = false;
+
+/// 剪贴板：只记来源与来源节点，粘贴时才决定走本机改名还是跨节点搬运。
+/// 放进 sessionStorage，标签页刷新后仍然可粘贴，关掉标签页即失效。
+const CLIP_KEY = 'gugu_fs_clipboard';
+let clipboard = readClipboard();
 
 export function initFiles() {
     $('files-up').addEventListener('click', goUp);
@@ -55,6 +60,8 @@ export function initFiles() {
     });
     $('resume-drop').addEventListener('click', abortResume);
     $('transfer-cancel').addEventListener('click', () => transferTask?.cancel());
+    $('files-paste').addEventListener('click', pasteClipboard);
+    $('clip-cancel').addEventListener('click', () => setClipboard(null));
     $('ftable-body').addEventListener('click', onRowClick);
     $('files-editor').addEventListener('input', () => {
         dirty = true;
@@ -99,6 +106,8 @@ export function filesReset() {
     roots = [];
     loaded = false;
     clearPreview();
+    // 剪贴板跨节点保留：剪切后切到另一台节点粘贴正是跨节点搬运的入口。
+    renderClipboard();
 }
 
 async function loadRoots() {
@@ -129,6 +138,109 @@ function renderMode() {
     note.textContent = '只读模式：在 gugu.toml 的 [daemon.web] 里把 fs_write 设为 true 后重启守护进程，才能上传、新建、改名与删除。';
     for (const id of ['files-upload', 'files-upload-dir', 'files-mkdir', 'files-touch']) {
         $(id).disabled = !writable;
+    }
+    renderClipboard();
+}
+
+// ── 剪切与粘贴 ─────────────────────────────────────────
+
+function readClipboard() {
+    try {
+        const raw = sessionStorage.getItem(CLIP_KEY);
+        if (!raw) return null;
+        const value = JSON.parse(raw);
+        if (!value || typeof value.path !== 'string' || !value.path || typeof value.node !== 'string' || !value.node) {
+            return null;
+        }
+        return {
+            node: value.node,
+            path: value.path,
+            name: typeof value.name === 'string' && value.name ? value.name : value.path.replace(/[\\/]+$/, '').split('/').pop(),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function setClipboard(value) {
+    clipboard = value;
+    if (value) sessionStorage.setItem(CLIP_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(CLIP_KEY);
+    renderClipboard();
+    if (entries.length) renderEntries(entries);
+}
+
+function renderClipboard() {
+    const bar = $('files-clip');
+    const paste = $('files-paste');
+    if (!clipboard) {
+        bar.hidden = true;
+        paste.hidden = true;
+        return;
+    }
+    const place = clipboard.node === state.node ? '当前节点' : `节点 ${clipboard.node}`;
+    $('clip-label').textContent = `已剪切「${clipboard.name}」（${place}）`;
+    bar.hidden = false;
+    paste.hidden = !writable;
+    paste.disabled = !writable;
+    paste.textContent = `粘贴 ${clipboard.name}`;
+    paste.title = clipboard.node === state.node ? '移动到当前目录' : `从节点 ${clipboard.node} 搬运到当前目录`;
+}
+
+function cutEntry(entry) {
+    setClipboard({ node: state.node, path: entry.path, name: entry.name });
+    toast(`已剪切「${entry.name}」，打开目标目录后点「粘贴」`, 'success');
+}
+
+/// 粘贴：同节点复用改名端点，跨节点交给中心节点的搬运端点。
+/// 冲突时先问再带 `overwrite` 重试，避免默认覆盖。
+async function pasteClipboard() {
+    if (!clipboard || !writable) return;
+    const source = { ...clipboard };
+    const target = join(current, source.name);
+    const sameNode = source.node === state.node;
+    if (sameNode && target === source.path) {
+        toast('来源已经在当前目录', 'info');
+        return;
+    }
+
+    const query = `?from=${encodeURIComponent(source.path)}`;
+    const url = sameNode ? `/fs/rename${query}` : `/fs/transfer${query}`;
+    const send = sameNode ? api : request;
+    const body = sameNode
+        ? { from: source.path, to: target }
+        : { from: source.path, to: target, from_node: source.node, to_node: state.node };
+
+    const button = $('files-paste');
+    button.disabled = true;
+    button.textContent = sameNode ? '粘贴中…' : '搬运中…';
+    try {
+        let result = null;
+        try {
+            result = await send('POST', url, { ...body, overwrite: false });
+        } catch (error) {
+            if (error.message === 'Unauthorized') return;
+            if (!isExistsError(error)) {
+                toast(error.message || '粘贴失败', 'error');
+                return;
+            }
+            const ok = await confirmAction({
+                title: '覆盖目标',
+                text: `「${target}」已经存在，确认删掉它并把「${source.name}」放进去？`,
+                okText: '覆盖',
+                danger: true,
+            });
+            if (!ok) return;
+            result = await send('POST', url, { ...body, overwrite: true });
+        }
+        toast(result?.message || `已移动到 ${target}`, 'success');
+        setClipboard(null);
+        if (selected?.path === source.path) clearPreview();
+        await reload();
+    } catch (error) {
+        if (error.message !== 'Unauthorized') toast(error.message || '粘贴失败', 'error');
+    } finally {
+        renderClipboard();
     }
 }
 
@@ -215,12 +327,17 @@ function rowHtml(entry, index) {
     if (writable && entry.kind !== 'link' && isArchive(entry.name)) {
         actions.push(actionButton('extract', '解压', false));
     }
+    // 白名单根不可剪切：根不能被搬走；符号链接搬的是链接本身，语义容易误解。
+    if (writable && entry.kind !== 'link' && !isRoot(entry.path)) {
+        actions.push(actionButton('cut', '剪切', false));
+    }
     actions.push(actionButton('rename', '改名', !writable));
     actions.push(actionButton('copy', '复制', !writable));
     // 白名单根自身不提供删除：删掉根等于把整个视图删空。
     if (writable && !isRoot(entry.path)) actions.push(actionButton('remove', '删除', false, true));
     const mark = entry.readonly ? '<span class="badge badge-idle">只读</span>' : '';
-    return `<tr data-index="${index}">
+    const cut = clipboard && clipboard.node === state.node && clipboard.path === entry.path;
+    return `<tr data-index="${index}"${cut ? ' class="ft-cut"' : ''}>
         <td class="ft-name">
             <button type="button" class="ft-open" data-act="open">
                 <i class="ft-icon ${kind}"></i><span>${esc(entry.name)}</span>${mark}
@@ -260,6 +377,7 @@ function onRowClick(event) {
     }
     if (act === 'download') download(entry);
     if (act === 'extract') extractEntry(entry, button);
+    if (act === 'cut') cutEntry(entry);
     if (act === 'rename') renameEntry(entry);
     if (act === 'copy') copyEntry(entry);
     if (act === 'remove') removeEntry(entry);

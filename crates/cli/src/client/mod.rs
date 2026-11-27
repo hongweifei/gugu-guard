@@ -20,6 +20,8 @@ struct ApiHelper<'a> {
     client: &'a reqwest::Client,
     base: &'a str,
     key: Option<&'a str>,
+    /// 已规范化的从节点标识；None 表示本机。
+    node: Option<String>,
     /// 已转义的从节点路径段；None 表示直连本机守护进程。
     node_segment: Option<String>,
 }
@@ -46,8 +48,23 @@ impl<'a> ApiHelper<'a> {
             client,
             base,
             key,
+            node: node.map(str::to_string),
             node_segment,
         })
+    }
+
+    /// 当前选中的节点标识；本机返回 None。
+    fn node_name(&self) -> Option<&str> {
+        self.node.as_deref()
+    }
+
+    /// 直连中心节点：跨节点搬运要在 body 里点名两端，不能走 `--node` 的代理前缀。
+    fn direct(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let builder = self.client.request(method, format!("{}{path}", self.base));
+        match self.key {
+            Some(key) => builder.bearer_auth(key),
+            None => builder,
+        }
     }
 
     /// 实际请求地址：指定从节点时改走中心节点的代理路径 `/api/v1/nodes/{node}/...`。

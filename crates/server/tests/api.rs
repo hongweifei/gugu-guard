@@ -923,24 +923,42 @@ mod fs_management {
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
             .await
             .expect("读取归档");
-        let mut archive =
-            zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("读取 zip");
-        let mut names = Vec::new();
-        for index in 0..archive.len() {
-            names.push(
-                archive
-                    .by_index(index)
-                    .expect("条目可读")
-                    .name()
-                    .to_string(),
-            );
-        }
+        let names = zip_names(&bytes);
         assert!(names.contains(&"demo/a.txt".to_string()), "{names:?}");
         assert!(names.contains(&"demo/sub/b.txt".to_string()), "{names:?}");
     }
 
     #[tokio::test]
-    async fn archive_refuses_single_files_and_outside_paths() {
+    async fn archive_can_flatten_the_top_directory() {
+        let root = tempdir();
+        let dir = root.path().join("demo");
+        std::fs::create_dir_all(dir.join("sub")).expect("建目录");
+        std::fs::write(dir.join("a.txt"), b"alpha").expect("写文件");
+        std::fs::write(dir.join("sub/b.txt"), b"beta").expect("写文件");
+
+        let resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/archive?path={}&flat=true", encode(&dir)),
+        )
+        .await;
+        let status = resp.status();
+        if status != StatusCode::OK {
+            panic!("{}", text_of(resp).await);
+        }
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("读取归档");
+        let names = zip_names(&bytes);
+        assert!(names.contains(&"a.txt".to_string()), "{names:?}");
+        assert!(names.contains(&"sub/b.txt".to_string()), "{names:?}");
+        assert!(
+            !names.iter().any(|name| name.starts_with("demo/")),
+            "平铺打包不该带顶层目录: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_packs_single_files_and_refuses_outside_paths() {
         let root = tempdir();
         let file = root.path().join("a.txt");
         std::fs::write(&file, b"a").expect("写文件");
@@ -951,10 +969,23 @@ mod fs_management {
             &format!("/api/v1/fs/archive?path={}", encode(&file)),
         )
         .await;
+        let status = file_resp.status();
+        if status != StatusCode::OK {
+            panic!("{}", text_of(file_resp).await);
+        }
+        let disposition = file_resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok())
+            .expect("应带归档文件名");
+        assert!(disposition.contains("a.txt.zip"), "{disposition}");
+        let bytes = axum::body::to_bytes(file_resp.into_body(), 1 << 20)
+            .await
+            .expect("读取归档");
         assert_eq!(
-            file_resp.status(),
-            StatusCode::BAD_REQUEST,
-            "单个文件走下载"
+            zip_names(&bytes),
+            vec!["a.txt".to_string()],
+            "单个文件只成一个条目"
         );
 
         let outside_resp = send_get(
@@ -967,6 +998,21 @@ mod fs_management {
             StatusCode::FORBIDDEN,
             "越界目录应拒绝"
         );
+    }
+
+    /// 读出归档里的全部条目名，顺序按中央目录。
+    fn zip_names(bytes: &[u8]) -> Vec<String> {
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("读取 zip");
+        (0..archive.len())
+            .map(|index| {
+                archive
+                    .by_index(index)
+                    .expect("条目可读")
+                    .name()
+                    .to_string()
+            })
+            .collect()
     }
 
     fn write_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
@@ -1059,6 +1105,33 @@ mod fs_management {
         let (uri, body) = extract_body(&escape);
         let resp = send_json(app_with(root.path(), true), "POST", &uri, body).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "越界路径应拒绝");
+    }
+
+    #[tokio::test]
+    async fn extract_can_keep_the_archive_layout() {
+        let root = tempdir();
+        let archive = root.path().join("pkg.zip");
+        write_zip(
+            &archive,
+            &[("pkg/a.txt", b"alpha"), ("pkg/sub/b.txt", b"beta")],
+        );
+        let target = root.path().join("落点");
+        let uri = format!("/api/v1/fs/extract?path={}", encode(&archive));
+        let body = serde_json::json!({
+            "path": uri_path(&archive),
+            "dest": uri_path(&target),
+            "collapse": false,
+        });
+
+        let resp = send_json(app_with(root.path(), true), "POST", &uri, body).await;
+        let status = resp.status();
+        let text = text_of(resp).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(
+            target.join("pkg/a.txt").is_file(),
+            "关闭展开后保留归档里的顶层目录"
+        );
+        assert!(target.join("pkg/sub/b.txt").is_file());
     }
 
     #[tokio::test]

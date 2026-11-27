@@ -8,6 +8,7 @@ mod archive;
 mod read;
 mod session;
 mod transfer;
+mod transport;
 mod types;
 mod unpack;
 mod write;
@@ -28,6 +29,7 @@ use archive::archive_fs;
 use read::{download_fs, read_fs};
 use session::{abort_fs, begin_fs, chunk_fs, finish_fs, session_fs};
 use transfer::upload_fs;
+use transport::transfer_fs;
 use types::{FsRoots, FsSuccess, PathQuery};
 use unpack::extract_fs;
 use write::{copy_fs, mkdir_fs, remove_fs, rename_fs, touch_fs, write_fs};
@@ -52,6 +54,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/v1/fs/mkdir", post(mkdir_fs))
         .route("/api/v1/fs/touch", post(touch_fs))
         .route("/api/v1/fs/rename", post(rename_fs))
+        .route("/api/v1/fs/transfer", post(transfer_fs))
         .route("/api/v1/fs/copy", post(copy_fs))
         .route("/api/v1/fs", delete(remove_fs))
 }
@@ -123,7 +126,9 @@ pub fn check_exposure(addr: IpAddr, api_key: Option<&str>, writable: bool) -> Re
 /// 统一的错误出口：状态码按错误类别给，正文保持一句话。
 pub(super) fn failure(error: GuguError) -> Response {
     let status = match &error {
-        GuguError::ReadOnly | GuguError::PathDenied(_) => StatusCode::FORBIDDEN,
+        GuguError::ReadOnly | GuguError::PathDenied(_) | GuguError::PathRefused(_) => {
+            StatusCode::FORBIDDEN
+        }
         GuguError::NotFound(_) => StatusCode::NOT_FOUND,
         GuguError::InvalidPath(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,

@@ -343,6 +343,9 @@ enum FsAction {
         /// 覆盖已存在的目标目录（整目录替换）
         #[arg(long)]
         overwrite: bool,
+        /// 保留归档里的原结构，不把同名顶层目录提上来
+        #[arg(long)]
+        no_collapse: bool,
     },
 
     #[command(about = "新建目录")]
@@ -362,6 +365,9 @@ enum FsAction {
         to: String,
         #[arg(long)]
         overwrite: bool,
+        /// 源所在节点；与 --node 不同时走跨节点搬运
+        #[arg(long)]
+        from_node: Option<String>,
     },
 
     #[command(about = "复制文件或目录（目录递归）")]

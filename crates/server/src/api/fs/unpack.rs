@@ -30,8 +30,9 @@ pub(super) async fn extract_fs(
         .map(|dest| dest.trim().to_string())
         .filter(|dest| !dest.is_empty());
     let overwrite = body.overwrite;
+    let collapse = body.collapse;
     let done = run(state.fs.clone(), move |scope| {
-        gugu_core::fs::extract(scope, &path, dest.as_deref(), overwrite)
+        gugu_core::fs::extract(scope, &path, dest.as_deref(), overwrite, collapse)
     })
     .await;
     match done {

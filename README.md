@@ -26,7 +26,7 @@
 - **版本更新** — 侧栏版本号即入口：检查最新发布、一键下载安装、替换后自动重启；自动更新可设为关闭 / 仅检查 / 自动安装，来源支持 GitHub、Gitee 与自建清单
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
-- **文件管理** — 白名单目录内的浏览器：目录浏览、文本预览（UTF-8 / GBK 自动解码）、原始文件下载与目录打包下载（zip 流式）、上传（拖拽、整目录、大文件分片续传、实时进度与取消）、归档解压（zip / tar / tar.gz，解到旁边的同名目录，覆盖需确认）、新建目录与空文件、改名/移动、复制、删除；写操作默认关闭，开启后受白名单与 API Key 双重约束，所有写操作进审计
+- **文件管理** — 白名单目录内的浏览器：目录浏览、文本预览（UTF-8 / GBK 自动解码）、原始文件下载与目录打包下载（zip 流式）、上传（拖拽、整目录、大文件分片续传、实时进度与取消）、归档解压（zip / tar / tar.gz，解到旁边的同名目录，覆盖需确认）、剪切与粘贴（同节点即移动，跨节点由中心节点搬运）、新建目录与空文件、改名/移动、复制、删除；写操作默认关闭，开启后受白名单与 API Key 双重约束，所有写操作进审计
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
 - **CORS 配置** — 可限制允许的跨域来源
@@ -206,10 +206,14 @@ gugu fs ls [PATH] [--json]        # 列出目录（缺省为白名单第一个�
 gugu fs cat <PATH> [--limit 65536]  # 预览文本（UTF-8 / GBK 自动解码，超出上限只显开头）
 gugu fs get <PATH> [-o 本地] [-r]  # 下载文件；-r 递归取目录并保留结构，终端里显示进度
 gugu fs put <本地> <PATH> [--overwrite] [-r]  # 上传；-r 递归传目录，终端里显示进度
-gugu fs extract <PATH> [-d 目标] [--overwrite]  # 解压 zip / tar / tar.gz，缺省解到旁边的同名目录
+gugu fs extract <PATH> [-d 目标] [--overwrite] [--no-collapse]
+                                  # 解压 zip / tar / tar.gz；缺省解到旁边的同名目录，
+                                  # --no-collapse 保留归档里的顶层目录
 gugu fs mkdir <PATH> [-p]         # 新建目录，-p 逐级创建
 gugu fs touch <PATH>              # 新建空文件
 gugu fs mv <FROM> <TO> [--overwrite]   # 改名或移动
+gugu fs mv <FROM> <TO> --from-node edge
+                                  # 跨节点搬运：源在 edge，目标在当前 --node 的节点
 gugu fs cp <FROM> <TO> [--overwrite]   # 复制文件或目录
 gugu fs rm <PATH> [-r]            # 删除，目录需加 -r
 gugu add <name> -x "node app.js"  # 添加进程
@@ -289,8 +293,9 @@ gugu add frontend -x "bun run dev" \
 | GET | `/api/v1/fs/stat?path=...` | 单个路径的类型、大小、修改时间、只读标记 |
 | GET | `/api/v1/fs/read?path=...&limit=1048576` | 文本预览（UTF-8 / GBK 自动解码，二进制只回标记） |
 | GET | `/api/v1/fs/download?path=...` | 下载原始文件（流式；中文名走 RFC 5987） |
-| GET | `/api/v1/fs/archive?path=...` | 目录打包下载（zip 流式；符号链接跳过，原始内容超 2 GB 拒绝） |
-| POST | `/api/v1/fs/extract?path=...` | 解压归档 `{path, dest?, overwrite}`（zip / tar / tar.gz；缺省解到旁边的同名目录） |
+| GET | `/api/v1/fs/archive?path=...&flat=false` | 打包下载（zip 流式；目录默认套一层同名目录，`flat=true` 时内容直接在归档根；单文件打成一个条目；符号链接跳过，原始内容超 2 GB 拒绝） |
+| POST | `/api/v1/fs/extract?path=...` | 解压归档 `{path, dest?, overwrite, collapse?}`（zip / tar / tar.gz；缺省解到旁边的同名目录；`collapse=false` 保留归档里的顶层目录） |
+| POST | `/api/v1/fs/transfer?from=...` | 跨节点搬运 `{from, to, from_node?, to_node?, overwrite}`：源侧打包 / 取文件 → 中心节点中转 → 目标侧落地 → 删源；两端同节点返回 400，改用 `/fs/rename` |
 | POST | `/api/v1/fs/upload?path=...&overwrite=false` | 上传：请求体即文件内容，边收边写临时文件再改名就位 |
 | POST | `/api/v1/fs/upload/session?path=...` | 创建分片上传会话 `{path, size, overwrite}`，返回 `{id, offset}` |
 | GET | `/api/v1/fs/upload/session/{id}` | 查询会话已收字节数；续传前先取这个偏移 |
@@ -497,6 +502,7 @@ flowchart LR
     S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["同目录临时文件 → 改名就位"]
     S -->|"upload/session 分片追加"| C["会话表<br/>偏移校验与续传"]
     S -->|"extract 解压归档"| X["临时目录解包<br/>→ 整体改名就位"]
+    S -->|"transfer 跨节点搬运"| T["源侧打包 / 取文件<br/>→ 中心节点中转<br/>→ 目标侧落地 → 删源"]
     S -.->|"越界或只读"| D["403"]
 ```
 
@@ -507,12 +513,16 @@ flowchart LR
 - **下载** — 单文件是流式响应，`Content-Disposition` 同时带 ASCII 兜底名与 RFC 5987 的 UTF-8 名，中文文件名不乱码。目录走 `/fs/archive` 打包成 zip：归档在系统临时目录生成，响应结束即删除，符号链接按链接自身跳过，原始内容超过 2 GB 时提示分目录下载
 - **解压** — 支持 zip、tar 与 tar.gz / tgz。目标缺省是归档旁的同名目录（`foo.zip` → `foo/`），也可以显式指定；目标已存在时必须显式覆盖，覆盖是整目录替换，不与旧内容合并。条目先解到目标旁的 `.gugu-unpack-` 临时目录，全部成功后再整体改名就位，中途失败不留半个目录。归档里只有一个与目标同名的顶层目录时直接展开它，`foo.zip` 里的 `foo/` 不会解成 `foo/foo/`；顶层目录名与目标不同则原样保留，那通常是作者有意留的一层
 - **解压的安全边界** — 条目名里的 `..`、绝对路径与盘符一律跳过，符号链接与设备文件条目同样跳过（链接指向白名单之外，落地就绕开了范围检查）；解压后总量上限 2 GB、条目数上限 2 万，压缩率不设限，靠总量兜住压缩炸弹
+- **剪切与粘贴** — WebUI 行按钮「剪切」把来源与来源节点记进标签页的会话存储，工具条显示「粘贴 <名字>」与「取消」。粘贴目标是当前目录 + 原名：同一节点走 `/fs/rename`（就是移动），跨节点走中心节点的 `/fs/transfer`。目标已存在时先弹确认，确认后带 `overwrite` 重试。剪贴板只有一项，换一处剪切即替换；切换节点时保留，方便跨节点搬完再粘
+- **跨节点搬运** — 由中心节点编排，四步：源侧打包（目录平铺打包，单文件直接取内容）→ 中心节点系统临时目录中转 → 目标侧落地（目录解压到目标、单文件写入并改名就位）→ 删源。成功后才删源；删源失败返回 500 并说明「内容已到达 <目标>，但删除源失败」，不谎报成功。前置检查先查源是否存在、是否符号链接、目标父目录是否存在、目标是否已存在，避免搬完一大包才失败
+- **搬运的中转命名** — 目录走归档：中心节点用 `<系统临时目录>/.gugu-transfer-*.zip`，目标侧用 `<目标父目录>/.gugu-move-*.zip`，解压后即删。单文件走内容流：目标侧先写 `<目标父目录>/.gugu-part-*.bin`，写完再整体改名。这些名字都在 `.gugu-` 前缀下，列表与打包自动跳过
+- **两端同节点交给改名** — `/fs/transfer` 收到 `from_node` 与 `to_node` 相同时返回 400 并指向 `/api/v1/fs/rename`，同一件事只有一条实现；WebUI 与 CLI 各自按节点是否相同分叉
 - **进度与取消** — 上传用 XHR 取上传进度，下载按 `Content-Length` 与已读字节算百分比；WebUI 顶部一行传输条显示文件名、百分比与已收字节，随时可取消。取消只中止请求，已收字节留在服务端会话里，重新选中同一个文件从断点接着传；「放弃」才删掉会话与临时文件
 - **拖拽与整目录上传** — 把文件或文件夹拖进文件视图即上传，目录按原结构先建目录再传文件；「上传目录」按钮走同一套逻辑
 - **写入不留半成品** — 保存文本、单请求上传与分片追加都先落到 `.gugu-` 前缀的临时文件，中途失败不会出现半个文件，也不会破坏原文件；列表与打包会跳过这些中转文件
 - **根与目录的保护** — 删除目录必须显式 `recursive=true`；白名单根自身不允许删除或改名，避免一次操作把整个视图的入口端掉
-- **审计动作码** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` / `fs.extract` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径。审计发生在读请求体之前，所以写操作把路径同时放在查询串的 `path` 或 `from` 参数里（CLI 与 WebUI 都这么做），自建客户端照此传即可让审计记下文件名
-- **多节点** — 选中从节点时，文件视图经中心节点代理访问那台机器的白名单；上传、分片追加、解压与打包下载都按流转发，不受代理 4 MB 请求体上限约束
+- **审计动作码** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` / `fs.extract` / `fs.transfer` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径。审计发生在读请求体之前，所以写操作把路径同时放在查询串的 `path` 或 `from` 参数里（CLI 与 WebUI 都这么做），自建客户端照此传即可让审计记下文件名
+- **多节点** — 选中从节点时，文件视图经中心节点代理访问那台机器的白名单；上传、分片追加、解压与打包下载都按流转发，不受代理 4 MB 请求体上限约束。跨节点搬运的方向相反：一次请求要同时动两台机器，中心节点自己调用两端的接口，不经过 `/nodes/{id}` 代理
 - **安全门槛** — 开启写权限、监听非回环地址、又没有配置 `api_key` 时守护进程拒绝启动；只读模式不做这条限制。启动日志会打印白名单根数与「可读写 / 只读」
 - **体检** — `gugu check` 打印每个根目录是否存在；空条目直接算配置错误
 

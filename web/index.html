@@ -212,11 +212,16 @@
                     <button type="button" class="btn btn-sm" id="files-upload-dir">上传目录</button>
                     <button type="button" class="btn btn-sm" id="files-mkdir">新建目录</button>
                     <button type="button" class="btn btn-sm" id="files-touch">新建文件</button>
+                    <button type="button" class="btn btn-sm" id="files-paste" hidden>粘贴</button>
                     <input type="file" id="files-input" multiple hidden>
                     <input type="file" id="files-dir-input" webkitdirectory multiple hidden>
                 </div>
             </div>
             <p class="note" id="files-mode" hidden></p>
+            <div class="transfer transfer-clip" id="files-clip" hidden>
+                <span class="transfer-label" id="clip-label">已剪切</span>
+                <button type="button" class="btn btn-sm btn-quiet" id="clip-cancel">取消</button>
+            </div>
             <div class="transfer" id="files-transfer" hidden>
                 <span class="transfer-label" id="transfer-label">传输</span>
                 <div class="transfer-bar"><i id="transfer-fill"></i></div>

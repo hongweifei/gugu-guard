@@ -87,6 +87,7 @@ pub(super) async fn dispatch(api: &ApiHelper<'_>, action: &FsAction) -> Result<(
             path,
             dest,
             overwrite,
+            no_collapse,
         } => {
             // 路径同时放进查询串：审计中间件在读完请求体之前就要记下对象。
             let url = format!("/api/v1/fs/extract?path={}", encode_query(path));
@@ -96,6 +97,7 @@ pub(super) async fn dispatch(api: &ApiHelper<'_>, action: &FsAction) -> Result<(
                     "path": path,
                     "dest": dest,
                     "overwrite": overwrite,
+                    "collapse": !no_collapse,
                 }))
                 .send()
                 .await
@@ -130,15 +132,42 @@ pub(super) async fn dispatch(api: &ApiHelper<'_>, action: &FsAction) -> Result<(
             from,
             to,
             overwrite,
+            from_node,
         } => {
-            let url = format!("/api/v1/fs/rename?from={}", encode_query(from));
-            let resp = api
-                .post(&url)
-                .json(&serde_json::json!({ "from": from, "to": to, "overwrite": overwrite }))
-                .send()
-                .await
-                .context("无法连接到守护进程")?;
-            print_api_response(resp).await?;
+            let target_node = api
+                .node_name()
+                .unwrap_or(gugu_core::config::LOCAL_NODE_NAME);
+            let source_node = from_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(target_node);
+            if source_node == target_node {
+                let url = format!("/api/v1/fs/rename?from={}", encode_query(from));
+                let resp = api
+                    .post(&url)
+                    .json(&serde_json::json!({ "from": from, "to": to, "overwrite": overwrite }))
+                    .send()
+                    .await
+                    .context("无法连接到守护进程")?;
+                print_api_response(resp).await?;
+            } else {
+                // 跨节点搬运必须直连中心节点：两端节点在 body 里点名。
+                let url = format!("/api/v1/fs/transfer?from={}", encode_query(from));
+                let resp = api
+                    .direct(reqwest::Method::POST, &url)
+                    .json(&serde_json::json!({
+                        "from": from,
+                        "to": to,
+                        "from_node": source_node,
+                        "to_node": target_node,
+                        "overwrite": overwrite,
+                    }))
+                    .send()
+                    .await
+                    .context("无法连接到守护进程")?;
+                print_api_response(resp).await?;
+            }
         }
 
         FsAction::Cp {

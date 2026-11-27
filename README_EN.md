@@ -26,7 +26,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Version Update** — the sidebar version is the entry point: check the latest release, install it in one click, and let the daemon restart itself; auto-update can be off, check-only or install, with sources from GitHub, Gitee or your own manifest
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
-- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads and zip archives of whole directories, uploads (drag and drop, whole folders, chunked resume for large files, live progress and cancel), archive extraction (zip / tar / tar.gz into a sibling folder, overwrite confirmed), creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
+- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads and zip archives of whole directories, uploads (drag and drop, whole folders, chunked resume for large files, live progress and cancel), archive extraction (zip / tar / tar.gz into a sibling folder, overwrite confirmed), cut and paste (a move on the same node, a hub-driven transfer across nodes), creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
 - **CORS Config** — Configurable allowed cross-origin origins
@@ -205,10 +205,14 @@ gugu fs ls [PATH] [--json]        # List a directory (defaults to the first whit
 gugu fs cat <PATH> [--limit N]    # Preview text (UTF-8 / GBK auto-decoded; N bytes max)
 gugu fs get <PATH> [-o DIR] [-r]   # Download a file; -r pulls a whole directory and keeps its layout
 gugu fs put <LOCAL> <PATH> [--overwrite] [-r]  # Upload; -r pushes a directory, both show progress
-gugu fs extract <PATH> [-d DEST] [--overwrite]  # Unpack zip / tar / tar.gz into a sibling folder by default
+gugu fs extract <PATH> [-d DEST] [--overwrite] [--no-collapse]
+                                  # Unpack zip / tar / tar.gz; sibling folder by default,
+                                  # --no-collapse keeps the archive's top directory
 gugu fs mkdir <PATH> [-p]         # Create a directory; -p creates parents
 gugu fs touch <PATH>              # Create an empty file
 gugu fs mv <FROM> <TO> [--overwrite]   # Rename or move
+gugu fs mv <FROM> <TO> --from-node edge
+                                  # Cross-node move: source lives on edge, target on the current --node
 gugu fs cp <FROM> <TO> [--overwrite]   # Copy a file or a directory
 gugu fs rm <PATH> [-r]            # Delete; directories need -r
 gugu add <name> -x "node app.js"  # Add a process
@@ -290,8 +294,9 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | GET | `/api/v1/fs/stat?path=...` | Kind, size, mtime and read-only flag of one path |
 | GET | `/api/v1/fs/read?path=...&limit=1048576` | Text preview (UTF-8 / GBK auto-decoded; binaries return a flag only) |
 | GET | `/api/v1/fs/download?path=...` | Stream the raw file (UTF-8 name via RFC 5987) |
-| GET | `/api/v1/fs/archive?path=...` | Zip a whole directory (streamed; symlinks skipped, raw content above 2 GB refused) |
-| POST | `/api/v1/fs/extract?path=...` | Unpack an archive `{path, dest?, overwrite}` (zip / tar / tar.gz; sibling folder by default) |
+| GET | `/api/v1/fs/archive?path=...&flat=false` | Zip a path (streamed; a directory nests under its own name by default, `flat=true` lays content at the archive root; a single file becomes one entry; symlinks skipped, raw content above 2 GB refused) |
+| POST | `/api/v1/fs/extract?path=...` | Unpack an archive `{path, dest?, overwrite, collapse?}` (zip / tar / tar.gz; sibling folder by default; `collapse=false` keeps the archive's top directory) |
+| POST | `/api/v1/fs/transfer?from=...` | Cross-node move `{from, to, from_node?, to_node?, overwrite}`: the source packs / streams the content, the hub relays it, the target lays it down, then the source is deleted. Same node on both ends returns 400; use `/fs/rename` |
 | POST | `/api/v1/fs/upload?path=...&overwrite=false` | Upload: the body is the content, streamed to a temp file then renamed |
 | POST | `/api/v1/fs/upload/session?path=...` | Open a chunked session `{path, size, overwrite}`, returns `{id, offset}` |
 | GET | `/api/v1/fs/upload/session/{id}` | Bytes received so far; read this offset before resuming |
@@ -511,6 +516,7 @@ flowchart LR
     S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["Same-directory temp file → rename"]
     S -->|"upload/session chunks"| C["Session table<br/>offset checks and resume"]
     S -->|"extract an archive"| X["Unpack into a temp folder<br/>→ rename into place"]
+    S -->|"transfer across nodes"| T["Source packs / streams<br/>→ hub relays<br/>→ target lays down → source deleted"]
     S -.->|"outside roots or read-only"| D["403"]
 ```
 
@@ -542,6 +548,25 @@ flowchart LR
   and device entries are skipped as well (a link pointing outside the roots would bypass the scope check).
   Unpacked content is capped at 2 GB and 20,000 entries; compression ratio is not limited, the byte cap
   covers zip bombs
+- **Cut and paste** — the row button "Cut" records the source and its node in the tab's session storage,
+  and the toolbar shows "Paste <name>" plus "Cancel". The paste target is the current directory plus the
+  original name: the same node goes through `/fs/rename` (i.e. a move), a different node goes through the
+  hub's `/fs/transfer`. An existing target asks for confirmation first and retries with `overwrite`. The
+  clipboard holds one item, so cutting elsewhere replaces it; it survives a node switch, which is what
+  makes a cross-node paste possible
+- **Cross-node move** — the hub orchestrates four steps: the source packs the directory flat (a single
+  file streams as is) → the hub relays through its system temp directory → the target lays it down
+  (extract for directories, write-then-rename for a file) → the source is deleted. The source is removed
+  only on success; a failed removal returns 500 and says the content already reached the target, rather
+  than claiming success. Checks run first: source exists and is not a symlink, the target's parent exists,
+  the target itself is not silently replaced
+- **Transfer leftovers** — directories: `<system temp>/.gugu-transfer-*.zip` on the hub and
+  `<target parent>/.gugu-move-*.zip` on the target, both removed after extraction. Single files: the target
+  first writes `<target parent>/.gugu-part-*.bin` and renames it into place. All of them sit under the
+  `.gugu-` prefix, so listing and archiving skip them
+- **Same node belongs to rename** — `/fs/transfer` returns 400 pointing at `/api/v1/fs/rename` when
+  `from_node` and `to_node` match, so the same job has a single implementation; the WebUI and CLI branch on
+  that comparison themselves
 - **Progress and cancel** — uploads read progress from XHR, downloads compute a percentage from
   `Content-Length` and the bytes read. The WebUI shows one transfer row with name, percentage and bytes
   received, plus a cancel button. Cancelling only aborts the request: the bytes already received stay in
@@ -555,13 +580,14 @@ flowchart LR
 - **Root protection** — deleting a directory requires `recursive=true`; a whitelist root itself cannot be
   deleted or renamed, so no single click removes the whole view's entry point
 - **Audit codes** — `fs.upload` / `fs.upload.begin` / `fs.upload.chunk` / `fs.upload.abort` / `fs.write` /
-  `fs.extract` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`, with the concrete path as
-  the target. Audit runs before the request body is read, so write calls carry the path in the `path` or
-  `from` query parameter as well (the CLI and WebUI do); custom clients can do the same to have the file
-  name recorded
+  `fs.extract` / `fs.transfer` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`, with the
+  concrete path as the target. Audit runs before the request body is read, so write calls carry the path in
+  the `path` or `from` query parameter as well (the CLI and WebUI do); custom clients can do the same to
+  have the file name recorded
 - **Multiple nodes** — on a remote node the view goes through the hub proxy to that machine's whitelist;
   uploads, chunk appends, extraction and archive downloads are proxied as streams and are not bound by the
-  4 MB proxy body limit
+  4 MB proxy body limit. A cross-node move goes the other way round: the hub calls both ends' endpoints
+  itself, because one request touches two machines at once and cannot be forwarded as a whole
 - **Exposure gate** — enabling writes on a non-loopback bind without an `api_key` makes the daemon refuse
   to start; read-only mode has no such restriction. Startup logs print the root count and read/write mode
 - **Health check** — `gugu check` prints whether each root exists; an empty entry is a config error

@@ -1,9 +1,8 @@
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use gugu_core::config::LOCAL_NODE_NAME;
 use serde::Deserialize;
 use serde_json::json;
@@ -39,15 +38,12 @@ async fn ws_handler(
             .on_upgrade(move |socket| handle_socket(socket, state))
             .into_response();
     };
-    let Some(remote) = state.nodes.remote(node) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("未知节点: {node}") })),
-        )
-            .into_response();
+    let remote = match crate::nodes::upstream_of(&state, node) {
+        Ok(remote) => remote,
+        Err(e) => return e.into_response(),
     };
     let node = node.to_string();
-    ws.on_upgrade(move |socket| crate::nodes::relay_ws(remote, socket, node))
+    ws.on_upgrade(move |socket| crate::nodes::relay(remote, socket, node))
         .into_response()
 }
 

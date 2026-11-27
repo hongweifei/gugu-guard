@@ -2,9 +2,18 @@
 // 其余文件只读写，不再重复声明。加载顺序见 index.html 底部的 <script> 链。
 
 const API = '/api/v1';
+/// 节点标识能否当成路径段用：`.` 和 `..` 会被浏览器折叠成目录，一律回退本机。
+/// 服务端已经拒绝这类节点名，这里再兜一层，防止本地存储里的旧值把请求带偏。
+function safeNodeId(id) {
+    return id && id !== '.' && id !== '..' && !id.includes('/') ? id : 'local';
+}
+
 /// 当前查看的节点：`local` 是本机，其余为中心节点配置里的从节点标识。
 /// 切换入口在 nodes.js，REST 与实时推送都跟随这个值。
-let currentNode = localStorage.getItem('gugu_node') || 'local';
+let currentNode = safeNodeId(localStorage.getItem('gugu_node') || 'local');
+if (localStorage.getItem('gugu_node') !== currentNode) {
+    localStorage.setItem('gugu_node', currentNode);
+}
 let ws = null;
 let selectedProcess = null;
 let editingName = null;
@@ -26,9 +35,31 @@ let logScrollTop = 0;
 /// 最近一次整机带宽读数，由 WS status 消息的 system 字段更新。
 let systemTraffic = null;
 
+/// 把节点标识编成 URL 路径段：保留字母数字与 `-` `_`，其余字节逐个转义。
+/// 转义只能处理普通字符：`%2E%2E` 在 URL 解析时依旧按 `..` 折叠，所以点段由
+/// safeNodeId 在进路径之前挡掉。
+function nodeSegment(id) {
+    return Array.from(new TextEncoder().encode(id)).map((b) => {
+        const ch = String.fromCharCode(b);
+        return /[A-Za-z0-9_-]/.test(ch) ? ch : `%${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    }).join('');
+}
+
 /// 把接口路径拼上当前节点前缀；本机不加前缀，从节点走中心节点的代理路径。
 function apiPath(path) {
-    return currentNode === 'local' ? path : `/n/${encodeURIComponent(currentNode)}${path}`;
+    return currentNode === 'local' ? path : `/nodes/${nodeSegment(currentNode)}${path}`;
+}
+
+/// 切换节点时清空视图状态：全局变量在 core.js 声明，重置也只写在这里。
+function resetViewState() {
+    selectedProcess = null;
+    allProcesses = [];
+    systemTraffic = null;
+    logEntries = [];
+    groupFilter = null;
+    searchQuery = '';
+    const input = document.getElementById('search-input');
+    if (input) input.value = '';
 }
 
 async function request(method, path, body) {

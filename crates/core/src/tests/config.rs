@@ -738,6 +738,8 @@ url = "http://127.0.0.1:9092"
             .validate()
             .is_err());
         assert!(node("   ", "http://127.0.0.1:1", None).validate().is_err());
+        assert!(node("..", "http://127.0.0.1:1", None).validate().is_err());
+        assert!(node(".", "http://127.0.0.1:1", None).validate().is_err());
         assert!(node("web1", "10.0.0.12:9090", None).validate().is_err());
         assert!(node("web1", "http://", None).validate().is_err());
     }
@@ -750,27 +752,5 @@ url = "http://127.0.0.1:9092"
         ]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("重复"), "{problems:?}");
-    }
-
-    #[test]
-    fn url_host_strips_port_and_brackets() {
-        assert_eq!(url_host("http://10.0.0.12:9090/api"), Some("10.0.0.12"));
-        assert_eq!(url_host("http://[::1]:9090"), Some("::1"));
-        assert_eq!(
-            url_host("https://user:pw@example.com/x"),
-            Some("example.com")
-        );
-        assert_eq!(url_host("http://"), Some(""));
-        assert_eq!(url_host("example.com"), None);
-    }
-
-    #[test]
-    fn loopback_detection_covers_ipv6_and_localhost() {
-        assert!(host_is_loopback("localhost"));
-        assert!(host_is_loopback("127.0.0.1"));
-        assert!(host_is_loopback("127.9.9.9"));
-        assert!(host_is_loopback("::1"));
-        assert!(!host_is_loopback("10.0.0.12"));
-        assert!(!host_is_loopback("example.com"));
     }
 }

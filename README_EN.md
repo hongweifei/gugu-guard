@@ -262,7 +262,7 @@ cgroup v2 hard limits (Linux only, see [cgroup v2 Hard Limits](#cgroup-v2-hard-l
 | WS | `/api/v1/terminal/ws` | Built-in terminal session (JSON frames: `input` / `resize` / `data` / `exit`) |
 | GET | `/api/v1/nodes` | Node table: local plus remote nodes with online state, latency, version, process counts |
 | GET | `/api/v1/node` | This node's own info (also what the hub probes every 5 seconds) |
-| ANY | `/api/v1/n/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
+| ANY | `/api/v1/nodes/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
 | WS | `/api/v1/ws?node=web1` | Real-time push for the selected node (hub relays to the node) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
@@ -469,7 +469,7 @@ addr = "127.0.0.1"               # loopback-only use may omit the API Key
 node_name = "hub"                # Display name, defaults to the hostname
 
 [[nodes]]
-name = "web1"                    # Node id: used in the URL path and by --node
+name = "web1"                    # Node id: used in the URL path and by --node; not . or ..
 label = "Shanghai Web"           # Display name, optional
 url = "http://10.0.0.12:9090"    # Remote node address
 api_key = "that node's daemon.api_key"   # required for non-loopback addresses
@@ -478,9 +478,9 @@ api_key = "that node's daemon.api_key"   # required for non-loopback addresses
 - **Topology** — only the hub needs this config. Remote nodes keep running gugu as usual and do not need to know about the hub; they only expose their HTTP port and, when needed, their own `daemon.api_key`
 - **Switching is operating** — the top-bar selector repoints the process list, logs, metrics, audit and forms at that node, so start/stop and config edits apply there directly. Live status and logs follow through `WS /api/v1/ws?node=`, which the hub relays, still one push every 2 seconds
 - **Health** — the hub probes each node's `GET /api/v1/node` every 5 seconds and records online state, round-trip latency, version and process counts. The top-bar dot and `gugu nodes` read the same data; when a node is offline the last error is shown in a banner
-- **HTTP proxy** — `/api/v1/n/{node}/...` forwards method, query string, body, `Content-Type` and download headers unchanged, signing the request with that node's key; the response status and body pass through as-is
-- **CLI** — `gugu nodes` lists nodes; `--node <name>` routes any client command through the hub, e.g. `gugu --node web1 restart api`
-- **Audit** — a proxied write is recorded on the hub with the same action code, and the target is prefixed with the node id (`web1/api`) so local and remote operations stay distinguishable
+- **HTTP proxy** — `/api/v1/nodes/{node}/...` forwards method, query string, body, `Content-Type` and download headers unchanged, signing the request with that node's key; the response is streamed through, so downloading a large log does not build a copy in the hub's memory
+- **CLI** — `gugu nodes` lists nodes; `--node <name>` routes any client command through the hub, e.g. `gugu --node web1 restart api`. The id is escaped as a URL path segment, and `.` / `..` are rejected before the request is sent, so they can never fold back onto the hub's own API
+- **Audit** — a proxied write is recorded on the hub with the same action code, and the target is prefixed with the node id (`web1/api`) so local and remote operations stay distinguishable. In the remote node's own audit the client address is the hub, while the client type (CLI / WebUI) is preserved from the forwarded headers
 - **Security** — a node pointing at a non-loopback address must have an `api_key`, otherwise the daemon refuses to start (the same gate as the terminal); remote keys appear only in the hub config and in forwarded requests
 - **Terminal** — the built-in terminal operates the machine running gugu and is local-only; the entry is hidden while a remote node is selected, so use that node's own panel when you need a shell there
 - **When it applies** — the node table is read at daemon startup; restart the daemon after editing `[[nodes]]` (`gugu reload` reloads process config and daemon settings, it does not rebuild the node table)

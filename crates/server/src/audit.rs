@@ -141,7 +141,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 /// 把方法 + 路径映射成审计动作。GET / HEAD / OPTIONS 返回 None（不审计）。
 ///
-/// 代理路径 `/api/v1/n/{node}/...` 剥掉节点前缀后按同一张表分类，
+/// 代理路径 `/api/v1/nodes/{node}/...` 剥掉节点前缀后按同一张表分类，
 /// 对象前面带上节点名（`web1/api`），从节点的写操作在审计里不会和本机混在一起。
 fn classify(method: &Method, path: &str) -> Option<Action> {
     if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
@@ -149,24 +149,26 @@ fn classify(method: &Method, path: &str) -> Option<Action> {
     }
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
 
-    if let Some(rest) = segments.strip_prefix(&["api", "v1", "n"][..]) {
-        let Some((node, inner)) = rest.split_first() else {
-            return Some(Action {
-                code: "http.write",
-                label: "写操作",
-                target: None,
+    if let Some(rest) = segments.strip_prefix(&["api", "v1", "nodes"][..]) {
+        if let Some((node, inner)) = rest.split_first() {
+            if inner.is_empty() {
+                return Some(Action {
+                    code: "http.write",
+                    label: "写操作",
+                    target: Some((*node).to_string()),
+                });
+            }
+            let action = classify_segments(method, inner)?;
+            let target = Some(match action.target {
+                Some(target) => format!("{node}/{target}"),
+                None => (*node).to_string(),
             });
-        };
-        let action = classify_segments(method, inner)?;
-        let target = Some(match action.target {
-            Some(target) => format!("{node}/{target}"),
-            None => (*node).to_string(),
-        });
-        return Some(Action {
-            code: action.code,
-            label: action.label,
-            target,
-        });
+            return Some(Action {
+                code: action.code,
+                label: action.label,
+                target,
+            });
+        }
     }
 
     classify_segments(method, &segments)
@@ -288,16 +290,18 @@ mod tests {
 
     #[test]
     fn node_prefixed_writes_carry_the_node_in_target() {
-        let action = classify(&Method::POST, "/api/v1/n/web1/processes/api/start")
+        let action = classify(&Method::POST, "/api/v1/nodes/web1/processes/api/start")
             .expect("代理写操作应被审计");
         assert_eq!(action.code, "process.start");
         assert_eq!(action.target.as_deref(), Some("web1/api"));
 
-        let reload = classify(&Method::POST, "/api/v1/n/web1/reload").expect("代理重载应被审计");
+        let reload =
+            classify(&Method::POST, "/api/v1/nodes/web1/reload").expect("代理重载应被审计");
         assert_eq!(reload.code, "config.reload");
         assert_eq!(reload.target.as_deref(), Some("web1"));
 
-        assert!(classify(&Method::GET, "/api/v1/n/web1/processes").is_none());
+        assert!(classify(&Method::GET, "/api/v1/nodes/web1/processes").is_none());
+        assert!(classify(&Method::GET, "/api/v1/nodes").is_none());
     }
 
     #[test]

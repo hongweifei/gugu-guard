@@ -92,15 +92,17 @@ function renderAudit(data) {
     </table>`;
 }
 
+function closeAudit() {
+    document.getElementById('audit-overlay').classList.remove('open');
+}
+
 window.openAudit = function() {
     document.getElementById('audit-overlay').classList.add('open');
     loadAudit();
 };
 
 document.getElementById('btn-audit').onclick = window.openAudit;
-document.getElementById('btn-close-audit').onclick = () => {
-    document.getElementById('audit-overlay').classList.remove('open');
-};
+document.getElementById('btn-close-audit').onclick = closeAudit;
 document.getElementById('btn-refresh-audit').onclick = loadAudit;
 document.getElementById('audit-action-filter').onchange = loadAudit;
 document.getElementById('audit-range-filter').onchange = loadAudit;

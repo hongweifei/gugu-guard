@@ -31,7 +31,7 @@ async function loadNodes() {
     }
     renderNodePicker();
     renderNodeBanner();
-    applyNodeCapabilities();
+    refreshTerminalEntry();
 }
 
 function renderNodePicker() {
@@ -65,37 +65,20 @@ function renderNodeBanner() {
     banner.innerHTML = `<span class="node-banner-dot"></span>节点「${esc(current.name)}」当前不可达：${esc(current.last_error || '连接失败')}。可以继续停留在该节点等待恢复，或切回本机。`;
 }
 
-/// 远程节点不能开终端：终端的 PTY 只存在于本机。
-function applyNodeCapabilities() {
-    const button = document.getElementById('btn-terminal');
-    if (currentNode === 'local') {
-        if (terminalInfo) button.hidden = false;
-        else initTerminal();
-        return;
-    }
-    button.hidden = true;
-    if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
-}
-
 async function switchNode(id) {
+    id = safeNodeId(id);
     if (id === currentNode) return;
     currentNode = id;
     localStorage.setItem('gugu_node', id);
 
-    closeNodeOverlays();
-    selectedProcess = null;
-    allProcesses = [];
-    systemTraffic = null;
-    logEntries = [];
-    groupFilter = null;
-    searchQuery = '';
-    document.getElementById('search-input').value = '';
+    closeAllOverlays();
+    resetViewState();
     render(true);
     updateNetStats();
 
     renderNodePicker();
     renderNodeBanner();
-    applyNodeCapabilities();
+    refreshTerminalEntry();
     connectWS();
 
     const current = nodeList.find(n => n.id === id);
@@ -106,17 +89,5 @@ async function switchNode(id) {
     } catch {
         render(true);
         toast(`节点 ${current ? current.name : id} 暂时读不到进程列表`, 'error');
-    }
-}
-
-function closeNodeOverlays() {
-    if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
-    if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
-    if (document.getElementById('audit-overlay').classList.contains('open')) document.getElementById('audit-overlay').classList.remove('open');
-    if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
-    if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
-    if (document.getElementById('fs-backdrop').classList.contains('open')) {
-        fsCallback = null;
-        document.getElementById('fs-backdrop').classList.remove('open');
     }
 }

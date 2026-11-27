@@ -32,13 +32,24 @@ const TERMINAL_THEME = {
     brightWhite: '#f8fafc',
 };
 
-async function initTerminal() {
+/// 按当前节点刷新终端入口：终端的 PTY 只存在于本机，
+/// 选中从节点时隐藏入口并关掉已开的浮层。切换节点、登录成功、启动时都走这里。
+function refreshTerminalEntry() {
     const button = document.getElementById('btn-terminal');
     if (currentNode !== 'local') {
-        // 终端的 PTY 只存在于本机，选中从节点时不提供入口。
         button.hidden = true;
+        if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
         return;
     }
+    if (terminalInfo) {
+        button.hidden = false;
+        return;
+    }
+    initTerminal();
+}
+
+async function initTerminal() {
+    const button = document.getElementById('btn-terminal');
     try {
         const info = await api('GET', '/terminal');
         terminalInfo = info;

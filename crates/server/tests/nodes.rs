@@ -63,6 +63,14 @@ async fn upstream_processes(headers: HeaderMap) -> Response {
     Json(json!([{ "name": "remote-app", "status": "running" }])).into_response()
 }
 
+/// 300 KB 的响应体：代理必须边收边转，不能截断也不能要求整段读进内存。
+async fn upstream_large(headers: HeaderMap) -> Response {
+    if !upstream_ok(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    "x".repeat(300 * 1024).into_response()
+}
+
 async fn upstream_start(headers: HeaderMap, Path(name): Path<String>, body: String) -> Response {
     if !upstream_ok(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -88,6 +96,7 @@ async fn spawn_upstream() -> SocketAddr {
     let app = Router::new()
         .route("/api/v1/node", get(upstream_info))
         .route("/api/v1/processes", get(upstream_processes))
+        .route("/api/v1/large", get(upstream_large))
         .route("/api/v1/processes/{name}/start", post(upstream_start))
         .route("/api/v1/ws", get(upstream_ws));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -141,7 +150,7 @@ async fn call(app: Router, method: Method, uri: &str, body: Option<Value>) -> (S
     };
     let response = app.oneshot(request).await.expect("请求处理失败");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), 64 * 1024)
+    let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
         .await
         .expect("读取响应体失败");
     let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
@@ -182,14 +191,20 @@ async fn proxies_reads_and_writes_to_the_node() {
     let addr = spawn_upstream().await;
     let (app, _) = build_hub(addr);
 
-    let (status, body) = call(app.clone(), Method::GET, "/api/v1/n/edge/processes", None).await;
+    let (status, body) = call(
+        app.clone(),
+        Method::GET,
+        "/api/v1/nodes/edge/processes",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body[0]["name"], "remote-app");
 
     let (status, body) = call(
         app,
         Method::POST,
-        "/api/v1/n/edge/processes/remote-app/start",
+        "/api/v1/nodes/edge/processes/remote-app/start",
         Some(json!({ "reason": "test" })),
     )
     .await;
@@ -199,20 +214,61 @@ async fn proxies_reads_and_writes_to_the_node() {
 }
 
 #[tokio::test]
+async fn proxies_large_responses_without_truncation() {
+    let addr = spawn_upstream().await;
+    let (app, _) = build_hub(addr);
+
+    let request = Request::builder()
+        .uri("/api/v1/nodes/edge/large")
+        .header("Authorization", format!("Bearer {HUB_KEY}"))
+        .body(Body::empty())
+        .expect("构造请求失败");
+    let response = app.oneshot(request).await.expect("请求处理失败");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("读取代理响应失败");
+    assert_eq!(bytes.len(), 300 * 1024, "代理应完整转交大响应体");
+}
+
+#[tokio::test]
 async fn rejects_unknown_and_local_proxy_targets() {
     let addr = spawn_upstream().await;
     let (app, _) = build_hub(addr);
 
-    let (status, body) = call(app.clone(), Method::GET, "/api/v1/n/nope/processes", None).await;
+    let (status, body) = call(
+        app.clone(),
+        Method::GET,
+        "/api/v1/nodes/nope/processes",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().is_some_and(|e| e.contains("nope")));
 
-    let (status, _) = call(app.clone(), Method::GET, "/api/v1/n/local/processes", None).await;
+    let (status, _) = call(
+        app.clone(),
+        Method::GET,
+        "/api/v1/nodes/local/processes",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // 百分号编码的 `..` 不会被 URL 归一化，服务端按未知节点拒绝，请求留在代理路径上。
+    let (status, body) = call(
+        app.clone(),
+        Method::GET,
+        "/api/v1/nodes/%2E%2E/processes",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "未知节点: ..");
 
     // 没带中心节点 Key：代理入口本身也受认证保护。
     let request = Request::builder()
-        .uri("/api/v1/n/edge/processes")
+        .uri("/api/v1/nodes/edge/processes")
         .body(Body::empty())
         .expect("构造请求失败");
     let response = app.oneshot(request).await.expect("请求处理失败");

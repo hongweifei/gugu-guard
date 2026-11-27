@@ -288,11 +288,26 @@ async fn main() -> Result<()> {
                 lifecycle::stop(&config_path, cli.server.as_deref(), cli.api_key.as_deref()).await
             }
         },
-        _ => {
+        // 客户端命令：逐个列出，新增命令时这里和 client::run_client 都会报编译错误，
+        // 不会因为一条 `_` 兜底而把本地命令误送进客户端分发。
+        command @ (Commands::Nodes { .. }
+        | Commands::Status { .. }
+        | Commands::List { .. }
+        | Commands::Start { .. }
+        | Commands::Stop { .. }
+        | Commands::Restart { .. }
+        | Commands::Add { .. }
+        | Commands::Remove { .. }
+        | Commands::Logs { .. }
+        | Commands::History { .. }
+        | Commands::Exits { .. }
+        | Commands::Net { .. }
+        | Commands::Audit { .. }
+        | Commands::Reload) => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;
             client::run_client(
-                &cli.command,
+                command,
                 &server_url,
                 api_key.as_deref(),
                 cli.node.as_deref(),

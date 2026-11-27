@@ -6,6 +6,7 @@ pub mod health;
 pub mod history;
 pub mod logs;
 pub mod manager;
+pub mod net;
 pub mod notify;
 pub mod process;
 pub mod sockets;

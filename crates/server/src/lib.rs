@@ -91,13 +91,12 @@ pub async fn run_server(
         &options.nodes,
         options.node_name.clone(),
     ));
+    let poller_target = Arc::clone(&nodes);
     let state = AppState::new(manager, options.api_key, options.cors_origins)
         .with_audit(Arc::new(audit))
         .with_nodes(nodes)
         .with_shutdown(api_shutdown_tx)
         .with_terminal(options.terminal, options.terminal_cwd);
-    // 从节点探测独立于请求处理：没有从节点时任务立即结束。
-    let poller = state.nodes.spawn_poller();
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()
@@ -136,6 +135,10 @@ pub async fn run_server(
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Web 服务已启动: http://{addr}");
+
+    // 探测任务在端口绑定成功之后才起：绑定失败会直接返回，不留一个游离任务。
+    // 没有从节点时任务立即结束。
+    let poller = poller_target.spawn_poller();
 
     let served = axum::serve(
         listener,

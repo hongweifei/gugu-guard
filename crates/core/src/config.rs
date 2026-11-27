@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use toml_edit::{DocumentMut, Item, Table};
+
+use crate::net::{host_is_loopback, url_host};
 
 /// Web/API 默认监听地址（配置缺省时的服务端语义）。
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0";
@@ -98,7 +100,8 @@ impl AppConfig {
         validate_nodes(&self.nodes)
     }
 
-    /// 本机在节点列表里的显示名：`daemon.node_name` 优先，缺省用主机名。
+    /// 本机在节点表里的显示名：`daemon.node_name` 去空白后的值；
+    /// `None` 表示没有配置，由节点注册表退回主机名。
     #[must_use]
     pub fn local_node_name(&self) -> Option<String> {
         self.daemon
@@ -240,6 +243,11 @@ impl NodeConfig {
                 "节点名称 '{name}' 保留给本机"
             )));
         }
+        if name == "." || name == ".." {
+            return Err(crate::error::GuguError::ConfigError(format!(
+                "节点名称 '{name}' 会被 URL 当成目录段，换一个名字"
+            )));
+        }
         let base = self.base_url();
         if !(base.starts_with("http://") || base.starts_with("https://")) {
             return Err(crate::error::GuguError::ConfigError(format!(
@@ -251,11 +259,6 @@ impl NodeConfig {
                 "节点 '{name}' 的地址缺少主机名"
             )));
         };
-        if host.is_empty() {
-            return Err(crate::error::GuguError::ConfigError(format!(
-                "节点 '{name}' 的地址缺少主机名"
-            )));
-        }
         let has_key = self
             .api_key
             .as_deref()
@@ -288,44 +291,17 @@ pub fn validate_nodes(nodes: &[NodeConfig]) -> Vec<String> {
 /// 重复的节点名称（忽略大小写，返回首次出现时的写法）。
 #[must_use]
 pub fn duplicate_node_names(nodes: &[NodeConfig]) -> Vec<String> {
-    let mut seen: Vec<String> = Vec::with_capacity(nodes.len());
+    let mut seen = HashSet::with_capacity(nodes.len());
     let mut duplicates: Vec<String> = Vec::new();
     for node in nodes {
         let name = node.name.trim();
-        let key = name.to_ascii_lowercase();
-        if seen.contains(&key) {
-            if !duplicates.iter().any(|d| d.eq_ignore_ascii_case(name)) {
-                duplicates.push(name.to_string());
-            }
-        } else {
-            seen.push(key);
+        if !seen.insert(name.to_ascii_lowercase())
+            && !duplicates.iter().any(|d| d.eq_ignore_ascii_case(name))
+        {
+            duplicates.push(name.to_string());
         }
     }
     duplicates
-}
-
-/// 从 `http(s)://host[:port][/path]` 里取主机名（去端口、去 IPv6 方括号）。
-#[must_use]
-pub fn url_host(url: &str) -> Option<&str> {
-    let rest = url.split_once("://")?.1;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    if let Some(stripped) = host.strip_prefix('[') {
-        return stripped.split_once(']').map(|(host, _)| host);
-    }
-    Some(host.split(':').next().unwrap_or(""))
-}
-
-/// 主机是否为本机回环地址（`localhost`、`127.0.0.0/8`、`::1`）。
-#[must_use]
-pub fn host_is_loopback(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    host.parse::<std::net::IpAddr>()
-        .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

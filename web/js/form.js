@@ -280,9 +280,10 @@ function openFsBrowser(title, confirmText, selectDir, callback) {
     fsBrowse(startPath);
 }
 
-function closeFsBrowser() {
+/// 关闭文件浏览器。apply=false 时不把选择回填给调用方（切换节点时用）。
+function closeFsBrowser(apply = true) {
     document.getElementById('fs-backdrop').classList.remove('open');
-    if (fsCallback) {
+    if (apply && fsCallback) {
         const path = fsSelectedItem ? fsSelectedItem.path : (fsSelectDir ? fsCurrentPath : null);
         if (path) fsCallback(path);
     }
@@ -299,8 +300,8 @@ document.getElementById('btn-pick-cmd').onclick = () => openFsBrowser('选择可
 document.getElementById('btn-pick-dir').onclick = () => openFsBrowser('选择工作目录', '选择此目录', true, (path) => {
     document.getElementById('f-dir').value = path;
 });
-document.getElementById('btn-close-fs').onclick = () => { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); };
-document.getElementById('fs-cancel').onclick = () => { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); };
+document.getElementById('btn-close-fs').onclick = () => closeFsBrowser(false);
+document.getElementById('fs-cancel').onclick = () => closeFsBrowser(false);
 document.getElementById('fs-confirm').onclick = closeFsBrowser;
 document.getElementById('fs-go').onclick = () => fsBrowse(document.getElementById('fs-path').value.trim());
 document.getElementById('fs-up').onclick = () => {

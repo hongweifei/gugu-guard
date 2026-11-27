@@ -3,6 +3,17 @@
 
 let pendingRemove = null;
 
+/// 关闭所有浮层。切换节点时调用：上一个节点的日志、指标、表单不该留在屏幕上。
+/// 每个浮层由各自的模块负责关闭，这里只做汇总。
+function closeAllOverlays() {
+    if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
+    if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
+    if (document.getElementById('audit-overlay').classList.contains('open')) closeAudit();
+    if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
+    if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
+    if (document.getElementById('fs-backdrop').classList.contains('open')) closeFsBrowser(false);
+}
+
 window.askRemove = function(name) {
     pendingRemove = name;
     document.getElementById('confirm-text').textContent = `确定删除「${name}」？运行中的进程将被停止。`;
@@ -109,11 +120,12 @@ document.getElementById('process-grid').addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        // 只关最上面一层，由各模块自己的关闭函数负责清理内部状态。
         if (document.getElementById('terminal-overlay').classList.contains('open')) closeTerminal();
         else if (document.getElementById('log-overlay').classList.contains('open')) closeLogs();
         else if (document.getElementById('metric-overlay').classList.contains('open')) closeMetrics();
-        else if (document.getElementById('audit-overlay').classList.contains('open')) document.getElementById('audit-overlay').classList.remove('open');
-        else if (document.getElementById('fs-backdrop').classList.contains('open')) { fsCallback = null; document.getElementById('fs-backdrop').classList.remove('open'); }
+        else if (document.getElementById('audit-overlay').classList.contains('open')) closeAudit();
+        else if (document.getElementById('fs-backdrop').classList.contains('open')) closeFsBrowser(false);
         else if (document.getElementById('modal-backdrop').classList.contains('open')) closeModal();
         else if (document.getElementById('confirm-backdrop').classList.contains('open')) { pendingRemove = null; document.getElementById('confirm-backdrop').classList.remove('open'); }
         else if (document.getElementById('login-backdrop').classList.contains('open')) { /* don't close login */ }
@@ -146,7 +158,7 @@ document.getElementById('btn-login').onclick = async () => {
         document.getElementById('login-backdrop').classList.remove('open');
         render(true);
         connectWS();
-        initTerminal();
+        refreshTerminalEntry();
         loadNodes();
     } catch {
         API_KEY = '';
@@ -180,7 +192,7 @@ async function init() {
         } catch { /* 带宽只是补充读数，取不到就等 WS 推送 */ }
         render(true);
         connectWS();
-        initTerminal();
+        refreshTerminalEntry();
     } catch {
         document.getElementById('process-grid').innerHTML = '<div class="empty-state"><h3>连接失败</h3><p>无法连接到守护进程</p></div>';
     }

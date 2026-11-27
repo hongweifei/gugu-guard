@@ -3,6 +3,7 @@
 //! 传输与输出分开：本文件只管请求（含 `--node` 的代理路径改写）与错误口径，
 //! 表格、日志行与格式化在 [`output`]。
 
+mod fs;
 mod output;
 
 use anyhow::{Context, Result};
@@ -372,6 +373,10 @@ pub(crate) async fn run_client(
                 return Ok(());
             }
             wait_for_new_version(&api, &snapshot.current, target.as_deref()).await?;
+        }
+
+        Commands::Fs { action } => {
+            fs::dispatch(&api, action).await?;
         }
 
         Commands::Reload => {

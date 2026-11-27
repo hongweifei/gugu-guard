@@ -26,6 +26,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Version Update** — the sidebar version is the entry point: check the latest release, install it in one click, and let the daemon restart itself; auto-update can be off, check-only or install, with sources from GitHub, Gitee or your own manifest
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
+- **File Management** — Browser over whitelisted directories: listing, text preview (UTF-8 / GBK auto-decoded), raw downloads, uploads, creating directories and empty files, rename/move, copy, delete. Writes are off by default; once enabled they sit behind both the whitelist and the API key, and every write is audited
 - **File Browser** — Server-side file browsing for quick directory and executable selection
 - **API Key Auth** — Optional API key protection with WebUI login dialog
 - **CORS Config** — Configurable allowed cross-origin origins
@@ -200,6 +201,15 @@ gugu history <name> [-m 60]       # Metric time series (CPU/memory/connections, 
 gugu exits <name> [-m 60]         # Exit history and availability (persisted journal)
 gugu net [-m 60]                  # Host bandwidth time series
 gugu audit [-l 100] [--failed]    # Operation audit (newest first; --action by code, --since in minutes)
+gugu fs ls [PATH] [--json]        # List a directory (defaults to the first whitelist root)
+gugu fs cat <PATH> [--limit N]    # Preview text (UTF-8 / GBK auto-decoded; N bytes max)
+gugu fs get <PATH> [-o FILE]      # Download the raw file; keeps the remote name by default
+gugu fs put <LOCAL> <PATH>        # Upload; an existing target needs --overwrite
+gugu fs mkdir <PATH> [-p]         # Create a directory; -p creates parents
+gugu fs touch <PATH>              # Create an empty file
+gugu fs mv <FROM> <TO> [--overwrite]   # Rename or move
+gugu fs cp <FROM> <TO> [--overwrite]   # Copy a file or a directory
+gugu fs rm <PATH> [-r]            # Delete; directories need -r
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
@@ -274,7 +284,18 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | ANY | `/api/v1/nodes/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
 | WS | `/api/v1/ws?node=web1` | Real-time push for the selected node (hub relays to the node) |
 | GET | `/api/v1/stats` | Statistics |
-| GET | `/api/v1/fs/browse?path=.` | Browse the filesystem (limited by `daemon.web.fs_roots`; out-of-root paths return 403) |
+| GET | `/api/v1/fs/roots` | Whitelisted roots and the current write mode |
+| GET | `/api/v1/fs/list?path=.` | List a directory (limited by `daemon.web.fs_roots`; out-of-root paths return 403) |
+| GET | `/api/v1/fs/stat?path=...` | Kind, size, mtime and read-only flag of one path |
+| GET | `/api/v1/fs/read?path=...&limit=1048576` | Text preview (UTF-8 / GBK auto-decoded; binaries return a flag only) |
+| GET | `/api/v1/fs/download?path=...` | Stream the raw file (UTF-8 name via RFC 5987) |
+| POST | `/api/v1/fs/upload?path=...&overwrite=false` | Upload: the body is the content, streamed to a temp file then renamed |
+| PUT | `/api/v1/fs/write` | Save text `{path, content, create}` |
+| POST | `/api/v1/fs/mkdir` | Create a directory `{path, parents}` |
+| POST | `/api/v1/fs/touch` | Create an empty file `{path}` |
+| POST | `/api/v1/fs/rename` | Rename or move `{from, to, overwrite}` |
+| POST | `/api/v1/fs/copy` | Copy a file or directory `{from, to, overwrite}` |
+| DELETE | `/api/v1/fs?path=...&recursive=false` | Delete; directories require `recursive=true` |
 | POST | `/api/v1/reload` | Reload config |
 | POST | `/api/v1/shutdown` | Graceful daemon shutdown (stops all children first) |
 | WS | `/api/v1/ws` | Real-time status |
@@ -294,7 +315,7 @@ gugu-guard/
 │   ├── index.html
 │   ├── css/        # tokens(design tokens) / layout(shell & views) / components(shared controls) / panels(panels & tables)
 │   └── js/         # core(state/API/live channel/formatting) · ui(primitives/overlay stack/dialog/drawer/toast)
-│                   # views(sidebar/topbar/stats/groups/process table) · panels(overview/logs/metrics/audit/terminal)
+│                   # views(sidebar/topbar/stats/groups/process table/files) · panels(overview/logs/metrics/audit/terminal)
 │                   # forms(fields/dynamic rows/health/network/alerts/file browser/form body) · main(wiring & boot)
 ├── config.example.toml
 └── Cargo.toml      # Workspace root config
@@ -322,7 +343,8 @@ unknown keys the same way.
 | `daemon.web.addr` | string | `0.0.0.0` | Listen address |
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
-| `daemon.web.fs_roots` | string[] | `[]` | File-browse whitelist; empty means unrestricted, otherwise only these roots and their subdirectories |
+| `daemon.web.fs_roots` | string[] | `[]` | File-management whitelist; empty means unrestricted, otherwise only these roots and their subdirectories |
+| `daemon.web.fs_write` | bool | `false` | Allow file writes (upload, create, rename, copy, delete); read-only mode still browses, previews and downloads |
 | `daemon.web.terminal` | bool | `false` | Enable the built-in WebUI terminal; a non-loopback bind also requires `api_key` |
 | `daemon.update.enabled` | bool | `true` | Allow checking and installing; when off the update endpoints refuse outright |
 | `daemon.update.provider` | string | `github` | Release source: `github` / `gitee` / `manifest` |
@@ -460,23 +482,51 @@ gugu audit --action process.start --json
   `action` is the action code, `ok=true/false` keeps successes or failures only, `q` matches target,
   path, source and reason, and `since_minutes` bounds the time window
 
-### File Browse Whitelist
-
-The WebUI form uses `/api/v1/fs/browse` to pick working directories and executables. That endpoint
-can browse the whole machine by default, so narrow it down when the panel is exposed:
+### File Management
 
 ```toml
 [daemon.web]
 fs_roots = ["D:/projects", "/srv/apps"]   # empty means unrestricted
+fs_write = true                           # defaults to false: read-only browsing
 ```
 
-- **Checked on the real path** — the requested path is `canonicalize`d (`..` and symlinks resolved)
-  before a component-wise comparison with each root, so `/data` never covers `/database`
-- **Defaults to the first root** — opening the browser without a start directory uses `fs_roots[0]`,
-  which avoids landing on a working directory outside the whitelist
-- **403 outside the roots** — the error names the rejected path, so a whitelist block is easy to tell
-  apart from a missing directory
-- **Warning when unset** — a non-loopback bind without `fs_roots` logs the exposure at startup
+The **Files** view in the WebUI, the "choose file / choose directory" dialogs in the process form and
+the `gugu fs` commands all share the same endpoints and whitelist. Every request is resolved to a real
+path first, then checked against the roots; `..` and symlinks are expanded at that step, and anything
+outside returns 403.
+
+```mermaid
+flowchart LR
+    U["WebUI Files view<br/>gugu fs"] --> A["Auth + audit middleware"]
+    A --> S["Scope<br/>roots + write flag"]
+    S -->|"list / read / download"| R["Entries and file content"]
+    S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["Same-directory temp file → rename"]
+    S -.->|"outside roots or read-only"| D["403"]
+```
+
+- **Read-only by default** — `fs_write` defaults to `false`; browsing, preview and download always work.
+  Every write returns 403 with a message naming the config line to enable. The WebUI disables the write
+  buttons and shows one hint instead
+- **Component-wise scope** — `/data` does not cover `/database`; Windows comparison is case-insensitive.
+  Without a start directory the first root is used
+- **Preview rules** — at most 1 MB per read; strict UTF-8 first, GBK as fallback; a NUL byte within the
+  first 8 KB marks the file binary and no body is returned. A truncated preview is not editable; saves
+  are capped at 8 MB
+- **Streaming both ways** — an upload's body *is* the file content, written to a same-directory temp file
+  and renamed into place; an existing target needs an explicit `overwrite=true`. Downloads stream the
+  file and set `Content-Disposition` with both an ASCII fallback and the RFC 5987 UTF-8 name
+- **No half-written files** — text saves use the same temp-file-then-rename path, so a failed write never
+  leaves a partial file or damages the original
+- **Root protection** — deleting a directory requires `recursive=true`; a whitelist root itself cannot be
+  deleted or renamed, so no single click removes the whole view's entry point
+- **Audit codes** — `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` /
+  `fs.delete`, with the concrete path as the target. Audit runs before the request body is read, so write
+  calls carry the path in the `path` or `from` query parameter as well (the CLI and WebUI do); custom
+  clients can do the same to have the file name recorded
+- **Multiple nodes** — on a remote node the view goes through the hub proxy to that machine's whitelist;
+  uploads are proxied as a stream and are not bound by the 4 MB proxy body limit
+- **Exposure gate** — enabling writes on a non-loopback bind without an `api_key` makes the daemon refuse
+  to start; read-only mode has no such restriction. Startup logs print the root count and read/write mode
 - **Health check** — `gugu check` prints whether each root exists; an empty entry is a config error
 
 ### Built-in WebUI Terminal

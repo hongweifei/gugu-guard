@@ -47,6 +47,10 @@
                 <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm-.5 9A1.5 1.5 0 017 9.5h.01a1.5 1.5 0 010 3H7a1.5 1.5 0 01-1.5-1.5zM11 9a1 1 0 100 2h3a1 1 0 100-2h-3zm-4.5 4a1.5 1.5 0 000 3h.01a1.5 1.5 0 000-3H6.5zM11 13a1 1 0 100 2h3a1 1 0 100-2h-3z"/></svg>
                 <span>操作审计</span>
             </button>
+            <button type="button" class="nav-item" data-view="files" id="nav-files">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 6.4a2 2 0 012-2h3l1.9 2h6.1a2 2 0 012 2v6.2a2 2 0 01-2 2h-11a2 2 0 01-2-2V6.4z"/></svg>
+                <span>文件</span>
+            </button>
             <button type="button" class="nav-item" data-view="terminal" id="nav-terminal">
                 <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="3.5" width="16" height="13" rx="2"/><path d="M6 8l2.4 2-2.4 2M11 12h3"/></svg>
                 <span>终端</span>
@@ -189,6 +193,55 @@
                     <tbody id="atable-body"></tbody>
                 </table>
                 <div class="table-empty" id="audit-empty" hidden></div>
+            </div>
+        </section>
+
+        <!-- 文件视图 -->
+        <section class="view view-files" id="view-files" aria-label="文件管理" hidden>
+            <div class="files-bar">
+                <div class="files-nav">
+                    <button type="button" class="btn btn-icon" id="files-up" title="上一级" aria-label="上一级">
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 3a1 1 0 01.7.3l5 5a1 1 0 01-1.4 1.4L11 6.4V16a1 1 0 11-2 0V6.4L5.7 9.7a1 1 0 01-1.4-1.4l5-5A1 1 0 0110 3z"/></svg>
+                    </button>
+                    <select id="files-root" class="control" aria-label="根目录" hidden></select>
+                    <nav class="crumbs" id="files-crumbs" aria-label="当前路径"></nav>
+                </div>
+                <div class="files-tools">
+                    <button type="button" class="btn btn-sm" id="files-refresh">刷新</button>
+                    <button type="button" class="btn btn-sm" id="files-upload">上传</button>
+                    <button type="button" class="btn btn-sm" id="files-mkdir">新建目录</button>
+                    <button type="button" class="btn btn-sm" id="files-touch">新建文件</button>
+                    <input type="file" id="files-input" multiple hidden>
+                </div>
+            </div>
+            <p class="note" id="files-mode" hidden></p>
+            <div class="files-body">
+                <div class="table-wrap files-table">
+                    <table class="ftable" id="ftable">
+                        <thead>
+                            <tr>
+                                <th class="ft-name">名称</th>
+                                <th class="ft-size">大小</th>
+                                <th class="ft-time">修改时间</th>
+                                <th class="ft-actions"><span class="sr-only">操作</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="ftable-body"></tbody>
+                    </table>
+                    <div class="table-empty" id="files-empty" hidden></div>
+                </div>
+                <aside class="files-side" aria-label="文件预览">
+                    <header class="files-side-head">
+                        <span class="files-side-name" id="files-preview-name">未选择文件</span>
+                        <div class="files-side-actions">
+                            <button type="button" class="btn btn-sm" id="files-save" hidden>保存</button>
+                            <button type="button" class="btn btn-sm" id="files-download" hidden>下载</button>
+                        </div>
+                    </header>
+                    <p class="files-side-meta mono" id="files-preview-meta"></p>
+                    <textarea class="files-editor" id="files-editor" spellcheck="false" placeholder="这个文件是空的，输入内容后点「保存」" hidden></textarea>
+                    <p class="files-hint" id="files-hint">选择左侧文件查看内容</p>
+                </aside>
             </div>
         </section>
 
@@ -609,6 +662,26 @@
         <footer class="modal-foot modal-foot-center">
             <button type="button" class="btn" id="confirm-cancel">取消</button>
             <button type="button" class="btn btn-danger" id="confirm-ok">确认</button>
+        </footer>
+    </div>
+</div>
+
+<!-- ── 输入对话框 ───────────────────────────────────────────── -->
+<div class="modal-layer" id="prompt-layer" aria-hidden="true">
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+        <header class="modal-head">
+            <h2 id="prompt-title">输入</h2>
+        </header>
+        <div class="modal-body">
+            <div class="field">
+                <label for="prompt-input" id="prompt-label">名称</label>
+                <input type="text" id="prompt-input" autocomplete="off" spellcheck="false">
+                <p class="hint" id="prompt-hint" hidden></p>
+            </div>
+        </div>
+        <footer class="modal-foot">
+            <button type="button" class="btn" id="prompt-cancel">取消</button>
+            <button type="button" class="btn btn-primary" id="prompt-ok">确定</button>
         </footer>
     </div>
 </div>

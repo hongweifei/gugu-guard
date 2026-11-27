@@ -262,6 +262,49 @@ fn new_table(header: Vec<&str>) -> Table {
     table
 }
 
+/// 目录列表：类型、名称、大小与修改时间；标题行给出路径与写权限。
+pub(crate) fn print_fs_listing(listing: &gugu_core::fs::Listing) {
+    let mode = if listing.writable { "可写" } else { "只读" };
+    println!(
+        "{}（{} 个条目，{mode}）",
+        listing.path,
+        listing.entries.len()
+    );
+    if listing.entries.is_empty() {
+        println!("（空目录）");
+        return;
+    }
+
+    let mut table = new_table(vec!["类型", "名称", "大小", "修改时间"]);
+    for entry in &listing.entries {
+        let kind = match entry.kind {
+            gugu_core::fs::EntryKind::Dir => "目录",
+            gugu_core::fs::EntryKind::Link => "链接",
+            gugu_core::fs::EntryKind::File => "文件",
+        };
+        let size = if entry.is_dir {
+            String::new()
+        } else {
+            gugu_core::units::format_bytes(entry.size)
+        };
+        let modified = entry
+            .modified
+            .map(|at| {
+                at.with_timezone(&chrono::Local)
+                    .format("%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        table.add_row(vec![
+            Cell::new(kind),
+            Cell::new(&entry.name),
+            Cell::new(size),
+            Cell::new(modified),
+        ]);
+    }
+    println!("{table}");
+}
+
 /// 终端表格的字节格式：口径与 `gugu_core::units::format_bytes` 一致（1024 进制、一位小数）。
 /// 负值在这里没有实际来源，按 0 处理以免出现怪异的负数单位。
 fn format_size(bytes: f64) -> String {

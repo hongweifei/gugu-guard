@@ -16,6 +16,14 @@ pub enum GuguError {
     Io(#[from] std::io::Error),
     #[error("未授权: 无效或缺失 API Key")]
     Unauthorized,
+    #[error("路径不在 daemon.web.fs_roots 允许的范围内: {0}")]
+    PathDenied(String),
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    InvalidPath(String),
+    #[error("文件管理处于只读模式：在 gugu.toml 里把 daemon.web.fs_write 设为 true 才能修改文件")]
+    ReadOnly,
     #[error("循环依赖检测: {0}")]
     CyclicDependency(String),
 }

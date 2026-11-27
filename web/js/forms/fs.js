@@ -70,7 +70,7 @@ function goToTyped() {
 async function browse(path) {
     const ticket = ++seq;
     try {
-        const data = await api('GET', `/fs/browse?path=${encodeURIComponent(path || '')}`);
+        const data = await api('GET', `/fs/list?path=${encodeURIComponent(path || '')}`);
         if (ticket !== seq) return;
         current = data.path;
         parent = data.parent;

@@ -737,6 +737,7 @@ dependencies = [
  "socket2 0.5.10",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",

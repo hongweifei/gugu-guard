@@ -23,10 +23,13 @@ import { auditActivate, initAudit } from './panels/audit.js';
 import { initTerminal, terminalActivate, terminalDeactivate } from './panels/terminal.js';
 import { initUpdate, refreshUpdateBadge } from './panels/update.js';
 import { initFsPicker } from './forms/fs.js';
+import { initPrompt } from './ui/prompt.js';
+import { initFiles, filesActivate, filesDeactivate, filesReset } from './views/files.js';
 import { initProcessForm, openProcessForm } from './forms/process.js';
 
 const VIEWS = {
     processes: 'view-processes',
+    files: 'view-files',
     audit: 'view-audit',
     terminal: 'view-terminal',
 };
@@ -39,6 +42,7 @@ let booted = false;
 
 function boot() {
     initConfirm();
+    initPrompt();
     initFsPicker();
     initSidebar({ onNodeChange: switchNode, onNavigate: navigate });
     initToolbar({ onRefresh: refresh, onAdd: () => openProcessForm() });
@@ -63,6 +67,7 @@ function boot() {
         onHealth: checkHealth,
     });
     initLogs();
+    initFiles();
     initAudit();
     initTerminal();
     initUpdate({ onRestarted: afterUpdateRestart });
@@ -134,6 +139,7 @@ async function switchNode(id) {
     if (!setNode(id)) return;
     disconnectLive();
     closeDrawer();
+    filesReset();
     setProcesses([]);
     setStatusFilter('all');
     setGroupFilter(null);
@@ -160,6 +166,11 @@ function navigate(next) {
     setActiveView(next);
 
     if (next === 'audit') auditActivate();
+    if (next === 'files') {
+        filesActivate();
+    } else {
+        filesDeactivate();
+    }
     if (next === 'terminal') {
         terminalActivate();
     } else {

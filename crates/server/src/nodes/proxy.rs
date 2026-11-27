@@ -1,6 +1,7 @@
 //! HTTP 代理：把中心节点收到的 `/api/v1/nodes/{node}/...` 原样转给从节点。
 //!
 //! 认证换成从节点自己的 Key；响应边收边转，不把大文件读进内存。
+//! 文件上传按流转发，其余请求体仍受 [`MAX_PROXY_BODY`] 约束。
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, Request, State};
@@ -30,12 +31,7 @@ pub(crate) async fn handle(
     let query = req.uri().query().map(str::to_string);
     let headers = req.headers().clone();
     let forwarded = forwarded_for(&headers, peer.0);
-    let Ok(body) = to_bytes(req.into_body(), MAX_PROXY_BODY).await else {
-        return super::failure(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("请求体超过 {} MB", MAX_PROXY_BODY / 1024 / 1024),
-        );
-    };
+    let streaming = is_upload(&rest);
 
     let url = match query {
         Some(query) => format!("{}/api/v1/{rest}?{query}", remote.base()),
@@ -54,7 +50,20 @@ pub(crate) async fn handle(
         builder = builder.bearer_auth(key);
     }
 
-    let upstream = match builder.body(body).send().await {
+    // 上传按流转发：中途不整块读进内存，也不必为文件设一个体量上限。
+    let upstream = if streaming {
+        let body = reqwest::Body::wrap_stream(req.into_body().into_data_stream());
+        builder.body(body).send().await
+    } else {
+        let Ok(body) = to_bytes(req.into_body(), MAX_PROXY_BODY).await else {
+            return super::failure(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("请求体超过 {} MB", MAX_PROXY_BODY / 1024 / 1024),
+            );
+        };
+        builder.body(body).send().await
+    };
+    let upstream = match upstream {
         Ok(response) => response,
         Err(e) => {
             return super::failure(StatusCode::BAD_GATEWAY, format!("节点 {node} 不可达: {e}"))
@@ -80,6 +89,11 @@ pub(crate) async fn handle(
     response
         .body(Body::from_stream(upstream.bytes_stream()))
         .unwrap_or_else(|_| super::failure(StatusCode::BAD_GATEWAY, "构造代理响应失败".to_string()))
+}
+
+/// 文件上传按流转发；其余请求体照旧一次性读入并受上限约束。
+fn is_upload(rest: &str) -> bool {
+    rest.trim_matches('/') == "fs/upload"
 }
 
 /// 逐跳头与认证头不转发：认证由中心节点按从节点的 Key 重新签发；

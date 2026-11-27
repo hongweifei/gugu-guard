@@ -60,12 +60,18 @@
 - **拼写建议** —— 在同一层内按编辑距离找最接近的字段，距离足够近才给出建议：`memory_maxx（是否想写 memory_max）`，过远的匹配不猜
 - **告警而不阻断** —— 启动日志逐条 `WARN`；`gugu check` 以 `!` 列出并在结论里标注「N 个未知键被忽略」，退出码仍为 0；SIGHUP、`gugu reload` 与 `POST /api/v1/reload` 重载时同样告警
 
-### 文件浏览白名单
+### 文件管理
 
-- **白名单** —— 守护进程配置新增 `daemon.web.fs_roots`，限定 `/api/v1/fs/browse` 的范围：请求路径先解析真实路径（`..` 与符号链接都已展开），再按路径分量与每个根比较，`/data` 不会放行 `/database`；相对条目以配置文件所在目录为基准。越界返回 403 并带上被拒绝的路径
+- **白名单是一切的前提** —— `daemon.web.fs_roots` 限定范围：请求路径先解析真实路径（`..` 与符号链接都已展开），再按路径分量与每个根比较，`/data` 不会放行 `/database`；相对条目以配置文件所在目录为基准。越界返回 403 并带上被拒绝的路径
+- **读写分权** —— 新增 `daemon.web.fs_write`（默认 `false`）：只读时浏览、预览、下载照常可用，写入口统一 403 并在消息里指出开启位置；开启后与内置终端同一道门槛——监听非回环地址必须配 `api_key`，否则拒绝启动
+- **浏览与预览** —— `GET /fs/list` 列出目录（目录优先、名称不区分大小写）、`GET /fs/stat` 取单个路径元信息、`GET /fs/read` 预览文本（1 MB 上限，UTF-8 失败按 GBK 解，前 8 KB 出现 0 字节判为二进制）、`GET /fs/download` 流式下载并带 RFC 5987 的 UTF-8 文件名
+- **写操作** —— `POST /fs/upload`（请求体即文件内容，边收边写同目录临时文件再改名就位，目标已存在需 `overwrite`）、`PUT /fs/write`（保存文本，8 MB 上限）、`POST /fs/mkdir` / `fs/touch` / `fs/rename` / `fs/copy`、`DELETE /fs`（目录需 `recursive=true`）。白名单根自身不允许删除或改名
 - **缺省与告警** —— 未给起始目录时取第一个根，避免默认工作目录不在白名单的情况；非回环监听且白名单为空时，启动日志提示这条能力的暴露面
-- **体检与模板** —— `gugu check` 打印每个根目录是否存在，空条目算配置错误；默认模板与 `config.example.toml` 给出注释示例
+- **审计** —— 动作码细化到 `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径
+- **CLI 与 WebUI** —— `gugu fs ls / cat / get / put / mkdir / touch / mv / cp / rm`；侧栏新增「文件」视图，左侧目录、右侧预览编辑器，只读时关闭写入口
+- **体检与模板** —— `gugu check` 打印每个根目录是否存在，空条目算配置错误；默认模板与 `config.example.toml` 给出根目录与 `fs_write` 的注释示例
 - **不写回文件** —— `AppConfig.unknown_keys` 标了 `#[serde(skip)]`，`gugu add` 等写回操作不会把它带进配置
+- **旧接口下线** —— `/api/v1/fs/browse` 与 `BrowseResponse` / `FsEntry` 一并移除，进程表单的「选择文件 / 选择目录」改用 `/fs/list`
 
 ### 操作审计
 

@@ -90,10 +90,20 @@ fn build_router_with_roots(
     shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
     fs_roots: Vec<std::path::PathBuf>,
 ) -> axum::Router {
+    build_router_with_fs(shared, api_key, shutdown_tx, fs_roots, false)
+}
+
+fn build_router_with_fs(
+    shared: SharedManager,
+    api_key: Option<String>,
+    shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    fs_roots: Vec<std::path::PathBuf>,
+    fs_write: bool,
+) -> axum::Router {
     let state = AppState::new(shared)
         .with_api_key(api_key)
         .with_shutdown(shutdown_tx)
-        .with_fs_roots(fs_roots);
+        .with_fs(fs_roots, fs_write);
     let cors_layer = tower_http::cors::CorsLayer::permissive();
 
     let protected = gugu_server::api::routes()
@@ -514,40 +524,77 @@ mod auth_middleware {
     }
 }
 
-// ── GET /api/v1/fs/browse ────────────────────────────────────
+// ── /api/v1/fs ────────────────────────────────────────��─────
 
-mod fs_browse {
+mod fs_management {
     use super::*;
 
-    #[tokio::test]
-    async fn returns_ok_for_current_directory() {
-        let resp = send_get(make_app(), "/api/v1/fs/browse").await;
-        assert_eq!(resp.status(), StatusCode::OK, "浏览当前目录应返回 200");
-    }
-
-    #[tokio::test]
-    async fn returns_bad_request_for_nonexistent_path() {
-        let resp = send_get(
-            make_app(),
-            "/api/v1/fs/browse?path=/nonexistent/path/that/does/not/exist",
-        )
-        .await;
-        assert_eq!(
-            resp.status(),
-            StatusCode::BAD_REQUEST,
-            "不存在的路径应返回 400"
-        );
-    }
-
     fn app_with_root(root: &std::path::Path) -> axum::Router {
+        app_with(root, false)
+    }
+
+    fn app_with(root: &std::path::Path, writable: bool) -> axum::Router {
         let config = AppConfig::default();
         let shared = gugu_core::manager::start(&config, None);
-        build_router_with_roots(shared, None, None, vec![root.to_path_buf()])
+        build_router_with_fs(shared, None, None, vec![root.to_path_buf()], writable)
     }
 
     /// URI 里只放正斜杠：Windows 的反斜杠不是合法 URI 字符。
     fn uri_path(path: &std::path::Path) -> String {
         path.display().to_string().replace('\\', "/")
+    }
+
+    fn encode(path: &std::path::Path) -> String {
+        uri_path(path)
+            .replace('%', "%25")
+            .replace(' ', "%20")
+            .replace('#', "%23")
+            .replace('?', "%3F")
+            .replace('+', "%2B")
+    }
+
+    async fn send_json(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> axum::http::Response<Body> {
+        app.oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).expect("序列化请求体")))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn text_of(resp: axum::http::Response<Body>) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("读取响应体");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[tokio::test]
+    async fn lists_the_current_directory() {
+        let resp = send_get(make_app(), "/api/v1/fs/list").await;
+        assert_eq!(resp.status(), StatusCode::OK, "列出当前目录应返回 200");
+        let body = text_of(resp).await;
+        assert!(body.contains("\"entries\""), "{body}");
+        assert!(body.contains("\"writable\":false"), "缺省为只读: {body}");
+    }
+
+    #[tokio::test]
+    async fn missing_path_is_not_found() {
+        let resp = send_get(
+            make_app(),
+            "/api/v1/fs/list?path=/nonexistent/path/that/does/not/exist",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -558,7 +605,7 @@ mod fs_browse {
 
         let resp = send_get(
             app_with_root(root.path()),
-            &format!("/api/v1/fs/browse?path={}", uri_path(&inside)),
+            &format!("/api/v1/fs/list?path={}", encode(&inside)),
         )
         .await;
 
@@ -572,7 +619,7 @@ mod fs_browse {
 
         let resp = send_get(
             app_with_root(root.path()),
-            &format!("/api/v1/fs/browse?path={}", uri_path(outside.path())),
+            &format!("/api/v1/fs/list?path={}", encode(outside.path())),
         )
         .await;
 
@@ -582,9 +629,7 @@ mod fs_browse {
     #[tokio::test]
     async fn defaults_to_the_first_root() {
         let root = tempdir();
-
-        let resp = send_get(app_with_root(root.path()), "/api/v1/fs/browse?path=").await;
-
+        let resp = send_get(app_with_root(root.path()), "/api/v1/fs/list?path=").await;
         assert_eq!(resp.status(), StatusCode::OK, "缺省路径应落在第一个根目录");
     }
 
@@ -598,7 +643,7 @@ mod fs_browse {
 
         let resp = send_get(
             app_with_root(&root),
-            &format!("/api/v1/fs/browse?path={}", uri_path(&sibling)),
+            &format!("/api/v1/fs/list?path={}", encode(&sibling)),
         )
         .await;
 
@@ -607,6 +652,225 @@ mod fs_browse {
             StatusCode::FORBIDDEN,
             "按路径分量比较，data-x 不在 data 之下"
         );
+    }
+
+    #[tokio::test]
+    async fn roots_reports_the_whitelist_and_write_mode() {
+        let root = tempdir();
+        let resp = send_get(app_with(root.path(), true), "/api/v1/fs/roots").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let text = text_of(resp).await;
+        assert!(text.contains("\"writable\":true"), "{text}");
+        assert!(
+            text.to_lowercase()
+                .contains(&uri_path(root.path()).to_lowercase()),
+            "根目录清单应包含白名单路径: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stat_and_touch_handle_a_single_file() {
+        let root = tempdir();
+        let file = root.path().join("empty.log");
+
+        let touched = send_json(
+            app_with(root.path(), true),
+            "POST",
+            "/api/v1/fs/touch",
+            serde_json::json!({ "path": uri_path(&file) }),
+        )
+        .await;
+        assert_eq!(
+            touched.status(),
+            StatusCode::OK,
+            "{}",
+            text_of(touched).await
+        );
+        assert_eq!(std::fs::metadata(&file).expect("文件应存在").len(), 0);
+
+        let stat = send_get(
+            app_with(root.path(), true),
+            &format!("/api/v1/fs/stat?path={}", encode(&file)),
+        )
+        .await;
+        assert_eq!(stat.status(), StatusCode::OK);
+        let text = text_of(stat).await;
+        assert!(text.contains("\"kind\":\"file\""), "{text}");
+    }
+
+    #[tokio::test]
+    async fn stat_without_a_path_is_a_bad_request() {
+        let root = tempdir();
+        let resp = send_get(app_with_root(root.path()), "/api/v1/fs/stat").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn read_only_mode_refuses_every_mutation() {
+        let root = tempdir();
+        let target = root.path().join("new-dir");
+        let body = serde_json::json!({ "path": uri_path(&target) });
+
+        let resp = send_json(app_with_root(root.path()), "POST", "/api/v1/fs/mkdir", body).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "只读模式返回 403");
+        assert!(!target.exists());
+        let text = text_of(resp).await;
+        assert!(text.contains("fs_write"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn creates_writes_copies_moves_and_deletes() {
+        let root = tempdir();
+        let folder = root.path().join("docs");
+        let file = folder.join("a.txt");
+        let copy = folder.join("b.txt");
+
+        let created = send_json(
+            app_with(root.path(), true),
+            "POST",
+            "/api/v1/fs/mkdir",
+            serde_json::json!({ "path": uri_path(&folder) }),
+        )
+        .await;
+        assert_eq!(
+            created.status(),
+            StatusCode::OK,
+            "{}",
+            text_of(created).await
+        );
+
+        let saved = send_json(
+            app_with(root.path(), true),
+            "PUT",
+            "/api/v1/fs/write",
+            serde_json::json!({ "path": uri_path(&file), "content": "你好", "create": true }),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK, "{}", text_of(saved).await);
+
+        let read = send_get(
+            app_with(root.path(), true),
+            &format!("/api/v1/fs/read?path={}", encode(&file)),
+        )
+        .await;
+        assert_eq!(read.status(), StatusCode::OK);
+        let text = text_of(read).await;
+        assert!(text.contains("你好"), "{text}");
+        assert!(text.contains("\"encoding\":\"utf-8\""), "{text}");
+
+        let copied = send_json(
+            app_with(root.path(), true),
+            "POST",
+            "/api/v1/fs/copy",
+            serde_json::json!({ "from": uri_path(&file), "to": uri_path(&copy) }),
+        )
+        .await;
+        assert_eq!(copied.status(), StatusCode::OK, "{}", text_of(copied).await);
+
+        let renamed = file.with_file_name("c.txt");
+        let moved = send_json(
+            app_with(root.path(), true),
+            "POST",
+            "/api/v1/fs/rename",
+            serde_json::json!({ "from": uri_path(&file), "to": uri_path(&renamed) }),
+        )
+        .await;
+        assert_eq!(moved.status(), StatusCode::OK, "{}", text_of(moved).await);
+
+        let removed = send_delete(
+            app_with(root.path(), true),
+            &format!("/api/v1/fs?path={}&recursive=true", encode(&folder)),
+        )
+        .await;
+        assert_eq!(
+            removed.status(),
+            StatusCode::OK,
+            "{}",
+            text_of(removed).await
+        );
+        assert!(!folder.exists());
+    }
+
+    #[tokio::test]
+    async fn uploads_the_request_body_to_the_target_path() {
+        let root = tempdir();
+        let target = root.path().join("uploaded.bin");
+        let payload: Vec<u8> = (0..4096u32).map(|value| (value % 251) as u8).collect();
+
+        let resp = app_with(root.path(), true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/fs/upload?path={}", encode(&target)))
+                    .body(Body::from(payload.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK, "{}", text_of(resp).await);
+        assert_eq!(std::fs::read(&target).expect("上传后的文件"), payload);
+    }
+
+    #[tokio::test]
+    async fn upload_refuses_to_overwrite_without_the_flag() {
+        let root = tempdir();
+        let target = root.path().join("exists.txt");
+        std::fs::write(&target, b"old").expect("写文件");
+
+        let resp = app_with(root.path(), true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/fs/upload?path={}", encode(&target)))
+                    .body(Body::from("new"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(std::fs::read(&target).expect("原文件仍在"), b"old");
+    }
+
+    #[tokio::test]
+    async fn mutations_outside_the_root_are_forbidden() {
+        let root = tempdir();
+        let outside = tempdir();
+        let resp = send_json(
+            app_with(root.path(), true),
+            "POST",
+            "/api/v1/fs/mkdir",
+            serde_json::json!({ "path": uri_path(&outside.path().join("x")) }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(!outside.path().join("x").exists());
+    }
+
+    #[tokio::test]
+    async fn download_streams_the_file_with_its_name() {
+        let root = tempdir();
+        let target = root.path().join("报表.csv");
+        std::fs::write(&target, "a,b\n1,2\n").expect("写文件");
+
+        let resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/download?path={}", encode(&target)),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok())
+            .expect("应带下载文件名");
+        assert!(disposition.contains("filename*=UTF-8''"), "{disposition}");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("读取下载内容");
+        assert_eq!(&bytes[..], "a,b\n1,2\n".as_bytes());
     }
 }
 

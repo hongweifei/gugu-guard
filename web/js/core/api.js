@@ -61,6 +61,34 @@ export function api(method, path, body) {
     return request(method, apiPath(path), body);
 }
 
+/// 原始响应：上传与下载这类非 JSON 传输用，调用方自己读 body 并处理状态码。
+/// 认证与节点前缀的拼接口径与 `api` 一致。
+export async function apiRaw(method, path, { body, headers } = {}) {
+    const opts = { method };
+    const merged = { ...(headers || {}) };
+    if (state.apiKey) merged.Authorization = `Bearer ${state.apiKey}`;
+    if (Object.keys(merged).length) opts.headers = merged;
+    if (body !== undefined) opts.body = body;
+
+    const resp = await fetch(`${API_BASE}${apiPath(path)}`, opts);
+    if (resp.status === 401) {
+        unauthorizedHandler();
+        throw new Error('Unauthorized');
+    }
+    return resp;
+}
+
+/// 把非 JSON 响应的正文读成一句错误消息，供 `apiRaw` 的调用方直接抛出。
+export async function rawError(resp) {
+    const text = await resp.text().catch(() => '');
+    try {
+        const data = JSON.parse(text);
+        return new Error(data?.error || `请求失败（HTTP ${resp.status}）`);
+    } catch {
+        return new Error(text || `请求失败（HTTP ${resp.status}）`);
+    }
+}
+
 /// 只发给中心节点自身的接口（节点表），不跟随所选节点。
 export function hubApi(method, path, body) {
     return request(method, path, body);

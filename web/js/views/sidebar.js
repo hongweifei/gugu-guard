@@ -7,6 +7,7 @@ import { toast } from '../ui/toast.js';
 
 const VIEWS = {
     processes: { title: '进程', sub: '受管进程的状态、资源与日志' },
+    files: { title: '文件', sub: '白名单目录内的浏览、预览与上传下载' },
     audit: { title: '操作审计', sub: '谁在何时对哪个进程做了什么，写操作才记录' },
     terminal: { title: '终端', sub: '本机 PTY 会话，关闭页面即结束' },
 };

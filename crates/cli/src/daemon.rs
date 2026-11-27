@@ -82,7 +82,8 @@ log_dir = \"logs\"
 addr = \"{addr}\"
 port = {port}
 # cors_origins = [\"http://localhost:3000\"]
-# fs_roots = [\"D:/projects\", \"/srv/apps\"]   # 文件浏览白名单；为空表示不限制，配了只放行这些根目录
+# fs_roots = [\"D:/projects\", \"/srv/apps\"]   # 文件管理白名单；为空表示不限制，配了只放行这些根目录
+# fs_write = false   # 文件管理写权限；默认只读，设为 true 才能上传、新建、改名、复制与删除
 # terminal = false   # 内置终端默认关闭；开启后浏览器里就是一个真实 shell。
                    # 监听非回环地址时必须同时配置 daemon.api_key，否则拒绝启动。
 
@@ -290,10 +291,18 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     }
     if !config.daemon.web.fs_roots.is_empty() {
         tracing::info!(
-            "文件浏览白名单: {} 个根目录",
+            "文件管理白名单: {} 个根目录",
             config.daemon.web.fs_roots.len()
         );
     }
+    tracing::info!(
+        "文件管理: {}",
+        if config.daemon.web.fs_write {
+            "可读写"
+        } else {
+            "只读（daemon.web.fs_write 未开启）"
+        }
+    );
     if !config.nodes.is_empty() {
         tracing::info!("多节点已启用，纳管 {} 台从节点", config.nodes.len());
     }
@@ -332,7 +341,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .with_cors_origins(config.daemon.web.cors_origins.clone())
         .with_audit_dir(Some(log_base))
         .with_terminal(config.daemon.web.terminal, Some(config_dir))
-        .with_fs_roots(fs_roots)
+        .with_fs(fs_roots, config.daemon.web.fs_write)
         .with_nodes(&config.nodes, config.local_node_name())
         .map_err(anyhow::Error::msg)?
         .with_shutdown(Some(api_shutdown_tx))

@@ -59,6 +59,9 @@ pub async fn run_server(
         terminal::check_exposure(addr.ip(), state.api_key.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
+    // 文件写权限比终端温和，但同样等于把文件系统交给访问者，门槛一致。
+    api::fs::check_exposure(addr.ip(), state.api_key.as_deref(), state.fs.writable())
+        .map_err(anyhow::Error::msg)?;
 
     let poller_target = std::sync::Arc::clone(&state.nodes);
 

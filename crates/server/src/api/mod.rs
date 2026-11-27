@@ -3,7 +3,7 @@
 
 mod audit;
 mod auth;
-mod fs;
+pub mod fs;
 mod groups;
 mod history;
 mod logs;
@@ -83,10 +83,10 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/groups/{group}/restart",
             post(groups::restart_group),
         )
-        .route("/api/v1/fs/browse", get(fs::browse_fs))
         .route("/api/v1/reload", post(misc::reload_config))
         .route("/api/v1/shutdown", post(misc::shutdown))
         .route("/api/v1/audit", get(audit::list_audit))
+        .merge(fs::routes())
         .merge(update::routes())
 }
 
@@ -108,8 +108,4 @@ pub(super) fn api_res(
             .into_response(),
         Err(e) => (error_status, Json(types::ApiError::new(e.to_string()))).into_response(),
     }
-}
-
-pub(super) fn clean_path(path: &std::path::Path) -> String {
-    gugu_core::config::path_to_forward_slashes(&gugu_core::config::strip_unc_prefix(path))
 }

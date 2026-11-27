@@ -88,7 +88,7 @@ impl AppConfig {
         }
     }
 
-    /// 文件浏览没有白名单、监听的又不是回环地址时，把暴露面说清楚。
+    /// 文件管理没有白名单、监听的又不是回环地址时，把暴露面说清楚。
     ///
     /// 与未知键一样必须在日志初始化之后调用，否则这条提示会被丢弃。
     pub fn warn_open_browse(&self) {
@@ -100,9 +100,15 @@ impl AppConfig {
         if crate::net::host_is_loopback(addr) {
             return;
         }
-        tracing::warn!(
-            "文件浏览未设白名单（daemon.web.fs_roots），能访问面板的人可以浏览任意目录；对外提供服务时请限定根目录"
-        );
+        if web.fs_write {
+            tracing::warn!(
+                "文件管理未设白名单（daemon.web.fs_roots）且已开启写权限，能访问面板的人可以修改任意文件；对外提供服务时请限定根目录"
+            );
+        } else {
+            tracing::warn!(
+                "文件管理未设白名单（daemon.web.fs_roots），能访问面板的人可以浏览任意目录；对外提供服务时请限定根目录"
+            );
+        }
     }
 
     /// 将配置保存到文件。

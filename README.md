@@ -26,6 +26,7 @@
 - **版本更新** — 侧栏版本号即入口：检查最新发布、一键下载安装、替换后自动重启；自动更新可设为关闭 / 仅检查 / 自动安装，来源支持 GitHub、Gitee 与自建清单
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
+- **文件管理** — 白名单目录内的浏览器：目录浏览、文本预览（UTF-8 / GBK 自动解码）、原始文件下载、上传、新建目录与空文件、改名/移动、复制、删除；写操作默认关闭，开启后受白名单与 API Key 双重约束，所有写操作进审计
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
 - **API Key 认证** — 可选的 API Key 保护，WebUI 登录界面
 - **CORS 配置** — 可限制允许的跨域来源
@@ -201,6 +202,15 @@ gugu history <name> [-m 60]       # 指标时序（CPU/内存/连接数，每分
 gugu exits <name> [-m 60]         # 退出历史与可用率（落盘记录）
 gugu net [-m 60]                  # 整机带宽时序
 gugu audit [-l 100] [--failed]    # 操作审计（新的在前；--action 按动作码，--since 按分钟）
+gugu fs ls [PATH] [--json]        # 列出目录（缺省为白名单第一个根）
+gugu fs cat <PATH> [--limit 65536]  # 预览文本（UTF-8 / GBK 自动解码，超出上限只显开头）
+gugu fs get <PATH> [-o 本地文件]  # 下载原始文件，缺省存成同名文件
+gugu fs put <本地文件> <PATH>     # 上传，目标已存在需加 --overwrite
+gugu fs mkdir <PATH> [-p]         # 新建目录，-p 逐级创建
+gugu fs touch <PATH>              # 新建空文件
+gugu fs mv <FROM> <TO> [--overwrite]   # 改名或移动
+gugu fs cp <FROM> <TO> [--overwrite]   # 复制文件或目录
+gugu fs rm <PATH> [-r]            # 删除，目录需加 -r
 gugu add <name> -x "node app.js"  # 添加进程
 gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
@@ -273,7 +283,18 @@ gugu add frontend -x "bun run dev" \
 | POST | `/api/v1/update/check` | 立即检查最新发布（GitHub / Gitee / 自建清单） |
 | POST | `/api/v1/update/apply` | 下载并安装指定或最新版本；替换完成后守护进程重启 |
 | POST | `/api/v1/update/settings` | 切换自动更新策略（`off` / `check` / `install`）并写回配置文件 |
-| GET | `/api/v1/fs/browse?path=.` | 浏览文件系统（受 `daemon.web.fs_roots` 限制，越界返回 403） |
+| GET | `/api/v1/fs/roots` | 文件管理可用的根目录与当前写权限 |
+| GET | `/api/v1/fs/list?path=.` | 列出目录（受 `daemon.web.fs_roots` 限制，越界返回 403） |
+| GET | `/api/v1/fs/stat?path=...` | 单个路径的类型、大小、修改时间、只读标记 |
+| GET | `/api/v1/fs/read?path=...&limit=1048576` | 文本预览（UTF-8 / GBK 自动解码，二进制只回标记） |
+| GET | `/api/v1/fs/download?path=...` | 下载原始文件（流式；中文名走 RFC 5987） |
+| POST | `/api/v1/fs/upload?path=...&overwrite=false` | 上传：请求体即文件内容，边收边写临时文件再改名就位 |
+| PUT | `/api/v1/fs/write` | 保存文本 `{path, content, create}` |
+| POST | `/api/v1/fs/mkdir` | 新建目录 `{path, parents}` |
+| POST | `/api/v1/fs/touch` | 新建空文件 `{path}` |
+| POST | `/api/v1/fs/rename` | 改名或移动 `{from, to, overwrite}` |
+| POST | `/api/v1/fs/copy` | 复制文件或目录 `{from, to, overwrite}` |
+| DELETE | `/api/v1/fs?path=...&recursive=false` | 删除；目录需显式 `recursive=true` |
 | POST | `/api/v1/reload` | 重新加载配置 |
 | POST | `/api/v1/shutdown` | 优雅停止守护进程（先停所有子进程） |
 | WS | `/api/v1/ws` | 实时状态推送 |
@@ -294,7 +315,7 @@ gugu-guard/
 │   ├── index.html
 │   ├── css/        # tokens(设计令牌) / layout(骨架与视图) / components(通用控件) / panels(面板与表格细节)
 │   └── js/         # core(状态/接口/实时通道/格式化) · ui(基件/浮层栈/对话框/抽屉/提示)
-│                   # views(侧栏/顶栏/统计/分组/进程表格) · panels(概览/日志/指标/审计/终端)
+│                   # views(侧栏/顶栏/统计/分组/进程表格/文件) · panels(概览/日志/指标/审计/终端)
 │                   # forms(字段/动态行/健康检查/网络/告警/文件浏览/表单主体) · main(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
@@ -318,7 +339,8 @@ gugu-guard/
 | `daemon.web.addr` | string | `0.0.0.0` | 监听地址 |
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
-| `daemon.web.fs_roots` | string[] | `[]` | 文件浏览白名单；为空表示不限制，配了只放行这些根目录及其子目录 |
+| `daemon.web.fs_roots` | string[] | `[]` | 文件管理白名单；为空表示不限制，配了只放行这些根目录及其子目录 |
+| `daemon.web.fs_write` | bool | `false` | 是否开放文件管理写操作（上传、新建、改名、复制、删除）；只读时仍可浏览、预览、下载 |
 | `daemon.web.terminal` | bool | `false` | 是否开放 WebUI 内置终端；非回环监听时必须同时配置 `api_key` |
 | `daemon.update.enabled` | bool | `true` | 是否允许检查与安装；关闭后更新接口直接拒绝 |
 | `daemon.update.provider` | string | `github` | 发布信息来源：`github` / `gitee` / `manifest` |
@@ -448,21 +470,35 @@ gugu audit --action process.start --json
   `action` 为动作码，`ok=true/false` 只看成功或失败，`q` 匹配对象、路径、来源与原因，
   `since_minutes` 限定时间窗口
 
-### 文件浏览白名单
-
-WebUI 的表单用 `/api/v1/fs/browse` 选工作目录与可执行文件。这条接口默认可以浏览整台机器，
-对外提供服务时应限定范围：
+### 文件管理
 
 ```toml
 [daemon.web]
 fs_roots = ["D:/projects", "/srv/apps"]   # 为空表示不限制
+fs_write = true                           # 默认 false：只读浏览
 ```
 
-- **校验在真实路径上做** — 请求路径先 `canonicalize`，`..` 与符号链接都被解析，再按路径分量与白名单比较；
-  `/data` 不会把 `/database` 算作子目录
-- **缺省落在第一个根** — 打开浏览弹窗时没有起始目录，服务端直接给 `fs_roots[0]`，避免默认工作目录不在白名单里
-- **越界返回 403** — 错误信息带上被拒绝的路径，一眼能分清是白名单挡住还是目录不存在
-- **未配置的告警** — 监听非回环地址且 `fs_roots` 为空时，启动日志会提示这条能力的暴露面
+WebUI 侧栏的「文件」视图、进程表单里的「选择文件 / 选择目录」弹窗与 CLI `gugu fs` 共用同一套接口和白名单。
+每个请求先解析成真实路径再判定范围，`..` 与符号链接在这一步被展开，越界返回 403。
+
+```mermaid
+flowchart LR
+    U["WebUI 文件视图<br/>gugu fs"] --> A["认证 + 审计中间件"]
+    A --> S["Scope<br/>白名单 + 写权限"]
+    S -->|"list / read / download"| R["目录项与文件内容"]
+    S -->|"upload / write / mkdir / touch<br/>rename / copy / delete"| W["同目录临时文件 → 改名就位"]
+    S -.->|"越界或只读"| D["403"]
+```
+
+- **只读是默认** — `fs_write` 缺省为 `false`，浏览、预览、下载始终可用；写入口统一返回 403，并在消息里指出在 `gugu.toml` 的哪一行开启。WebUI 在只读模式下隐藏「上传 / 新建 / 名称 / 删除」的可用状态，改成一条提示
+- **范围按路径分量判定** — `/data` 不把 `/database` 算作子目录；Windows 上大小写不敏感。缺省目录是白名单第一个根
+- **预览口径** — 单次最多读 1 MB；UTF-8 严格解码失败时按 GBK 解；前 8 KB 出现 0 字节即按二进制处理，只回标记不给正文。预览被截断时不开放编辑，保存上限 8 MB
+- **上传与下载都走流式** — 上传的请求体就是文件内容，边收边写同目录临时文件，收完改名就位；目标已存在需显式 `overwrite=true`。下载是流式响应，`Content-Disposition` 同时带 ASCII 兜底名与 RFC 5987 的 UTF-8 名，中文文件名不乱码
+- **写入不留半成品** — 保存文本与上传同样先写临时文件再改名，中途失败不会出现半个文件，也不会破坏原文件
+- **根与目录的保护** — 删除目录必须显式 `recursive=true`；白名单根自身不允许删除或改名，避免一次操作把整个视图的入口端掉
+- **审计动作码** — `fs.upload` / `fs.write` / `fs.mkdir` / `fs.create` / `fs.rename` / `fs.copy` / `fs.delete`，对象记录被操作的具体路径。审计发生在读请求体之前，所以写操作把路径同时放在查询串的 `path` 或 `from` 参数里（CLI 与 WebUI 都这么做），自建客户端照此传即可让审计记下文件名
+- **多节点** — 选中从节点时，文件视图经中心节点代理访问那台机器的白名单；上传按流式转发，不受代理 4 MB 请求体上限约束
+- **安全门槛** — 开启写权限、监听非回环地址、又没有配置 `api_key` 时守护进程拒绝启动；只读模式不做这条限制。启动日志会打印白名单根数与「可读写 / 只读」
 - **体检** — `gugu check` 打印每个根目录是否存在；空条目直接算配置错误
 
 ### WebUI 内置终端

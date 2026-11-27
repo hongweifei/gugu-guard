@@ -45,36 +45,6 @@ impl StatsResponse {
 }
 
 #[derive(Serialize)]
-pub(super) struct BrowseResponse {
-    path: String,
-    parent: Option<String>,
-    entries: Vec<FsEntry>,
-}
-
-impl BrowseResponse {
-    pub(super) fn new(path: String, parent: Option<String>, entries: Vec<FsEntry>) -> Self {
-        Self {
-            path,
-            parent,
-            entries,
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub(super) struct FsEntry {
-    pub(super) name: String,
-    pub(super) path: String,
-    pub(super) is_dir: bool,
-}
-
-impl FsEntry {
-    pub(super) fn new(name: String, path: String, is_dir: bool) -> Self {
-        Self { name, path, is_dir }
-    }
-}
-
-#[derive(Serialize)]
 pub(super) struct GroupInfo {
     name: String,
     processes: Vec<String>,
@@ -230,11 +200,6 @@ fn default_search_limit() -> usize {
 
 fn default_budget_mb() -> u64 {
     4
-}
-
-#[derive(Deserialize)]
-pub(super) struct BrowseQuery {
-    pub(super) path: Option<String>,
 }
 
 #[derive(Deserialize)]

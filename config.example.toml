@@ -21,9 +21,12 @@ addr = "0.0.0.0"
 port = 9090
 # CORS 允许的来源 (可选，为空则允许所有)
 # cors_origins = ["http://localhost:3000"]
-# 文件浏览白名单 (可选)：限定 WebUI 选择文件/目录时能看到的范围。
+# 文件管理白名单 (可选)：限定 WebUI「文件」视图与 gugu fs 能看到的范围。
 # 为空表示不限制；配了以后只允许这些根目录及其子目录，越界返回 403。
 # fs_roots = ["D:/projects", "/srv/apps"]
+# 文件管理写权限 (默认关闭)。只读时仍可浏览、预览、下载；
+# 设为 true 才能上传、新建、改名、复制与删除，且监听非回环地址时必须配置 daemon.api_key。
+# fs_write = false
 # WebUI 内置终端 (默认关闭)。开启后浏览器里是一个真实 shell，
 # 监听非回环地址时必须同时配置 daemon.api_key，否则守护进程拒绝启动。
 # terminal = false

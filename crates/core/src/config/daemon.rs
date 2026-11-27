@@ -64,10 +64,14 @@ pub struct WebConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub cors_origins: Vec<String>,
-    /// 文件浏览接口允许的根目录；为空表示不限制。
+    /// 文件管理接口允许的根目录；为空表示不限制。
     /// 相对路径以配置文件所在目录为基准，加载后由调用方解析成绝对路径。
     #[serde(default)]
     pub fs_roots: Vec<std::path::PathBuf>,
+    /// 是否允许通过接口修改文件：新建、上传、保存、改名、复制、删除。
+    /// 默认关闭；关闭时仍可浏览、预览与下载。开启写权限后对外监听必须配置 `api_key`。
+    #[serde(default)]
+    pub fs_write: bool,
     /// 是否开放 WebUI 内置终端。默认关闭；开启后等于把 shell 交给能访问面板的人。
     /// 监听非回环地址时必须配置 `api_key`，否则守护进程拒绝启动。
     #[serde(default)]
@@ -81,6 +85,7 @@ impl Default for WebConfig {
             port: Some(DEFAULT_PORT),
             cors_origins: Vec::new(),
             fs_roots: Vec::new(),
+            fs_write: false,
             terminal: false,
         }
     }

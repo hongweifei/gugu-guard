@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, Method};
+use axum::http::{HeaderMap, Method, Uri};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
@@ -32,7 +32,7 @@ struct Action {
 }
 
 pub async fn audit_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let Some(action) = classify(req.method(), req.uri().path()) else {
+    let Some(action) = classify(req.method(), req.uri()) else {
         return next.run(req).await;
     };
 
@@ -149,10 +149,11 @@ fn truncate(text: &str, max_chars: usize) -> String {
 ///
 /// 代理路径 `/api/v1/nodes/{node}/...` 剥掉节点前缀后按同一张表分类，
 /// 对象前面带上节点名（`web1/api`），从节点的写操作在审计里不会和本机混在一起。
-fn classify(method: &Method, path: &str) -> Option<Action> {
+fn classify(method: &Method, uri: &Uri) -> Option<Action> {
     if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
         return None;
     }
+    let path = uri.path();
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
 
     if let Some(rest) = segments.strip_prefix(&["api", "v1", "nodes"][..]) {
@@ -177,7 +178,12 @@ fn classify(method: &Method, path: &str) -> Option<Action> {
         }
     }
 
-    classify_segments(method, &segments)
+    let mut action = classify_segments(method, &segments)?;
+    // 文件操作的地址在查询串里，把它带进来，审计才能看出动了哪个路径。
+    if action.target.is_none() {
+        action.target = query_path(uri);
+    }
+    Some(action)
 }
 
 /// 按资源段分类；`segments` 可以带也可以不带 `/api/v1` 前缀。
@@ -200,6 +206,13 @@ fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
         ("POST", ["groups", _, "restart"]) => Some(("group.restart", "重启分组")),
         ("POST", ["reload"]) => Some(("config.reload", "重新加载配置")),
         ("POST", ["shutdown"]) => Some(("daemon.shutdown", "停止守护进程")),
+        ("POST", ["fs", "upload"]) => Some(("fs.upload", "上传文件")),
+        ("PUT", ["fs", "write"]) => Some(("fs.write", "保存文件")),
+        ("POST", ["fs", "mkdir"]) => Some(("fs.mkdir", "新建目录")),
+        ("POST", ["fs", "touch"]) => Some(("fs.create", "新建文件")),
+        ("POST", ["fs", "rename"]) => Some(("fs.rename", "移动或重命名")),
+        ("POST", ["fs", "copy"]) => Some(("fs.copy", "复制文件")),
+        ("DELETE", ["fs"]) => Some(("fs.delete", "删除文件")),
         // 以后新增的写接口至少会留下痕迹，不会静默漏记。
         _ => Some(("http.write", "写操作")),
     }?;
@@ -213,6 +226,56 @@ fn classify_segments(method: &Method, segments: &[&str]) -> Option<Action> {
         label: action.1,
         target,
     })
+}
+
+/// 从查询串里取文件路径：优先 `path`，其次改名/复制用的 `from`。
+fn query_path(uri: &Uri) -> Option<String> {
+    let query = uri.query()?;
+    let mut found = None;
+    for pair in query.split('&') {
+        let Some((name, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if matches!(name, "path" | "from") && !value.is_empty() {
+            found = Some(percent_decode(value));
+            if name == "path" {
+                break;
+            }
+        }
+    }
+    found
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &value[index + 1..index + 3];
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -281,7 +344,7 @@ mod tests {
             (Method::POST, "/api/v1/unknown", "http.write", None),
         ];
         for (method, path, code, target) in cases {
-            let action = classify(&method, path).expect("写操作应被审计");
+            let action = classify(&method, &uri(path)).expect("写操作应被审计");
             assert_eq!(action.code, code, "{method} {path}");
             assert_eq!(action.target.as_deref(), target, "{method} {path}");
         }
@@ -289,25 +352,68 @@ mod tests {
 
     #[test]
     fn reads_are_not_audited() {
-        assert!(classify(&Method::GET, "/api/v1/processes").is_none());
-        assert!(classify(&Method::OPTIONS, "/api/v1/processes/web").is_none());
-        assert!(classify(&Method::HEAD, "/api/v1/processes").is_none());
+        assert!(classify(&Method::GET, &uri("/api/v1/processes")).is_none());
+        assert!(classify(&Method::OPTIONS, &uri("/api/v1/processes/web")).is_none());
+        assert!(classify(&Method::HEAD, &uri("/api/v1/processes")).is_none());
     }
 
     #[test]
     fn node_prefixed_writes_carry_the_node_in_target() {
-        let action = classify(&Method::POST, "/api/v1/nodes/web1/processes/api/start")
-            .expect("代理写操作应被审计");
+        let action = classify(
+            &Method::POST,
+            &uri("/api/v1/nodes/web1/processes/api/start"),
+        )
+        .expect("代理写操作应被审计");
         assert_eq!(action.code, "process.start");
         assert_eq!(action.target.as_deref(), Some("web1/api"));
 
         let reload =
-            classify(&Method::POST, "/api/v1/nodes/web1/reload").expect("代理重载应被审计");
+            classify(&Method::POST, &uri("/api/v1/nodes/web1/reload")).expect("代理重载应被审计");
         assert_eq!(reload.code, "config.reload");
         assert_eq!(reload.target.as_deref(), Some("web1"));
 
-        assert!(classify(&Method::GET, "/api/v1/nodes/web1/processes").is_none());
-        assert!(classify(&Method::GET, "/api/v1/nodes").is_none());
+        assert!(classify(&Method::GET, &uri("/api/v1/nodes/web1/processes")).is_none());
+        assert!(classify(&Method::GET, &uri("/api/v1/nodes")).is_none());
+    }
+
+    #[test]
+    fn file_operations_carry_the_decoded_path() {
+        let cases: [(Method, &str, &str, Option<&str>); 5] = [
+            (
+                Method::POST,
+                "/api/v1/fs/upload?path=%2Fsrv%2Fa%20b.txt&overwrite=true",
+                "fs.upload",
+                Some("/srv/a b.txt"),
+            ),
+            (Method::PUT, "/api/v1/fs/write", "fs.write", None),
+            (
+                Method::POST,
+                "/api/v1/fs/mkdir?path=/srv/logs",
+                "fs.mkdir",
+                Some("/srv/logs"),
+            ),
+            (
+                Method::POST,
+                "/api/v1/fs/rename?from=/srv/a.txt&to=/srv/b.txt",
+                "fs.rename",
+                Some("/srv/a.txt"),
+            ),
+            (
+                Method::DELETE,
+                "/api/v1/fs?path=/srv/old&recursive=true",
+                "fs.delete",
+                Some("/srv/old"),
+            ),
+        ];
+        for (method, target_uri, code, target) in cases {
+            let action = classify(&method, &uri(target_uri)).expect("文件写操作应被审计");
+            assert_eq!(action.code, code, "{target_uri}");
+            assert_eq!(action.target.as_deref(), target, "{target_uri}");
+        }
+    }
+
+    fn uri(value: &str) -> Uri {
+        value.parse().expect("测试用 URI 应合法")
     }
 
     #[test]

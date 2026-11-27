@@ -215,6 +215,12 @@ enum Commands {
         no_wait: bool,
     },
 
+    #[command(about = "文件管理：浏览、预览、下载、上传与增删改")]
+    Fs {
+        #[command(subcommand)]
+        action: FsAction,
+    },
+
     /// 内部：等旧进程退出后换入新二进制并重启（由更新流程拉起）
     #[command(name = "__apply-update", hide = true)]
     ApplyUpdate {
@@ -284,6 +290,80 @@ struct AddOptions {
     start: bool,
 }
 
+/// `gugu fs` 的子命令：路径一律按守护进程所在机器解释。
+#[derive(Subcommand)]
+enum FsAction {
+    #[command(about = "列出目录内容（缺省为白名单第一个根或当前目录）")]
+    Ls {
+        path: Option<String>,
+        /// 以 JSON 输出，便于脚本消费
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[command(about = "查看文本文件内容")]
+    Cat {
+        path: String,
+        /// 最多读取的字节数（0 表示用服务端默认上限）
+        #[arg(long, default_value_t = 0)]
+        limit: u64,
+    },
+
+    #[command(about = "下载文件到本地")]
+    Get {
+        path: String,
+        /// 本地保存路径，缺省用远端文件名
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    #[command(about = "上传本地文件")]
+    Put {
+        /// 本地文件路径
+        local: PathBuf,
+        /// 远端目标路径
+        remote: String,
+        /// 覆盖同名文件
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    #[command(about = "新建目录")]
+    Mkdir {
+        path: String,
+        /// 逐级创建，已存在不算错
+        #[arg(short, long)]
+        parents: bool,
+    },
+
+    #[command(about = "新建空文件")]
+    Touch { path: String },
+
+    #[command(about = "移动或重命名")]
+    Mv {
+        from: String,
+        to: String,
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    #[command(about = "复制文件或目录（目录递归）")]
+    Cp {
+        from: String,
+        to: String,
+        #[arg(long)]
+        overwrite: bool,
+    },
+
+    #[command(about = "删除文件或目录")]
+    Rm {
+        path: String,
+        /// 递归删除非空目录
+        #[arg(short, long)]
+        recursive: bool,
+    },
+}
+
 #[derive(Subcommand)]
 enum DaemonAction {
     #[command(about = "后台启动守护进程（分离运行，日志进文件）")]
@@ -350,6 +430,7 @@ async fn main() -> Result<()> {
         | Commands::Net { .. }
         | Commands::Audit { .. }
         | Commands::Update { .. }
+        | Commands::Fs { .. }
         | Commands::Reload) => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;

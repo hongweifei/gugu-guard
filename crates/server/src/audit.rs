@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
@@ -21,6 +21,8 @@ const MAX_DETAIL_CHARS: usize = 300;
 /// 读取响应体的上限；审计只覆盖写操作，响应都是小 JSON。
 const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_UA_CHARS: usize = 200;
+/// 来源地址不可能有这么长，超出的部分直接截掉。
+const MAX_IP_CHARS: usize = 64;
 
 /// 一个请求对应的审计动作。
 struct Action {
@@ -37,13 +39,13 @@ pub async fn audit_middleware(State(state): State<AppState>, req: Request, next:
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
     let client = client_of(&req);
-    let user_agent = header_of(&req, "user-agent").map(|ua| truncate(&ua, MAX_UA_CHARS));
+    let user_agent = header_value(req.headers(), "user-agent", MAX_UA_CHARS);
     let started = Instant::now();
 
     let response = next.run(req).await;
     let status = response.status();
     let duration_ms = started.elapsed().as_millis() as u64;
-    let auth = auth_kind(&state, status);
+    let auth = auth_kind(&state, status.as_u16());
 
     // 成功响应不读正文，直接原样返回；失败时才取一句话作为原因。
     let detail;
@@ -80,41 +82,45 @@ pub async fn audit_middleware(State(state): State<AppState>, req: Request, next:
 }
 
 /// 认证结果：配了 key 且没被 401 拒绝就是带 key 的请求。
-fn auth_kind(state: &AppState, status: StatusCode) -> AuthKind {
+pub(crate) fn auth_kind(state: &AppState, status: u16) -> AuthKind {
     let protected = state.api_key.as_deref().is_some_and(|key| !key.is_empty());
     match (protected, status) {
-        (_, StatusCode::UNAUTHORIZED) => AuthKind::Denied,
+        (_, 401) => AuthKind::Denied,
         (true, _) => AuthKind::Key,
         (false, _) => AuthKind::None,
     }
 }
 
-fn header_of(req: &Request, name: &str) -> Option<String> {
-    req.headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
+/// 取一个请求头，去掉首尾空白并按字符截断；空值当作没带。
+pub(crate) fn header_value(headers: &HeaderMap, name: &str, max_chars: usize) -> Option<String> {
+    let value = headers.get(name)?.to_str().ok()?.trim();
+    (!value.is_empty()).then(|| truncate(value, max_chars))
 }
 
-/// 来源地址：优先代理头，其次连接的对端地址（未开启 ConnectInfo 时记 "-"）。
-fn client_of(req: &Request) -> String {
-    if let Some(forwarded) = header_of(req, "x-forwarded-for") {
+/// 来源地址：优先代理头 `x-forwarded-for`（取第一段）、其次 `x-real-ip`。
+///
+/// WebSocket handler 拿不到对端地址，与中间件共用这一套，两边记的来源口径一致。
+pub(crate) fn client_of_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
         if let Some(first) = forwarded.split(',').next() {
-            let trimmed = first.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
+            let first = first.trim();
+            if !first.is_empty() {
+                return Some(first.to_string());
             }
         }
     }
-    if let Some(real) = header_of(req, "x-real-ip") {
-        let trimmed = real.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    req.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(|| "-".to_string(), |info| info.0.to_string())
+    header_value(headers, "x-real-ip", MAX_IP_CHARS)
+}
+
+fn client_of(req: &Request) -> String {
+    client_of_headers(req.headers()).unwrap_or_else(|| {
+        req.extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map_or_else(|| "-".to_string(), |info| info.0.to_string())
+    })
 }
 
 /// 从错误响应里取一句话：优先 JSON 的 error / message，其次整段正文。

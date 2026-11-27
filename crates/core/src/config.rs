@@ -263,7 +263,7 @@ impl NodeConfig {
             .api_key
             .as_deref()
             .is_some_and(|key| !key.trim().is_empty());
-        if !host_is_loopback(host) && !has_key {
+        if !host_is_loopback(&host) && !has_key {
             return Err(crate::error::GuguError::ConfigError(format!(
                 "节点 '{name}' 指向非回环地址 {host}，必须配置 api_key：代理会用这把 Key 操作从节点"
             )));

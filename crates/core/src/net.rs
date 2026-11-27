@@ -4,18 +4,36 @@
 ///
 /// 没有 scheme、或者主机名为空（如 `http://`）时返回 `None`。
 #[must_use]
-pub fn url_host(url: &str) -> Option<&str> {
-    let rest = url.split_once("://")?.1;
+pub fn url_host(url: &str) -> Option<String> {
+    if !url.contains("://") {
+        return None;
+    }
+    authority_host(url)
+}
+
+/// 从 `host[:port]`（也可带 `http(s)://` 前缀）里取小写主机名：去 userinfo、
+/// 端口与 IPv6 方括号。主机名为空或端口不是合法端口号时返回 `None`。
+#[must_use]
+pub fn authority_host(authority: &str) -> Option<String> {
+    let rest = authority
+        .split_once("://")
+        .map_or(authority, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority
+    let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = if let Some(stripped) = host.strip_prefix('[') {
-        stripped.split_once(']').map_or("", |(host, _)| host)
+    if let Ok(ip) = authority.parse::<std::net::IpAddr>() {
+        return Some(ip.to_string());
+    }
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split_once(']')?.0
     } else {
-        host.split(':').next().unwrap_or("")
+        match authority.rsplit_once(':') {
+            Some((host, port)) => port.parse::<u16>().ok().map(|_| host)?,
+            None => authority,
+        }
     };
-    (!host.is_empty()).then_some(host)
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 /// 主机是否为本机回环地址（`localhost`、`127.0.0.0/8`、`::1`）。
@@ -61,10 +79,13 @@ mod tests {
 
     #[test]
     fn url_host_strips_userinfo_port_and_brackets() {
-        assert_eq!(url_host("http://10.0.0.12:9090/api"), Some("10.0.0.12"));
-        assert_eq!(url_host("http://[::1]:9090"), Some("::1"));
         assert_eq!(
-            url_host("https://user:pw@example.com/x"),
+            url_host("http://10.0.0.12:9090/api").as_deref(),
+            Some("10.0.0.12")
+        );
+        assert_eq!(url_host("http://[::1]:9090").as_deref(), Some("::1"));
+        assert_eq!(
+            url_host("https://user:pw@example.com/x").as_deref(),
             Some("example.com")
         );
         assert_eq!(url_host("http:///path"), None);
@@ -81,6 +102,25 @@ mod tests {
         assert!(host_is_loopback("::1"));
         assert!(!host_is_loopback("10.0.0.12"));
         assert!(!host_is_loopback("example.com"));
+    }
+
+    #[test]
+    fn authority_host_accepts_host_header_and_url_forms() {
+        assert_eq!(
+            authority_host("127.0.0.1:9090").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(authority_host("[::1]:9090").as_deref(), Some("::1"));
+        assert_eq!(authority_host("::1").as_deref(), Some("::1"));
+        assert_eq!(
+            authority_host("https://user:pw@Gugu.Example:8443/x").as_deref(),
+            Some("gugu.example")
+        );
+        assert_eq!(authority_host("localhost").as_deref(), Some("localhost"));
+        assert_eq!(authority_host(":9090"), None);
+        assert_eq!(authority_host("[::1"), None);
+        assert_eq!(authority_host("host:port"), None);
+        assert_eq!(authority_host(""), None);
     }
 
     #[test]

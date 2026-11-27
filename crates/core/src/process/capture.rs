@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use super::logwatch::LogWatcher;
 use super::types::{LogEntry, LogStream};
-use crate::logs::{clean, parse_line, LogEncoding, LogFormat};
+use crate::logs::{clean, parse_line, rotated_path, LogEncoding, LogFormat, MAX_BACKUPS};
 
 const MAX_LOG_LINES: usize = 1000;
 
@@ -146,12 +146,11 @@ async fn open_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File
 async fn rotate_log_file(path: Option<&std::path::Path>) -> Option<tokio::fs::File> {
     let p = path?;
 
-    for i in (1..=5).rev() {
-        let old = append_suffix(p, i);
-        let next = append_suffix(p, i + 1);
-        let _ = tokio::fs::rename(&old, &next).await;
+    // 最旧的一份让位后即被覆盖，因此磁盘上稳定保留 `.1`…`.6` 共 MAX_BACKUPS 份。
+    for i in (1..MAX_BACKUPS).rev() {
+        let _ = tokio::fs::rename(rotated_path(p, i), rotated_path(p, i + 1)).await;
     }
-    let _ = tokio::fs::rename(p, append_suffix(p, 1)).await;
+    let _ = tokio::fs::rename(p, rotated_path(p, 1)).await;
 
     tokio::fs::OpenOptions::new()
         .create(true)
@@ -165,20 +164,5 @@ fn stream_type(stream: &LogStream) -> &'static str {
     match stream {
         LogStream::Stdout => "stdout",
         LogStream::Stderr => "stderr",
-    }
-}
-
-fn append_suffix(path: &std::path::Path, n: u32) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let ext = path
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()));
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    match ext {
-        Some(ext) => parent.join(format!("{stem}.{n}{ext}")),
-        None => parent.join(format!("{stem}.{n}")),
     }
 }

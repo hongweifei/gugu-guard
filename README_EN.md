@@ -406,9 +406,10 @@ encoding = "auto"         # auto: UTF-8 first, GBK fallback; pin it with utf-8 /
   escapes stripped; files on disk keep the original bytes, so exported logs match process output
 - **Live search** — `level` / `q` / `stream` on `GET /logs` filter the in-memory ring buffer
   (1000 lines per stream per process)
-- **History search** — `GET /logs/search` reads the last `budget_mb` (default 4, max 32) of each log
-  file, parses it with the same parser and filters it; the response carries hit counts, scanned
-  lines/bytes and a truncation flag. Only the current path is read, not the `.1`…`.5` rotations
+- **History search** — `GET /logs/search` reads backwards from the newest data; `budget_mb` (default 4,
+  max 32) is the total amount read in one search: the current file first, then the `.1`…`.6` rotations
+  while budget remains. It parses lines with the same parser and filters them; the response carries hit
+  counts, scanned lines/bytes and a truncation flag
 - **No invented timestamps** — a history line without its own timestamp is never given the capture
   time; a time filter simply excludes such lines
 

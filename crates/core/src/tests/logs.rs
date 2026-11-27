@@ -413,4 +413,104 @@ mod search_files {
         assert!(report.hits.is_empty());
         assert!(report.files.is_empty(), "不存在的文件不计入扫描范围");
     }
+
+    #[test]
+    fn reads_rotated_backups_oldest_first() {
+        let dir = tempdir();
+        write_log(dir.path(), "out.6.log", "oldest backup line\n");
+        write_log(dir.path(), "out.1.log", "previous backup line\n");
+        let path = write_log(dir.path(), "out.log", "current line\n");
+
+        let report = search_files(
+            &[(LogStream::Stdout, path)],
+            LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
+            &LogQuery::default(),
+            SearchOptions::default(),
+        );
+
+        let lines: Vec<&str> = report.hits.iter().map(|hit| hit.line.as_str()).collect();
+        assert_eq!(
+            lines,
+            vec!["oldest backup line", "previous backup line", "current line"],
+            "没有时间戳时按时间轴排列：旧备份在前、当前文件在后"
+        );
+        assert_eq!(report.files.len(), 3, "当前文件与两份备份都参与扫描");
+        assert!(!report.truncated, "预算足够时不应标记截断");
+    }
+
+    #[test]
+    fn budget_is_shared_across_backups() {
+        let dir = tempdir();
+        write_log(dir.path(), "out.1.log", "backup marker\n");
+        let content = format!("{}\nlast marker\n", "x".repeat(200));
+        let path = write_log(dir.path(), "out.log", &content);
+
+        // 预算只够当前文件尾部，读满后不能再翻备份。
+        let report = search_files(
+            &[(LogStream::Stdout, path)],
+            LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
+            &LogQuery::default(),
+            SearchOptions::new(40, 10),
+        );
+
+        assert_eq!(report.files.len(), 1, "预算用满后不再读更旧的备份");
+        assert_eq!(report.scanned_bytes, 40, "扫描字节数不超过总预算");
+        assert!(report.truncated, "还有未读的备份要标记为截断");
+        assert!(
+            report.hits.iter().all(|hit| hit.line != "backup marker"),
+            "预算未覆盖的文件不应产生命中"
+        );
+    }
+
+    #[test]
+    fn timestamps_order_hits_across_backups() {
+        let dir = tempdir();
+        write_log(
+            dir.path(),
+            "out.1.log",
+            r#"{"time":"2026-11-26T10:00:05Z","level":"info","msg":"newer"}"#,
+        );
+        let path = write_log(
+            dir.path(),
+            "out.log",
+            r#"{"time":"2026-11-26T10:00:01Z","level":"info","msg":"older"}"#,
+        );
+
+        let report = search_files(
+            &[(LogStream::Stdout, path)],
+            LogFormat::Auto,
+            crate::logs::LogEncoding::Auto,
+            &LogQuery::default(),
+            SearchOptions::default(),
+        );
+
+        let messages: Vec<&str> = report
+            .hits
+            .iter()
+            .map(|hit| {
+                hit.parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.message.as_deref())
+                    .unwrap_or("")
+            })
+            .collect();
+        assert_eq!(messages, vec!["older", "newer"], "行内时间齐全时按时间排序");
+    }
+
+    #[test]
+    fn log_file_exists_accepts_backups_only() {
+        let dir = tempdir();
+        let path = dir.path().join("out.log");
+        assert!(
+            !crate::logs::log_file_exists(&path),
+            "还没落盘时判定为不存在"
+        );
+        write_log(dir.path(), "out.3.log", "x\n");
+        assert!(
+            crate::logs::log_file_exists(&path),
+            "只剩备份也算日志已落盘"
+        );
+    }
 }

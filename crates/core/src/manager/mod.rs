@@ -80,7 +80,8 @@ enum Command {
         query: LogQuery,
         reply: ReplyTx<Vec<LogEntry>>,
     },
-    /// 检索落盘的历史日志文件；`budget_bytes` 是每个文件最多倒读的字节数。
+    /// 检索落盘的历史日志文件；`budget_bytes` 是本次检索最多倒读的字节总量，
+    /// 当前文件与 `.1`…`.6` 备份共享。
     SearchLogs {
         name: String,
         query: LogQuery,

@@ -142,7 +142,7 @@ pub(super) struct LogQueryParams {
     pub(super) q: Option<String>,
     /// `stdout` / `stderr`；留空或 `all` 表示不限。
     pub(super) stream: Option<String>,
-    /// 历史检索时每个文件最多倒读的 MB 数。
+    /// 历史检索时最多倒读的 MB 总量，当前文件与各份备份共享。
     #[serde(default = "default_budget_mb")]
     pub(super) budget_mb: u64,
 }
@@ -168,7 +168,7 @@ impl LogQueryParams {
             .into_query(self.limit.clamp(1, MAX_SEARCH_LIMIT)))
     }
 
-    /// 每个文件的最大倒读字节数。
+    /// 本次检索的最大倒读字节总量。
     pub(super) fn budget_bytes(&self) -> u64 {
         self.budget_mb
             .clamp(1, MAX_BUDGET_MB)

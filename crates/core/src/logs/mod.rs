@@ -3,6 +3,7 @@
 //! - [`parse`]：单行解析（JSON / logfmt / 文本启发式），产出级别、正文、字段、行内时间
 //! - [`encoding`]：把程序写出的原始字节解成文本（UTF-8 / GBK）
 //! - [`query`]：检索条件，实时缓冲与历史文件共用一套匹配语义
+//! - [`rotate`]：轮转备份的文件命名，写盘与检索共用
 //! - [`scan`]：历史日志文件按字节预算倒读检索
 //!
 //! 一条日志从产生到被检索只有一条链路：采集侧 [`parse_line`] 一次，
@@ -11,12 +12,14 @@
 mod encoding;
 mod parse;
 mod query;
+pub mod rotate;
 mod scan;
 
 pub use encoding::LogEncoding;
 pub use parse::{clean, parse_line, parse_timestamp, LogFormat, LogLevel, ParsedLine};
 pub use query::LogQuery;
+pub use rotate::{rotated_path, MAX_BACKUPS};
 pub use scan::{
-    search_files, LogSearchReport, SearchHit, SearchOptions, DEFAULT_BUDGET_BYTES, DEFAULT_LIMIT,
-    MAX_BUDGET_BYTES,
+    log_file_exists, search_files, LogSearchReport, SearchHit, SearchOptions, DEFAULT_BUDGET_BYTES,
+    DEFAULT_LIMIT, MAX_BUDGET_BYTES,
 };

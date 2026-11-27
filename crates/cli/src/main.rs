@@ -139,7 +139,7 @@ enum Commands {
         /// 改为检索已落盘的历史日志文件
         #[arg(long)]
         file: bool,
-        /// 历史检索时每个文件最多倒读的 MB 数
+        /// 历史检索时最多倒读的 MB 总量（当前文件与 .1–.6 备份共享）
         #[arg(long, default_value_t = 4)]
         budget_mb: u64,
         /// 历史检索的命中条数上限

@@ -1,7 +1,7 @@
 //! 历史日志文件检索：从文件尾部按字节预算倒读，用同一解析器逐行结构化后过滤。
 //!
-//! 只读盘上的 `stdout_log` / `stderr_log`（含轮转前还在原路径的那一段），
-//! 不读 `.1`..`.5` 备份：预算内取最近的尾部，够用且不会把磁盘读穿。
+//! 一个 `stdout_log` / `stderr_log` 的检索范围包含当前路径与 `.1`…`.6` 轮转备份：
+//! 预算优先给最新的数据，先读当前文件，读满再往前翻，更旧的备份不再读。
 
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom};
@@ -15,8 +15,9 @@ use crate::process::LogStream;
 use super::encoding::LogEncoding;
 use super::parse::{clean, parse_line, LogFormat, ParsedLine};
 use super::query::LogQuery;
+use super::rotate::{rotated_path, MAX_BACKUPS};
 
-/// 默认只读每个文件最后 4 MB。
+/// 默认整次检索最多读 4 MB。
 pub const DEFAULT_BUDGET_BYTES: u64 = 4 * 1024 * 1024;
 /// 单次检索最多读 32 MB，避免把守护进程内存当成日志仓库。
 pub const MAX_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
@@ -24,7 +25,7 @@ pub const MAX_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
 
-/// 检索的物理预算。
+/// 检索的物理预算：`budget_bytes` 是本次检索读取的字节总量，当前文件与各份备份共享。
 #[derive(Debug, Clone, Copy)]
 pub struct SearchOptions {
     pub budget_bytes: u64,
@@ -80,8 +81,9 @@ pub struct LogSearchReport {
     pub files: Vec<String>,
 }
 
-/// 扫描若干日志文件（stdout/stderr 各自一条）：命中都带行内时间时按时间合并，
-/// 否则保留扫描顺序（先 stdout 后 stderr，各自按文件原顺序）。
+/// 扫描若干日志路径（stdout/stderr 各自一条），每条路径连同 `.1`…`.6` 备份一起检索：
+/// 命中都带行内时间时按时间合并，否则保留扫描顺序（先 stdout 后 stderr，
+/// 每条流内旧备份在前、当前文件在后）。
 #[must_use]
 pub fn search_files(
     files: &[(LogStream, PathBuf)],
@@ -92,25 +94,38 @@ pub fn search_files(
 ) -> LogSearchReport {
     let mut report = LogSearchReport::default();
     let mut hits: Vec<SearchHit> = Vec::new();
+    let mut remaining = options.budget_bytes;
 
     for (stream, path) in files {
-        let Some(scan) = scan_file(
-            path,
-            stream,
-            format,
-            encoding,
-            query,
-            options.budget_bytes,
-            options.limit,
-        ) else {
-            continue;
-        };
-        report.scanned_lines += scan.scanned_lines;
-        report.scanned_bytes += scan.scanned_bytes;
-        report.matched += scan.matched;
-        report.truncated |= scan.truncated;
-        report.files.push(path.display().to_string());
-        hits.extend(scan.hits);
+        let mut stream_hits: Vec<SearchHit> = Vec::new();
+        // 预算优先给最新的数据：从当前文件开始，读满再翻上一份备份。
+        // 读的顺序与新到旧相反，命中倒序插入，无时间戳时仍是旧在前、新在后。
+        for candidate in with_backups(path) {
+            if remaining == 0 {
+                // 预算已用满，更旧的备份不再读，结果因此不完整。
+                report.truncated = true;
+                break;
+            }
+            let Some(scan) = scan_file(
+                &candidate,
+                stream,
+                format,
+                encoding,
+                query,
+                remaining,
+                options.limit,
+            ) else {
+                continue;
+            };
+            report.scanned_lines += scan.scanned_lines;
+            report.scanned_bytes += scan.scanned_bytes;
+            report.matched += scan.matched;
+            report.truncated |= scan.truncated;
+            report.files.push(candidate.display().to_string());
+            remaining = remaining.saturating_sub(scan.scanned_bytes);
+            stream_hits.splice(0..0, scan.hits);
+        }
+        hits.extend(stream_hits);
     }
 
     // 所有命中都带行内时间时才按时间排序（stdout/stderr 交错才读得顺）；
@@ -126,6 +141,20 @@ pub fn search_files(
     }
     report.hits = hits;
     report
+}
+
+/// 当前文件或任一备份存在：用来判断这条日志是否已经落过盘。
+#[must_use]
+pub fn log_file_exists(path: &Path) -> bool {
+    with_backups(path).any(|file| file.exists())
+}
+
+/// 一条日志的全部落盘文件，按从新到旧排列：当前文件，然后是 `.1`…`.6`。
+fn with_backups(path: &Path) -> impl Iterator<Item = PathBuf> {
+    let base = path.to_path_buf();
+    let current = std::iter::once(base.clone());
+    let backups = (1..=MAX_BACKUPS).map(move |n| rotated_path(&base, n));
+    current.chain(backups)
 }
 
 struct FileScan {

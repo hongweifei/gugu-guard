@@ -288,7 +288,10 @@ async fn do_search_logs(
             "[{name}] 未配置 stdout_log / stderr_log，没有可检索的历史日志文件"
         )));
     }
-    if !files.iter().any(|(_, path)| path.exists()) {
+    if !files
+        .iter()
+        .any(|(_, path)| crate::logs::log_file_exists(path))
+    {
         return Err(GuguError::ConfigError(format!(
             "[{name}] 日志文件尚未生成（进程还没输出过内容）"
         )));

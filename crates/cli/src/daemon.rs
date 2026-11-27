@@ -86,6 +86,14 @@ port = {port}
 # terminal = false   # 内置终端默认关闭；开启后浏览器里就是一个真实 shell。
                    # 监听非回环地址时必须同时配置 daemon.api_key，否则拒绝启动。
 
+# 版本更新 (可选)。侧栏版本号是入口：检查最新发布、一键下载安装、替换后自动重启。
+[daemon.update]
+# provider = \"github\"      # github | gitee | manifest (自建 JSON 清单，需 manifest_url)
+# auto = \"off\"             # off 关闭 | check 只检查并点亮点标 | install 自动安装并重启
+# check_hours = 24          # 自动检查间隔；首次检查在启动 30 秒后
+# restart = true            # 替换完成后自动拉起；systemd / Windows 服务托管时设为 false
+# keep_backup = true        # 旧二进制保留为 gugu.exe.bak，便于手工回滚
+
 # 多节点 (可选)：在中心节点声明其他机器，WebUI 顶栏即可切换并直接操作它们。
 # 从节点只需正常跑 gugu；指向非回环地址时必须填 api_key，否则中心节点拒绝启动。
 # [[nodes]]
@@ -235,6 +243,8 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     }
     // 文件浏览白名单的条目必须是具体目录，空条目等于放开整份配置目录。
     config.daemon.web.validate()?;
+    // 更新来源写错时在启动阶段就说清楚，而不是等用户点「检查更新」才报错。
+    config.daemon.update.validate()?;
 
     // 节点表同理：代理会拿配置里的 Key 去操作从节点，地址或 Key 配错就明确失败。
     let node_problems = config.node_problems();
@@ -304,6 +314,19 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .iter()
         .map(|root| gugu_core::config::resolve_relative_path(root, &config_dir))
         .collect();
+    // 自更新服务与守护进程共用停止通道：安装完成后由它请求优雅停止，替身进程接管替换。
+    let updates = std::sync::Arc::new(gugu_core::update::UpdateService::new(
+        config.daemon.update.clone(),
+        Some(config_path.to_path_buf()),
+        Some(api_shutdown_tx.clone()),
+    ));
+    if config.daemon.update.auto != gugu_core::config::AutoUpdate::Off {
+        tracing::info!(
+            "自动更新已启用（{}，每 {} 小时检查一次）",
+            config.daemon.update.auto.as_str(),
+            config.daemon.update.check_hours
+        );
+    }
     let state = gugu_server::state::AppState::new(shared.clone())
         .with_api_key(api_key)
         .with_cors_origins(config.daemon.web.cors_origins.clone())
@@ -312,12 +335,14 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         .with_fs_roots(fs_roots)
         .with_nodes(&config.nodes, config.local_node_name())
         .map_err(anyhow::Error::msg)?
-        .with_shutdown(Some(api_shutdown_tx));
+        .with_shutdown(Some(api_shutdown_tx))
+        .with_updates(Some(updates.clone()));
     let server_handle = tokio::spawn(async move {
         if let Err(e) = gugu_server::run_server(addr, state, shutdown_rx).await {
             tracing::error!("Web 服务错误: {e}");
         }
     });
+    updates.spawn_auto();
 
     Ok(CoreHandles {
         shared,

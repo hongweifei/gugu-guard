@@ -395,6 +395,93 @@ pub(crate) fn print_net_table(points: &[TrafficPoint], latest: Option<&TrafficPo
     println!("整机所有物理网卡合计（不含回环），非单进程口径");
 }
 
+/// `GET /api/v1/update` 的响应：只声明 CLI 会用到的字段。
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateSnapshot {
+    pub current: String,
+    pub platform: String,
+    pub phase: String,
+    pub available: bool,
+    pub can_apply: bool,
+    pub message: Option<String>,
+    pub error: Option<String>,
+    pub checked_at: Option<String>,
+    pub latest: Option<UpdateRelease>,
+    pub config: UpdateSettings,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateRelease {
+    pub version: String,
+    pub notes: Option<String>,
+    pub page_url: Option<String>,
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateSettings {
+    pub auto: String,
+    pub check_hours: u64,
+    pub provider: String,
+    pub repo: String,
+}
+
+pub(crate) fn print_update(snapshot: &UpdateSnapshot) {
+    println!("当前版本: {}（{}）", snapshot.current, snapshot.platform);
+    match &snapshot.latest {
+        Some(release) => {
+            println!("最新版本: {}", release.version);
+            if let Some(published) = &release.published_at {
+                println!("发布时间: {published}");
+            }
+            if let Some(page) = &release.page_url {
+                println!("发布页:   {page}");
+            }
+            if let Some(notes) = &release.notes {
+                let notes = notes.trim();
+                if !notes.is_empty() {
+                    println!("更新说明:");
+                    for line in notes.lines().take(20) {
+                        println!("  {line}");
+                    }
+                }
+            }
+        }
+        None => println!("最新版本: 尚未检查"),
+    }
+    println!(
+        "自动更新: {}（每 {} 小时检查，来源 {}/{}）",
+        auto_label(&snapshot.config.auto),
+        snapshot.config.check_hours,
+        snapshot.config.provider,
+        snapshot.config.repo
+    );
+    if let Some(error) = &snapshot.error {
+        println!("检查错误: {error}");
+    }
+    if !snapshot.available {
+        println!("状态:     已是最新版本");
+    } else if snapshot.can_apply {
+        println!("状态:     有新版本可用，运行 gugu update 安装");
+    } else {
+        println!("状态:     有新版本，但当前环境不具备一键更新条件（缺少本平台安装包或停止通道）");
+    }
+    if let Some(checked) = &snapshot.checked_at {
+        println!("上次检查: {checked}");
+    }
+    if let Some(message) = &snapshot.message {
+        println!("阶段:     {}（{message}）", snapshot.phase);
+    }
+}
+
+fn auto_label(auto: &str) -> &str {
+    match auto {
+        "check" => "仅自动检查",
+        "install" => "自动安装",
+        _ => "关闭",
+    }
+}
+
 fn format_uptime(secs: i64) -> String {
     let secs = secs.max(0);
     format!(

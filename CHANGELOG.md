@@ -134,6 +134,20 @@
 - **表单** —— 底栏从滚动区移出，内容区独立滚动、按钮恒定可见；健康检查按类型显示 TCP / HTTP 字段，未启用时通用字段整体禁用并弱化；编辑提交以原配置为底稿，未在表单暴露的 `depends_on`、`max_memory_mb`、`max_log_size_mb` 原值带回
 - **文件浏览** —— 目录模式只列目录，文件模式目录用于导航、文件用于选中；对话框关闭时归还焦点
 
+### 版本更新
+
+- **版本模型** —— 新增 `Version`：解析 `x.y.z[-pre]`，接受 `v` 前缀与 `+build` 后缀，预发布段按 `.` 分段、数字段按数值比较（`1.0.0-rc.10 > 1.0.0-rc.2`），无预发布段高于任何预发布；不引入 semver 依赖
+- **发布源** —— `github` / `gitee` 读各自的 release 列表接口并跳过草稿与预发布，`manifest` 读自建 JSON（`version` / `notes` / `assets`）；`mirror` 只改写安装包地址，清单仍直连
+- **平台资产** —— 由资产名 `gugu-<平台>.zip|tar.gz` 推出 key（如 `windows-x86_64`）后精确匹配，不跨架构回退
+- **下载与校验** —— 流式下载后按 zip / tar.gz 解包出二进制，先跑 `--version` 要求输出与目标版本一致，资产带 `digest`（GitHub）或清单给 `sha256` 时再核对安装包摘要
+- **替身替换** —— 从暂存目录 `<程序目录>/.gugu-update/<版本>/` 启动同一份新二进制的隐藏子命令 `__apply-update`：等旧 PID 退出（上限 60 秒）→ 旧文件改名 `.bak` → 新文件就位 → 按需 `gugu daemon start`，自身输出写 `apply.log`。换入失败且目标已让位时把 `.bak` 放回原位
+- **端口接管** —— 递到新守护进程的句柄为零继承（Windows 走 `CreateProcessW`，`bInheritHandles = FALSE`，独立进程组与隐藏窗口），监听套接字建好后标记为不可继承，端口随旧进程退出释放；地址仍在 `TIME_WAIT` 时按 500 毫秒步长重试至多 30 秒，占用者是另一个活着的进程时直接报错
+- **自动更新** —— `daemon.update.auto` 三档 `off` / `check` / `install`（默认 `off`），启动 30 秒后首次检查、之后按 `check_hours`（默认 24）轮询；`restart`（默认 `true`）与 `keep_backup`（默认 `true`）可配
+- **接口** —— `GET /api/v1/update`、`POST /api/v1/update/check`、`POST /api/v1/update/apply`（`{"version":"…"}` 可空，202；已被占用或不可用时 409）、`POST /api/v1/update/settings`（写回 `auto` 一个键，toml_edit 保留注释与其余条目）；未启用更新服务时四端点返回 501，检查失败返回 502
+- **CLI** —— `gugu update --check` / `gugu update [--version x.y.z]`，安装后轮询 `/api/v1/node` 至多 120 秒，等新版本上线再退出；`gugu check` 增加更新配置体检
+- **WebUI** —— 侧栏版本号成为入口（有新版时点亮圆点），弹窗展示当前与最新版本、发布时间、更新说明、自动策略与安装进度，每 1.5 秒轮询进度
+- **依赖** —— 新增 `zip`（仅 deflate）、`tar`、`flate2`、`sha2`
+
 ### 修复
 
 - `gugu add` 与 `POST /api/v1/processes/:name` 接受 `log_format: null`：CLI 未指定日志格式时发的就是 null，此前会被请求体校验拒绝（返回 400）

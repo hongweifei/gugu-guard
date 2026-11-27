@@ -17,6 +17,7 @@ mod node;
 mod paths;
 mod process;
 mod unknown;
+mod update;
 mod write;
 
 pub use daemon::{DaemonConfig, WebConfig, WebhookFormat};
@@ -30,6 +31,7 @@ pub use process::{
     default_ready_timeout, default_restart_delay, default_restart_reset_secs, default_stop_timeout,
     default_true, port_from_url, HealthCheckConfig, HealthCheckType, LogAlertConfig, ProcessConfig,
 };
+pub use update::{save_auto, AutoUpdate, UpdateConfig, UpdateProvider};
 
 /// Web/API 默认监听地址（配置缺省时的服务端语义）。
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0";

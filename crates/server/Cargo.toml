@@ -19,6 +19,11 @@ tokio-tungstenite = { workspace = true }
 portable-pty = { workspace = true }
 rust-embed = { workspace = true }
 mime_guess = "2"
+socket2 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# SetHandleInformation：监听套接字不交给子进程继承
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

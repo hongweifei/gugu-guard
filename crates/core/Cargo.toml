@@ -15,6 +15,10 @@ thiserror = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 encoding_rs = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # 无：测试用临时目录见 src/tests/support.rs（避免 tempfile 的传递依赖）

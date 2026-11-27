@@ -109,6 +109,36 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
         }
     }
 
+    match config.daemon.update.validate() {
+        Ok(()) => {
+            let update = &config.daemon.update;
+            let source = match update.provider {
+                gugu_core::config::UpdateProvider::Manifest => format!(
+                    "自建清单 {}",
+                    update.manifest_url.as_deref().unwrap_or("(未配置)")
+                ),
+                gugu_core::config::UpdateProvider::Github => {
+                    format!("GitHub {}", update.repo.trim())
+                }
+                gugu_core::config::UpdateProvider::Gitee => {
+                    format!("Gitee {}", update.repo.trim())
+                }
+            };
+            let auto = match update.auto {
+                gugu_core::config::AutoUpdate::Off => "关闭".to_string(),
+                auto => format!("{}（每 {} 小时）", auto.as_str(), update.check_hours),
+            };
+            println!(
+                "  更新: 来源 {source}，自动更新 {auto}{}",
+                if update.enabled { "" } else { "，已禁用" }
+            );
+        }
+        Err(e) => {
+            println!("  ✗ 更新配置: {e}");
+            problems += 1;
+        }
+    }
+
     if problems == 0 {
         if config.unknown_keys.is_empty() {
             println!("结果: 配置有效");

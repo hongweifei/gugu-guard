@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{DEFAULT_BIND_ADDR, DEFAULT_PORT};
+use crate::config::{UpdateConfig, DEFAULT_BIND_ADDR, DEFAULT_PORT};
 
 /// webhook 载荷格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -40,6 +40,9 @@ pub struct DaemonConfig {
     pub cgroup_root: Option<std::path::PathBuf>,
     #[serde(default)]
     pub web: WebConfig,
+    /// 自更新：来源、频率与自动安装策略。
+    #[serde(default)]
+    pub update: UpdateConfig,
 }
 
 impl DaemonConfig {

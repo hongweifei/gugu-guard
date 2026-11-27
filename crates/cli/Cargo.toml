@@ -24,8 +24,12 @@ reqwest = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = { workspace = true }
-# 仅用 IsUserAnAdmin 做权限预检（版本与 core 一致，不引入新的依赖版本）
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+# IsUserAnAdmin 做权限预检；CreateProcessW 用于拉起新守护进程时不继承句柄
+windows-sys = { version = "0.61", features = [
+    "Win32_UI_Shell",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(unix)'.dependencies]
 # 仅用 geteuid 做权限预检（版本与 core 一致）

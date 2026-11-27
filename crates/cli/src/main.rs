@@ -11,6 +11,7 @@ mod client;
 mod daemon;
 mod install;
 mod lifecycle;
+mod self_update;
 mod service;
 #[cfg(windows)]
 mod windows_service;
@@ -200,6 +201,34 @@ enum Commands {
 
     #[command(about = "重新加载配置文件")]
     Reload,
+
+    #[command(about = "检查并安装新版本（更新正在运行的守护进程）")]
+    Update {
+        /// 只检查，不安装
+        #[arg(long)]
+        check: bool,
+        /// 指定要安装的版本，缺省用最新正式版
+        #[arg(long)]
+        version: Option<String>,
+        /// 安装后不等待新版本上线
+        #[arg(long)]
+        no_wait: bool,
+    },
+
+    /// 内部：等旧进程退出后换入新二进制并重启（由更新流程拉起）
+    #[command(name = "__apply-update", hide = true)]
+    ApplyUpdate {
+        #[arg(long)]
+        target: PathBuf,
+        #[arg(long)]
+        pid: u32,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        #[arg(long)]
+        no_restart: bool,
+        #[arg(long)]
+        no_backup: bool,
+    },
 }
 
 /// `gugu add` 的进程参数：字段多，单独成组，`Commands` 保持轻量。
@@ -292,6 +321,13 @@ async fn main() -> Result<()> {
         }
         Commands::Uninstall { mode, dry_run } => install::uninstall_service(mode, *dry_run),
         Commands::Check => check::run(&config_path),
+        Commands::ApplyUpdate {
+            target,
+            pid,
+            cwd,
+            no_restart,
+            no_backup,
+        } => self_update::run(target, *pid, cwd.as_deref(), !*no_restart, !*no_backup),
         Commands::Daemon { action } => match action {
             DaemonAction::Start => lifecycle::start(&config_path).await,
             DaemonAction::Stop => {
@@ -313,6 +349,7 @@ async fn main() -> Result<()> {
         | Commands::Exits { .. }
         | Commands::Net { .. }
         | Commands::Audit { .. }
+        | Commands::Update { .. }
         | Commands::Reload) => {
             let server_url = client::get_server_url(&config_path, cli.server.as_deref())?;
             let api_key = client::get_api_key(&config_path, cli.api_key.as_deref())?;
@@ -353,8 +390,12 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                     tracing::info!("收到 SIGTERM");
                     break;
                 }
-                _ = wait_api_shutdown(&mut api_shutdown_rx) => {
-                    tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+                requested = wait_api_shutdown(&mut api_shutdown_rx) => {
+                    if requested {
+                        tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+                    } else {
+                        tracing::error!("Web 服务已退出，停止通道随之关闭");
+                    }
                     break;
                 }
                 _ = sighup.recv() => {
@@ -383,8 +424,12 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                 r.expect("无法注册 Ctrl+C 处理器");
                 tracing::info!("收到 Ctrl+C 信号");
             }
-            _ = wait_api_shutdown(&mut api_shutdown_rx) => {
-                tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+            requested = wait_api_shutdown(&mut api_shutdown_rx) => {
+                if requested {
+                    tracing::info!("收到 API 停止请求 (POST /api/v1/shutdown)");
+                } else {
+                    tracing::error!("Web 服务已退出，停止通道随之关闭");
+                }
             }
         }
     }
@@ -394,11 +439,12 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
 }
 
 /// 等待 `POST /api/v1/shutdown` 的停止信号；未接线时永不返回。
-async fn wait_api_shutdown(rx: &mut Option<tokio::sync::mpsc::Receiver<()>>) {
+///
+/// 返回 `true` 表示确实收到了停止请求；`false` 表示发送端已经全部释放，
+/// 也就是 Web 服务没能继续运行。两种情况都要退出，但原因不同，日志必须分开。
+async fn wait_api_shutdown(rx: &mut Option<tokio::sync::mpsc::Receiver<()>>) -> bool {
     match rx {
-        Some(rx) => {
-            let _ = rx.recv().await;
-        }
-        None => std::future::pending::<()>().await,
+        Some(rx) => rx.recv().await.is_some(),
+        None => std::future::pending().await,
     }
 }

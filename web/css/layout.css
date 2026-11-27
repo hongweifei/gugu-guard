@@ -213,9 +213,30 @@
 }
 
 .build {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    margin-right: -4px;
+    border-radius: var(--radius-sm);
     font-family: var(--mono);
     font-size: .68rem;
     color: var(--fg-3);
+    transition: color var(--speed) var(--ease), background var(--speed) var(--ease);
+}
+
+.build:hover {
+    color: var(--fg-2);
+    background: var(--bg-hover);
+}
+
+.update-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    animation: pulse 2.4s var(--ease) infinite;
 }
 
 /* ── 主区与顶栏 ───────────────────────────────────────── */

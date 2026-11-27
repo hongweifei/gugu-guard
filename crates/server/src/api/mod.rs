@@ -10,6 +10,7 @@ mod logs;
 mod misc;
 mod processes;
 mod types;
+mod update;
 
 use axum::{
     routing::{get, post},
@@ -86,6 +87,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/reload", post(misc::reload_config))
         .route("/api/v1/shutdown", post(misc::shutdown))
         .route("/api/v1/audit", get(audit::list_audit))
+        .merge(update::routes())
 }
 
 // ── 共享辅助 ──────────────────────────────────────────────

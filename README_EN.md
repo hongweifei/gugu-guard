@@ -23,6 +23,7 @@ A cross-platform process guardian and manager built with Rust. Manage your servi
 - **Built-in WebUI Terminal** — a real PTY in the browser (ConPTY on Windows, openpty on Unix): `cd`, pagers, colors and TUI programs behave normally, and output streams back live. Off by default; when enabled it is gated by API Key auth and loopback binding. Up to 4 sessions per instance, 30-minute idle timeout, and both open and close are written to the operation audit
 - **Multiple Nodes** — one hub manages several machines running gugu: list them under `[[nodes]]` with their URL and Key, then switch in the WebUI top bar to start/stop processes, read logs and edit config directly. Health is probed every 5 seconds; REST proxying and WebSocket relaying happen on the hub, so remote nodes need no extra setup
 - **Host Bandwidth** — combined up/down rate across physical NICs, shown in the toolbar and metrics panel, exposed in `/metrics`
+- **Version Update** — the sidebar version is the entry point: check the latest release, install it in one click, and let the daemon restart itself; auto-update can be off, check-only or install, with sources from GitHub, Gitee or your own manifest
 - **Alerts** — notify on unrecoverable exit / unhealthy verdict / successful auto-restart / memory-limit restart via DingTalk, WeCom, Feishu custom bots or your own webhook
 - **Direct Execution** — Commands launch without a shell by default, so args with spaces or special characters aren't split or injected; set `shell = true` for shell features
 - **File Browser** — Server-side file browsing for quick directory and executable selection
@@ -202,6 +203,9 @@ gugu audit [-l 100] [--failed]    # Operation audit (newest first; --action by c
 gugu add <name> -x "node app.js"  # Add a process
 gugu remove <name>                # Remove a process
 gugu reload                       # Reload config file
+gugu update --check               # Check for a newer release (changes nothing)
+gugu update                       # Download and install it, wait until the new version is up
+gugu update --version 0.2.0       # Install a specific version
 gugu check                        # Validate config (read-only, starts nothing)
 gugu status --json                # JSON output for scripts (also: list)
 gugu install                      # Register auto-start (--mode task|service|user)
@@ -261,6 +265,10 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | GET | `/api/v1/audit?limit=100&action=process.start&ok=false&q=keyword&since_minutes=60` | Operation audit records (write operations, newest first) |
 | GET | `/api/v1/terminal` | Terminal availability, shell, working directory, session limit and idle timeout |
 | WS | `/api/v1/terminal/ws` | Built-in terminal session (JSON frames: `input` / `resize` / `data` / `exit`) |
+| GET | `/api/v1/update` | Current version, last check result, auto-update policy and install progress |
+| POST | `/api/v1/update/check` | Check the latest release now (GitHub / Gitee / manifest) |
+| POST | `/api/v1/update/apply` | Download and install the given or latest version; the daemon restarts after the swap |
+| POST | `/api/v1/update/settings` | Switch the auto-update policy (`off` / `check` / `install`) and write it back to the config file |
 | GET | `/api/v1/nodes` | Node table: local plus remote nodes with online state, latency, version, process counts |
 | GET | `/api/v1/node` | This node's own info (also what the hub probes every 5 seconds) |
 | ANY | `/api/v1/nodes/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
@@ -316,6 +324,16 @@ unknown keys the same way.
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
 | `daemon.web.fs_roots` | string[] | `[]` | File-browse whitelist; empty means unrestricted, otherwise only these roots and their subdirectories |
 | `daemon.web.terminal` | bool | `false` | Enable the built-in WebUI terminal; a non-loopback bind also requires `api_key` |
+| `daemon.update.enabled` | bool | `true` | Allow checking and installing; when off the update endpoints refuse outright |
+| `daemon.update.provider` | string | `github` | Release source: `github` / `gitee` / `manifest` |
+| `daemon.update.repo` | string | `hongweifei/gugu-guard` | Repository as `owner/name` |
+| `daemon.update.manifest_url` | string | — | Manifest URL for `provider = "manifest"` |
+| `daemon.update.mirror` | string | — | Download mirror prefix, either `https://mirror/` or a `{}` template; applies to assets only |
+| `daemon.update.auto` | string | `off` | Auto-update policy: `off` / `check` / `install` |
+| `daemon.update.check_hours` | u64 | `24` | Hours between automatic checks |
+| `daemon.update.restart` | bool | `true` | Start the daemon again after the swap |
+| `daemon.update.keep_backup` | bool | `true` | Keep the replaced binary as `gugu.exe.bak` |
+| `daemon.update.timeout_secs` | u64 | `30` | Timeout for manifest and asset requests (5–600) |
 
 > The daemon writes its own runtime log to `gugu-daemon.<date>.log` in `log_dir`, rotated daily (last 30 kept). All three run modes (foreground, boot task, Windows service) write the file; it also prints to the console only when stdout is a terminal.
 
@@ -562,6 +580,65 @@ effect, and a limit that cannot be created fails the start.
   `memory_max` is enforced by the OS, so the process cannot overuse before being killed. Both may be set
 - **Other platforms** — configuring any limit fails the start with an explicit message; it is never
   silently ignored
+
+### Check, Update and One-click Upgrade
+
+```toml
+[daemon.update]
+provider = "github"              # github / gitee / manifest
+repo = "hongweifei/gugu-guard"
+auto = "check"                   # off / check / install
+check_hours = 24
+# mirror = "https://mirror.example.com/"   # assets only; the manifest is fetched directly
+# restart = true                  # start the daemon again after the swap
+```
+
+The entry sits at the bottom of the sidebar: click the version to open "Version & Update", which shows the
+current and latest versions, the release notes and the auto-update policy; "Install now" runs the download
+and the swap. On the command line the same thing is `gugu update --check` and `gugu update`.
+
+```mermaid
+sequenceDiagram
+    participant UI as WebUI / CLI
+    participant D as Daemon
+    participant S as Release source
+    participant H as Swap helper
+    UI->>D: POST /api/v1/update/apply
+    D->>S: Download the asset for this platform
+    D->>D: Unpack, then verify sha256 / --version
+    D->>H: Start __apply-update from the new binary in the staging dir
+    D-->>UI: 202, then shut down gracefully
+    H->>H: Wait for the old process, rename it to .bak, move the new file in
+    H->>D: gugu daemon start
+    UI->>D: Reconnect and read the new version
+```
+
+- **Why a helper process** — a running executable cannot be overwritten on Windows and cannot be written
+  on Unix (ETXTBSY), so the swap has to come from another process after the old one exits. The helper runs
+  from `<binary dir>/.gugu-update/<version>/`, so replacing the target does not touch itself; its output
+  goes to `apply.log` in the same directory
+- **Verification** — after unpacking, the new binary is run with `--version` and its answer must equal the
+  target version; when the release asset carries a `digest` (GitHub) or the manifest provides `sha256`, the
+  archive digest is checked as well. Files are touched only after both pass
+- **Failure handling** — if the move fails after the target has been set aside, the helper puts `.bak`
+  back and records the reason; with `keep_backup = true` the old binary stays as `gugu.exe.bak`, so a
+  manual rollback is always one rename away
+- **Port handover** — the helper starts the new daemon without inherited handles and the listening socket
+  itself is marked non-inheritable, so the port is released together with the old process. While the
+  address is still in `TIME_WAIT`, binding retries every 500 ms for up to 30 seconds; when the port belongs
+  to another live process the bind fails at once
+- **Service managers** — under systemd or the Windows service wrapper set `restart = false` and let the
+  manager bring the daemon back; a second start from the helper would collide with the PID file and port
+  (the new binary is already in place either way)
+- **Auto-update** — `check` only checks and lights the sidebar badge; `install` runs the whole flow and
+  restarts as needed. The first automatic check happens 30 seconds after startup, then every `check_hours`
+- **Sources** — `github` and `gitee` read their release list APIs and skip drafts and pre-releases;
+  `manifest` reads a JSON file you host:
+  `{"version":"0.2.0","notes":"…","assets":{"windows-x86_64":"https://…/gugu.zip"}}`.
+  Internal deployments can maintain just that file, or put a proxy prefix in front of the official
+  assets with `mirror`
+- **Scope** — an update acts on the binary running on this machine; while a remote node is selected the
+  same entry operates on that node
 
 ## CI & Release
 

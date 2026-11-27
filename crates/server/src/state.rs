@@ -4,6 +4,7 @@ use std::sync::Arc;
 use gugu_core::audit::AuditStore;
 use gugu_core::config::NodeConfig;
 use gugu_core::manager::SharedManager;
+use gugu_core::update::UpdateService;
 use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
@@ -28,6 +29,8 @@ pub struct AppState {
     /// `POST /api/v1/shutdown` 用以请求守护进程优雅停止；
     /// 由 CLI 的 run_core 注入，测试或不接 API 的形态下为 None。
     pub shutdown_tx: Option<mpsc::Sender<()>>,
+    /// 自更新服务；不接时更新接口返回未启用。
+    pub updates: Option<Arc<UpdateService>>,
 }
 
 impl AppState {
@@ -44,6 +47,7 @@ impl AppState {
             terminal_cwd: None,
             fs_roots: Vec::new(),
             shutdown_tx: None,
+            updates: None,
         }
     }
 
@@ -118,6 +122,13 @@ impl AppState {
     #[must_use]
     pub fn with_shutdown(mut self, shutdown_tx: Option<mpsc::Sender<()>>) -> Self {
         self.shutdown_tx = shutdown_tx;
+        self
+    }
+
+    /// 注入自更新服务；不调用时更新接口不可用。
+    #[must_use]
+    pub fn with_updates(mut self, updates: Option<Arc<UpdateService>>) -> Self {
+        self.updates = updates;
         self
     }
 }

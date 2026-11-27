@@ -11,6 +11,7 @@ pub mod notify;
 pub mod process;
 pub mod sockets;
 pub mod units;
+pub mod update;
 
 pub use config::AppConfig;
 pub use error::{GuguError, Result};

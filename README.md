@@ -23,6 +23,7 @@
 - **WebUI 内置终端** — 浏览器里打开一个真实 PTY（Windows ConPTY / Unix openpty）：`cd`、分页器、彩色输出与交互式程序都照常工作，输出实时流式回传。默认关闭，开启后受 API Key 与回环监听两道安全门槛约束；单实例最多 4 个会话，空闲 30 分钟自动关闭，打开与关闭写入操作审计
 - **多节点** — 一台中心节点纳管多台跑着 gugu 的机器：`[[nodes]]` 里写上从节点地址与 Key，WebUI 顶栏切换后直接启停进程、看日志、改配置；节点表每 5 秒探测在线状态与延迟，REST 代理与 WebSocket 中继都由中心节点完成，从节点零改动
 - **整机带宽** — 所有物理网卡合计的上下行速率，顶栏与指标面板展示，`/metrics` 暴露
+- **版本更新** — 侧栏版本号即入口：检查最新发布、一键下载安装、替换后自动重启；自动更新可设为关闭 / 仅检查 / 自动安装，来源支持 GitHub、Gitee 与自建清单
 - **异常通知** — 退出后不再拉起 / 健康判定不健康 / 被自动拉起 / 内存超限 均可推送到钉钉、企微、飞书自定义机器人或自建 webhook
 - **直接执行** — 命令默认不经 shell 直接启动，带空格/特殊字符的参数不会被拆碎或注入；需要 shell 特性时设 `shell = true`
 - **文件浏览器** — 服务端文件浏览，快速选择工作目录和可执行文件
@@ -203,6 +204,9 @@ gugu audit [-l 100] [--failed]    # 操作审计（新的在前；--action 按�
 gugu add <name> -x "node app.js"  # 添加进程
 gugu remove <name>                # 移除进程
 gugu reload                       # 重新加载配置文件
+gugu update --check               # 检查是否有新版本（不改动任何文件）
+gugu update                       # 下载并安装最新版，等新版本上线后退出
+gugu update --version 0.2.0       # 指定要安装的版本
 gugu check                        # 校验配置文件（只读，不启动进程）
 gugu status --json                # 以 JSON 输出，便于脚本消费（list 同）
 gugu install                      # 注册开机自启 (--mode task|service|user)
@@ -265,6 +269,10 @@ gugu add frontend -x "bun run dev" \
 | ANY | `/api/v1/nodes/{node}/...` | 代理到从节点的同名接口（方法、查询串、请求体、下载头都原样转发） |
 | WS | `/api/v1/ws?node=web1` | 跟随所选节点的实时推送（中心节点与从节点建中继） |
 | GET | `/api/v1/stats` | 统计信息 |
+| GET | `/api/v1/update` | 当前版本、最近一次检查结果、自动更新策略与安装进度 |
+| POST | `/api/v1/update/check` | 立即检查最新发布（GitHub / Gitee / 自建清单） |
+| POST | `/api/v1/update/apply` | 下载并安装指定或最新版本；替换完成后守护进程重启 |
+| POST | `/api/v1/update/settings` | 切换自动更新策略（`off` / `check` / `install`）并写回配置文件 |
 | GET | `/api/v1/fs/browse?path=.` | 浏览文件系统（受 `daemon.web.fs_roots` 限制，越界返回 403） |
 | POST | `/api/v1/reload` | 重新加载配置 |
 | POST | `/api/v1/shutdown` | 优雅停止守护进程（先停所有子进程） |
@@ -312,6 +320,16 @@ gugu-guard/
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
 | `daemon.web.fs_roots` | string[] | `[]` | 文件浏览白名单；为空表示不限制，配了只放行这些根目录及其子目录 |
 | `daemon.web.terminal` | bool | `false` | 是否开放 WebUI 内置终端；非回环监听时必须同时配置 `api_key` |
+| `daemon.update.enabled` | bool | `true` | 是否允许检查与安装；关闭后更新接口直接拒绝 |
+| `daemon.update.provider` | string | `github` | 发布信息来源：`github` / `gitee` / `manifest` |
+| `daemon.update.repo` | string | `hongweifei/gugu-guard` | 仓库标识 `owner/name` |
+| `daemon.update.manifest_url` | string | — | `provider = "manifest"` 时的清单地址 |
+| `daemon.update.mirror` | string | — | 下载镜像前缀，`https://mirror/` 或含 `{}` 的模板；只作用于安装包地址 |
+| `daemon.update.auto` | string | `off` | 自动更新策略：`off` / `check` / `install` |
+| `daemon.update.check_hours` | u64 | `24` | 自动检查的间隔小时数 |
+| `daemon.update.restart` | bool | `true` | 替换完成后是否自动拉起守护进程 |
+| `daemon.update.keep_backup` | bool | `true` | 是否保留被替换下来的 `gugu.exe.bak` |
+| `daemon.update.timeout_secs` | u64 | `30` | 清单与安装包请求的超时秒数（5–600） |
 
 > 守护进程自身的运行日志按天写入 `log_dir` 下的 `gugu-daemon.<日期>.log`（保留最近 30 份），
 > 前台、开机自启任务、Windows 服务三种形态都会写文件；仅当 stdout 是终端时才额外打印到控制台。
@@ -533,6 +551,56 @@ Linux 用 cgroup v2，Windows 用 Job Object；两套机制都在启动阶段落
 - **与 `max_memory_mb` 的区别** — `max_memory_mb` 是守护进程的看护逻辑：采样超限后走自动重启；`memory_max` 由操作系统执行，
   进程在被杀之前不可能超用。两者可以同时配
 - **其它平台** — 既不是 Linux 也不是 Windows 时，配置任一硬限会在启动时明确报错，不会静默忽略
+
+### 检查更新与一键升级
+
+```toml
+[daemon.update]
+provider = "github"              # github / gitee / manifest
+repo = "hongweifei/gugu-guard"
+auto = "check"                   # off / check / install
+check_hours = 24
+# mirror = "https://mirror.example.com/"   # 只对安装包地址生效，清单仍直连
+# restart = true                  # 替换完成后自动拉起守护进程
+```
+
+面板入口在侧栏底部：点版本号打开「版本与更新」，可查看当前与最新版本、更新说明、调整自动更新策略，点「立即更新」完成下载与安装。
+命令行等价于 `gugu update --check` 与 `gugu update`。
+
+```mermaid
+sequenceDiagram
+    participant UI as WebUI / CLI
+    participant D as 守护进程
+    participant S as 发布源
+    participant H as 替身进程
+    UI->>D: POST /api/v1/update/apply
+    D->>S: 下载安装包（按平台选资产）
+    D->>D: 解包 + sha256 / --version 双重校验
+    D->>H: 从暂存目录启动新二进制的 __apply-update
+    D-->>UI: 202，随后优雅停止
+    H->>H: 等旧进程退出，改名为 .bak，换入新文件
+    H->>D: gugu daemon start
+    UI->>D: 重新连接后读到新版本
+```
+
+- **为什么需要替身进程** — 运行中的可执行文件在 Windows 上无法覆盖、在 Unix 上无法写入（ETXTBSY），
+  替换只能由另一个进程在旧进程退出后完成。替身跑在 `<程序目录>/.gugu-update/<版本>/` 下，
+  因此替换目标文件不影响它自己；它的输出写进同目录的 `apply.log`
+- **校验** — 解包后先跑 `--version`，输出里的版本必须等于目标版本；发布资产带 `digest`（GitHub）或
+  清单里给了 `sha256` 时，再核对一遍安装包摘要。两步都过才动文件
+- **失败处理** — 换入失败且目标文件已让位时，替身把 `.bak` 放回原位并记日志；`keep_backup = true` 时
+  旧二进制一直保留在 `gugu.exe.bak`，随时可以手工换回
+- **端口接管** — 替身以不继承句柄的方式拉起新的守护进程，监听套接字本身也标记为不可被子进程继承，
+  端口因此随旧进程退出一起释放。地址仍处于 `TIME_WAIT` 时，绑定按 500 毫秒步长重试至多 30 秒；
+  占用者是另一个活着的进程时立即如实报错
+- **服务托管** — 由 systemd 或 Windows 服务托管时，把 `restart` 设为 `false`，交给服务管理器重启；
+  守护进程自己再拉一次会因为 PID 文件与端口已被占用而失败（新版仍已就位）
+- **自动更新** — `check` 只检查并点亮侧栏徽标；`install` 会直接走完整个流程，守护进程按需重启。
+  自动检查在启动 30 秒后开始，之后按 `check_hours` 间隔轮询
+- **来源** — `github` 与 `gitee` 读各自的 release 列表接口，跳过草稿与预发布；`manifest` 读一个自建 JSON：
+  `{"version":"0.2.0","notes":"…","assets":{"windows-x86_64":"https://…/gugu.zip"}}`。
+  内网部署可以只维护这个文件，或用 `mirror` 给官方资产套一层代理前缀
+- **范围** — 更新只作用于本机正在运行的这个二进制；选中从节点时，同一个入口操作的是那台从节点
 
 ## 持续集成与发布
 

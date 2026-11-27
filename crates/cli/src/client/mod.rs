@@ -335,6 +335,45 @@ pub(crate) async fn run_client(
             }
         }
 
+        Commands::Update {
+            check,
+            version,
+            no_wait,
+        } => {
+            let resp = api.post("/api/v1/update/check").send().await?;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(api_error(status, &text));
+            }
+            let snapshot: output::UpdateSnapshot =
+                serde_json::from_str(&text).context("解析 /api/v1/update/check 的响应失败")?;
+            output::print_update(&snapshot);
+            if *check || !snapshot.available {
+                return Ok(());
+            }
+            if !snapshot.can_apply {
+                anyhow::bail!("当前环境无法一键更新，请到发布页手动下载");
+            }
+
+            let target = version.clone().or_else(|| {
+                snapshot
+                    .latest
+                    .as_ref()
+                    .map(|release| release.version.clone())
+            });
+            let resp = api
+                .post("/api/v1/update/apply")
+                .json(&serde_json::json!({ "version": target }))
+                .send()
+                .await?;
+            print_api_response(resp).await?;
+            if *no_wait {
+                return Ok(());
+            }
+            wait_for_new_version(&api, &snapshot.current, target.as_deref()).await?;
+        }
+
         Commands::Reload => {
             let resp = api.post("/api/v1/reload").send().await?;
             print_api_response(resp).await?;
@@ -345,12 +384,47 @@ pub(crate) async fn run_client(
         | Commands::Install { .. }
         | Commands::Uninstall { .. }
         | Commands::Check
+        | Commands::ApplyUpdate { .. }
         | Commands::Daemon { .. } => {
             anyhow::bail!("本地命令不应进入客户端分发")
         }
     }
 
     Ok(())
+}
+
+/// 更新后守护进程会自行重启：轮询到新版本上线，或一直连不上直到超时。
+async fn wait_for_new_version(
+    api: &ApiHelper<'_>,
+    previous: &str,
+    expected: Option<&str>,
+) -> Result<()> {
+    println!("正在等待守护进程重启...");
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let Ok(resp) = api.get("/api/v1/node").send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        let version = body
+            .get("version")
+            .and_then(|version| version.as_str())
+            .unwrap_or_default();
+        let matched = match expected {
+            Some(want) => version == want,
+            None => !version.is_empty() && version != previous,
+        };
+        if matched {
+            println!("更新完成，当前版本 {version}");
+            return Ok(());
+        }
+    }
+    anyhow::bail!(
+        "等待超时：守护进程未在两分钟内以新版本上线，请查看 log_dir 与暂存目录的 apply.log"
+    )
 }
 
 /// 取一个 JSON 接口的响应体；非 2xx 时把服务端的一句话错误带出来

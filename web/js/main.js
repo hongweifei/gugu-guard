@@ -21,6 +21,7 @@ import { initLogs, logsActivate } from './panels/logs.js';
 import { metricsActivate } from './panels/metrics.js';
 import { auditActivate, initAudit } from './panels/audit.js';
 import { initTerminal, terminalActivate, terminalDeactivate } from './panels/terminal.js';
+import { initUpdate, refreshUpdateBadge } from './panels/update.js';
 import { initFsPicker } from './forms/fs.js';
 import { initProcessForm, openProcessForm } from './forms/process.js';
 
@@ -64,6 +65,7 @@ function boot() {
     initLogs();
     initAudit();
     initTerminal();
+    initUpdate({ onRestarted: afterUpdateRestart });
     initProcessForm({ onSaved: afterSave });
 
     onUnauthorized(showLogin);
@@ -88,6 +90,14 @@ async function start() {
     await loadProcesses();
     booted = true;
     connectLive();
+    refreshUpdateBadge();
+}
+
+/// 更新替换后守护进程是新进程：把版本、进程列表与节点表重新读一遍。
+async function afterUpdateRestart() {
+    await loadSelf();
+    await loadProcesses();
+    loadNodes();
 }
 
 async function loadSelf() {

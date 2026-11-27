@@ -37,6 +37,11 @@ rust-embed = "8"
 portable-pty = "0.8"
 windows-service = "0.8"
 encoding_rs = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+sha2 = "0.10"
+socket2 = "0.5"
 
 [workspace.lints.clippy]
 redundant_clone = "warn"

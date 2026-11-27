@@ -28,6 +28,21 @@ port = 9090
 # 监听非回环地址时必须同时配置 daemon.api_key，否则守护进程拒绝启动。
 # terminal = false
 
+# 版本更新 (可选)。侧栏版本号是入口：检查最新发布、一键下载安装、替换后自动重启。
+# 来源 github / gitee 读各自的 release 列表，manifest 读自建 JSON：
+# {"version":"0.2.0","notes":"…","assets":{"windows-x86_64":"https://…/gugu.zip"}}
+[daemon.update]
+# enabled = true              # 关闭后更新接口直接拒绝
+# provider = "github"         # github | gitee | manifest
+# repo = "hongweifei/gugu-guard"
+# manifest_url = "https://intranet.example.com/gugu/latest.json"
+# mirror = "https://mirror.example.com/"  # 安装包地址前缀，可写含 {} 的模板；清单仍直连
+# auto = "off"                # off 关闭 | check 只检查并点亮点标 | install 自动安装并重启
+# check_hours = 24            # 自动检查间隔；首次检查在启动 30 秒后
+# restart = true              # 替换完成后自动拉起守护进程；systemd / Windows 服务托管时设为 false
+# keep_backup = true          # 旧二进制保留为 gugu.exe.bak，便于手工回滚
+# timeout_secs = 30           # 清单与安装包请求超时 (5–600)
+
 # 多节点 (可选)：在中心节点声明其他机器，WebUI 顶栏切换后可直接启停进程、
 # 看日志、改配置，实时状态与日志也随之跟随所选节点。
 # 从节点只需正常跑 gugu，不需要任何额外配置；指向非回环地址时必须填 api_key

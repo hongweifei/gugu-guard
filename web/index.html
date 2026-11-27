@@ -55,7 +55,10 @@
 
         <div class="sidebar-foot">
             <span class="conn" id="conn-state" data-state="connecting"><i></i><span id="conn-text">连接中</span></span>
-            <span class="build" id="build-info"></span>
+            <button type="button" class="build" id="update-entry" title="检查更新">
+                <span id="build-info"></span>
+                <i class="update-dot" id="update-dot" hidden></i>
+            </button>
         </div>
     </aside>
 
@@ -271,6 +274,64 @@
 </aside>
 
 <!-- ── 表单对话框：添加 / 编辑进程 ───────────────────────────── -->
+<!-- ── 版本与更新 ─────────────────────────────────────────── -->
+<div class="modal-layer" id="update-layer" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="upd-title">
+        <header class="modal-head">
+            <h2 id="upd-title">版本与更新</h2>
+            <button type="button" class="btn btn-icon" id="upd-close" aria-label="关闭">
+                <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.3 4.3a1 1 0 011.4 0L10 8.6l4.3-4.3a1 1 0 111.4 1.4L11.4 10l4.3 4.3a1 1 0 01-1.4 1.4L10 11.4l-4.3 4.3a1 1 0 01-1.4-1.4L8.6 10 4.3 5.7a1 1 0 010-1.4z"/></svg>
+            </button>
+        </header>
+
+        <div class="modal-body upd-body">
+            <div class="upd-versions">
+                <div class="upd-ver">
+                    <span class="upd-label">当前版本</span>
+                    <strong class="upd-value" id="upd-current">—</strong>
+                    <span class="upd-sub" id="upd-platform"></span>
+                </div>
+                <div class="upd-arrow" aria-hidden="true">→</div>
+                <div class="upd-ver">
+                    <span class="upd-label">最新版本</span>
+                    <strong class="upd-value" id="upd-latest">—</strong>
+                    <span class="upd-sub" id="upd-published"></span>
+                </div>
+            </div>
+
+            <p class="upd-status" id="upd-status">尚未检查更新</p>
+
+            <div class="upd-progress" id="upd-progress" hidden>
+                <div class="upd-bar"><i id="upd-bar"></i></div>
+                <span class="upd-progress-text" id="upd-progress-text"></span>
+            </div>
+
+            <section>
+                <h3 class="upd-section-title">更新说明</h3>
+                <pre class="upd-notes" id="upd-notes"></pre>
+            </section>
+
+            <section class="upd-auto">
+                <div class="upd-auto-head">
+                    <span class="upd-label">自动更新</span>
+                    <div class="seg" id="upd-auto" role="group" aria-label="自动更新策略">
+                        <button type="button" class="seg-btn" data-auto="off">关闭</button>
+                        <button type="button" class="seg-btn" data-auto="check">仅检查</button>
+                        <button type="button" class="seg-btn" data-auto="install">自动安装</button>
+                    </div>
+                </div>
+                <p class="hint" id="upd-auto-hint"></p>
+            </section>
+        </div>
+
+        <footer class="modal-foot">
+            <span class="modal-foot-note" id="upd-note"></span>
+            <button type="button" class="btn" id="upd-check">检查更新</button>
+            <button type="button" class="btn btn-primary" id="upd-apply">立即更新</button>
+        </footer>
+    </div>
+</div>
+
 <div class="modal-layer" id="form-layer" aria-hidden="true">
     <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="form-title">
         <header class="modal-head">

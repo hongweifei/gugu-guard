@@ -21,6 +21,8 @@ pub struct AppState {
     pub terminal_enabled: bool,
     /// 终端会话的工作目录（通常为配置文件所在目录）。
     pub terminal_cwd: Option<PathBuf>,
+    /// 文件浏览允许的根目录；空表示不限制。
+    pub fs_roots: Vec<PathBuf>,
     /// `POST /api/v1/shutdown` 用以请求守护进程优雅停止；
     /// 由 CLI 的 run_core 注入，测试或不接 API 的形态下为 None。
     pub shutdown_tx: Option<mpsc::Sender<()>>,
@@ -37,6 +39,7 @@ impl AppState {
             cors_origins,
             terminal_enabled: false,
             terminal_cwd: None,
+            fs_roots: Vec::new(),
             shutdown_tx: None,
         }
     }
@@ -60,6 +63,13 @@ impl AppState {
     pub fn with_terminal(mut self, enabled: bool, cwd: Option<PathBuf>) -> Self {
         self.terminal_enabled = enabled;
         self.terminal_cwd = cwd;
+        self
+    }
+
+    /// 注入文件浏览的根目录白名单；不调用时不限制浏览范围。
+    #[must_use]
+    pub fn with_fs_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.fs_roots = roots;
         self
     }
 

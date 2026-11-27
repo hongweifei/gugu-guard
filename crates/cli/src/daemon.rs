@@ -82,6 +82,7 @@ log_dir = \"logs\"
 addr = \"{addr}\"
 port = {port}
 # cors_origins = [\"http://localhost:3000\"]
+# fs_roots = [\"D:/projects\", \"/srv/apps\"]   # 文件浏览白名单；为空表示不限制，配了只放行这些根目录
 # terminal = false   # 内置终端默认关闭；开启后浏览器里就是一个真实 shell。
                    # 监听非回环地址时必须同时配置 daemon.api_key，否则拒绝启动。
 
@@ -232,6 +233,8 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         gugu_server::terminal::check_exposure(addr.ip(), api_key.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
+    // 文件浏览白名单的条目必须是具体目录，空条目等于放开整份配置目录。
+    config.daemon.web.validate()?;
 
     // 节点表同理：代理会拿配置里的 Key 去操作从节点，地址或 Key 配错就明确失败。
     let node_problems = config.node_problems();
@@ -267,12 +270,19 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
     );
     tracing::info!("进程 PID: {}", current_pid());
     config.warn_unknown_keys();
+    config.warn_open_browse();
 
     if api_key.is_some() {
         tracing::info!("API Key 认证已启用");
     }
     if config.daemon.web.terminal {
         tracing::info!("WebUI 内置终端已启用，工作目录: {}", config_dir.display());
+    }
+    if !config.daemon.web.fs_roots.is_empty() {
+        tracing::info!(
+            "文件浏览白名单: {} 个根目录",
+            config.daemon.web.fs_roots.len()
+        );
     }
     if !config.nodes.is_empty() {
         tracing::info!("多节点已启用，纳管 {} 台从节点", config.nodes.len());
@@ -292,7 +302,15 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         audit_dir: Some(log_base),
         terminal: config.daemon.web.terminal,
         // 打开终端默认落在配置文件所在目录，相对路径与配置里的写法一致
-        terminal_cwd: Some(config_dir),
+        terminal_cwd: Some(config_dir.clone()),
+        // 白名单与 log_dir 同一套基准：相对路径相对配置文件所在目录解析
+        fs_roots: config
+            .daemon
+            .web
+            .fs_roots
+            .iter()
+            .map(|root| gugu_core::config::resolve_relative_path(root, &config_dir))
+            .collect(),
         nodes: config.nodes.clone(),
         node_name: config.local_node_name(),
     };

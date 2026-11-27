@@ -82,6 +82,33 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
         println!("  ! 未知配置键 {key}：该项已被忽略");
     }
 
+    match config.daemon.web.validate() {
+        Ok(()) if config.daemon.web.fs_roots.is_empty() => {
+            println!("  文件浏览: 未设白名单");
+        }
+        Ok(()) => {
+            let roots: Vec<String> = config
+                .daemon
+                .web
+                .fs_roots
+                .iter()
+                .map(|root| {
+                    let root = gugu_core::config::resolve_relative_path(root, &config_dir);
+                    if root.is_dir() {
+                        format!("✓ {}", root.display())
+                    } else {
+                        format!("! {}（目录不存在）", root.display())
+                    }
+                })
+                .collect();
+            println!("  文件浏览白名单: {}", roots.join(", "));
+        }
+        Err(e) => {
+            println!("  ✗ 文件浏览白名单: {e}");
+            problems += 1;
+        }
+    }
+
     if problems == 0 {
         if config.unknown_keys.is_empty() {
             println!("结果: 配置有效");

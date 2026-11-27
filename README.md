@@ -265,7 +265,7 @@ gugu add frontend -x "bun run dev" \
 | ANY | `/api/v1/nodes/{node}/...` | 代理到从节点的同名接口（方法、查询串、请求体、下载头都原样转发） |
 | WS | `/api/v1/ws?node=web1` | 跟随所选节点的实时推送（中心节点与从节点建中继） |
 | GET | `/api/v1/stats` | 统计信息 |
-| GET | `/api/v1/fs/browse?path=.` | 浏览文件系统 |
+| GET | `/api/v1/fs/browse?path=.` | 浏览文件系统（受 `daemon.web.fs_roots` 限制，越界返回 403） |
 | POST | `/api/v1/reload` | 重新加载配置 |
 | POST | `/api/v1/shutdown` | 优雅停止守护进程（先停所有子进程） |
 | WS | `/api/v1/ws` | 实时状态推送 |
@@ -308,6 +308,7 @@ gugu-guard/
 | `daemon.web.addr` | string | `0.0.0.0` | 监听地址 |
 | `daemon.web.port` | u16 | `9090` | 监听端口 |
 | `daemon.web.cors_origins` | string[] | `[]` | CORS 允许来源 (空则允许所有) |
+| `daemon.web.fs_roots` | string[] | `[]` | 文件浏览白名单；为空表示不限制，配了只放行这些根目录及其子目录 |
 | `daemon.web.terminal` | bool | `false` | 是否开放 WebUI 内置终端；非回环监听时必须同时配置 `api_key` |
 
 > 守护进程自身的运行日志按天写入 `log_dir` 下的 `gugu-daemon.<日期>.log`（保留最近 30 份），
@@ -426,6 +427,23 @@ gugu audit --action process.start --json
 - **查询** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`：
   `action` 为动作码，`ok=true/false` 只看成功或失败，`q` 匹配对象、路径、来源与原因，
   `since_minutes` 限定时间窗口
+
+### 文件浏览白名单
+
+WebUI 的表单用 `/api/v1/fs/browse` 选工作目录与可执行文件。这条接口默认可以浏览整台机器，
+对外提供服务时应限定范围：
+
+```toml
+[daemon.web]
+fs_roots = ["D:/projects", "/srv/apps"]   # 为空表示不限制
+```
+
+- **校验在真实路径上做** — 请求路径先 `canonicalize`，`..` 与符号链接都被解析，再按路径分量与白名单比较；
+  `/data` 不会把 `/database` 算作子目录
+- **缺省落在第一个根** — 打开浏览弹窗时没有起始目录，服务端直接给 `fs_roots[0]`，避免默认工作目录不在白名单里
+- **越界返回 403** — 错误信息带上被拒绝的路径，一眼能分清是白名单挡住还是目录不存在
+- **未配置的告警** — 监听非回环地址且 `fs_roots` 为空时，启动日志会提示这条能力的暴露面
+- **体检** — `gugu check` 打印每个根目录是否存在；空条目直接算配置错误
 
 ### WebUI 内置终端
 

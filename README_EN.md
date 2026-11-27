@@ -266,7 +266,7 @@ cgroup v2 hard limits on Linux and Job Object limits on Windows (see
 | ANY | `/api/v1/nodes/{node}/...` | Proxy to the same API on a remote node (method, query, body and download headers forwarded) |
 | WS | `/api/v1/ws?node=web1` | Real-time push for the selected node (hub relays to the node) |
 | GET | `/api/v1/stats` | Statistics |
-| GET | `/api/v1/fs/browse?path=.` | Browse filesystem |
+| GET | `/api/v1/fs/browse?path=.` | Browse the filesystem (limited by `daemon.web.fs_roots`; out-of-root paths return 403) |
 | POST | `/api/v1/reload` | Reload config |
 | POST | `/api/v1/shutdown` | Graceful daemon shutdown (stops all children first) |
 | WS | `/api/v1/ws` | Real-time status |
@@ -312,6 +312,7 @@ unknown keys the same way.
 | `daemon.web.addr` | string | `0.0.0.0` | Listen address |
 | `daemon.web.port` | u16 | `9090` | Listen port |
 | `daemon.web.cors_origins` | string[] | `[]` | Allowed CORS origins (empty = allow all) |
+| `daemon.web.fs_roots` | string[] | `[]` | File-browse whitelist; empty means unrestricted, otherwise only these roots and their subdirectories |
 | `daemon.web.terminal` | bool | `false` | Enable the built-in WebUI terminal; a non-loopback bind also requires `api_key` |
 
 > The daemon writes its own runtime log to `gugu-daemon.<date>.log` in `log_dir`, rotated daily (last 30 kept). All three run modes (foreground, boot task, Windows service) write the file; it also prints to the console only when stdout is a terminal.
@@ -438,6 +439,25 @@ gugu audit --action process.start --json
 - **Query** — `GET /api/v1/audit?limit=100&action=process.start&ok=false&q=ghost&since_minutes=60`:
   `action` is the action code, `ok=true/false` keeps successes or failures only, `q` matches target,
   path, source and reason, and `since_minutes` bounds the time window
+
+### File Browse Whitelist
+
+The WebUI form uses `/api/v1/fs/browse` to pick working directories and executables. That endpoint
+can browse the whole machine by default, so narrow it down when the panel is exposed:
+
+```toml
+[daemon.web]
+fs_roots = ["D:/projects", "/srv/apps"]   # empty means unrestricted
+```
+
+- **Checked on the real path** — the requested path is `canonicalize`d (`..` and symlinks resolved)
+  before a component-wise comparison with each root, so `/data` never covers `/database`
+- **Defaults to the first root** — opening the browser without a start directory uses `fs_roots[0]`,
+  which avoids landing on a working directory outside the whitelist
+- **403 outside the roots** — the error names the rejected path, so a whitelist block is easy to tell
+  apart from a missing directory
+- **Warning when unset** — a non-loopback bind without `fs_roots` logs the exposure at startup
+- **Health check** — `gugu check` prints whether each root exists; an empty entry is a config error
 
 ### Built-in WebUI Terminal
 

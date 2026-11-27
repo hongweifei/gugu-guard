@@ -901,3 +901,69 @@ typo = 1
         assert!(!text.contains("unknown_keys"), "内部字段不该写回文件");
     }
 }
+
+// ── 文件浏览白名单 ────────────────────────────────────────
+
+mod fs_roots {
+    use super::*;
+    use crate::tests::support::tempdir;
+
+    fn load(text: &str) -> AppConfig {
+        let dir = tempdir();
+        let path = dir.path().join("gugu.toml");
+        std::fs::write(&path, text).expect("写临时配置");
+        AppConfig::load(&path).expect("配置应能加载")
+    }
+
+    #[test]
+    fn parses_roots_and_defaults_to_empty() {
+        assert!(AppConfig::default().daemon.web.fs_roots.is_empty());
+        let config = load(
+            r#"
+[daemon.web]
+fs_roots = ["/srv/apps", "D:/data"]
+"#,
+        );
+        assert_eq!(
+            config.daemon.web.fs_roots,
+            vec![PathBuf::from("/srv/apps"), PathBuf::from("D:/data")]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_entry() {
+        let config = load(
+            r#"
+[daemon.web]
+fs_roots = ["/srv/apps", ""]
+"#,
+        );
+        let err = config.daemon.web.validate().expect_err("空条目应报错");
+        assert!(
+            err.to_string().contains("fs_roots 第 2 项"),
+            "错误应指明第几项: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_blank_entry() {
+        let config = load(
+            r#"
+[daemon.web]
+fs_roots = ["   "]
+"#,
+        );
+        assert!(config.daemon.web.validate().is_err(), "纯空白同样不算目录");
+    }
+
+    #[test]
+    fn accepts_concrete_entries() {
+        let config = load(
+            r#"
+[daemon.web]
+fs_roots = ["/srv/apps"]
+"#,
+        );
+        assert!(config.daemon.web.validate().is_ok());
+    }
+}

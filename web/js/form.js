@@ -276,7 +276,8 @@ function openFsBrowser(title, confirmText, selectDir, callback) {
     document.getElementById('fs-title').textContent = title;
     document.getElementById('fs-confirm').textContent = confirmText;
     document.getElementById('fs-backdrop').classList.add('open');
-    const startPath = document.getElementById('f-dir').value.trim() || '.';
+    // 起点为空时交给服务端决定：配了 fs_roots 就落在第一个根，否则用工作目录。
+    const startPath = document.getElementById('f-dir').value.trim();
     fsBrowse(startPath);
 }
 

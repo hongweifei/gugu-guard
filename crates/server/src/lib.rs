@@ -35,6 +35,8 @@ pub struct ServerOptions {
     pub terminal: bool,
     /// 终端会话的工作目录；None 时用当前目录。
     pub terminal_cwd: Option<PathBuf>,
+    /// 文件浏览允许的根目录；空表示不限制。
+    pub fs_roots: Vec<PathBuf>,
     /// 由本节点纳管的从节点；空表示只有本机。
     pub nodes: Vec<NodeConfig>,
     /// 本机在节点表里的显示名；None 时用主机名。
@@ -97,7 +99,8 @@ pub async fn run_server(
         .with_audit(Arc::new(audit))
         .with_nodes(nodes)
         .with_shutdown(api_shutdown_tx)
-        .with_terminal(options.terminal, options.terminal_cwd);
+        .with_terminal(options.terminal, options.terminal_cwd)
+        .with_fs_roots(options.fs_roots);
 
     let cors_layer = if state.cors_origins.is_empty() {
         CorsLayer::permissive()

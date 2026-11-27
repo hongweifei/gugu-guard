@@ -60,6 +60,23 @@ impl AppConfig {
         }
     }
 
+    /// 文件浏览没有白名单、监听的又不是回环地址时，把暴露面说清楚。
+    ///
+    /// 与未知键一样必须在日志初始化之后调用，否则这条提示会被丢弃。
+    pub fn warn_open_browse(&self) {
+        let web = &self.daemon.web;
+        if !web.fs_roots.is_empty() {
+            return;
+        }
+        let addr = web.addr.as_deref().unwrap_or(DEFAULT_BIND_ADDR);
+        if host_is_loopback(addr) {
+            return;
+        }
+        tracing::warn!(
+            "文件浏览未设白名单（daemon.web.fs_roots），能访问面板的人可以浏览任意目录；对外提供服务时请限定根目录"
+        );
+    }
+
     /// 将配置保存到文件。
     ///
     /// 若目标文件已存在且可解析，则以原文件为底稿按字段覆盖值，
@@ -266,13 +283,17 @@ impl DaemonConfig {
     }
 }
 
-/// Web 服务配置：监听地址、端口、跨域来源与内置终端开关。
+/// Web 服务配置：监听地址、端口、跨域来源、文件浏览白名单与内置终端开关。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
     pub addr: Option<String>,
     pub port: Option<u16>,
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// 文件浏览接口允许的根目录；为空表示不限制。
+    /// 相对路径以配置文件所在目录为基准，加载后由调用方解析成绝对路径。
+    #[serde(default)]
+    pub fs_roots: Vec<PathBuf>,
     /// 是否开放 WebUI 内置终端。默认关闭；开启后等于把 shell 交给能访问面板的人。
     /// 监听非回环地址时必须配置 `api_key`，否则守护进程拒绝启动。
     #[serde(default)]
@@ -285,8 +306,27 @@ impl Default for WebConfig {
             addr: Some(DEFAULT_BIND_ADDR.into()),
             port: Some(DEFAULT_PORT),
             cors_origins: Vec::new(),
+            fs_roots: Vec::new(),
             terminal: false,
         }
+    }
+}
+
+impl WebConfig {
+    /// 校验文件浏览白名单：每个条目都指向一个具体目录，空条目会把整份配置目录放出去。
+    ///
+    /// # Errors
+    /// 条目为空或只是空白时返回 `GuguError::ConfigError`。
+    pub fn validate(&self) -> crate::error::Result<()> {
+        for (index, root) in self.fs_roots.iter().enumerate() {
+            if root.as_os_str().to_string_lossy().trim().is_empty() {
+                return Err(crate::error::GuguError::ConfigError(format!(
+                    "daemon.web.fs_roots 第 {} 项为空，写具体目录",
+                    index + 1
+                )));
+            }
+        }
+        Ok(())
     }
 }
 

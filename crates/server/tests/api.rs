@@ -81,7 +81,18 @@ fn build_router_with_shutdown(
     api_key: Option<String>,
     shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> axum::Router {
-    let state = AppState::new(shared, api_key, Vec::new()).with_shutdown(shutdown_tx);
+    build_router_with_roots(shared, api_key, shutdown_tx, Vec::new())
+}
+
+fn build_router_with_roots(
+    shared: SharedManager,
+    api_key: Option<String>,
+    shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    fs_roots: Vec<std::path::PathBuf>,
+) -> axum::Router {
+    let state = AppState::new(shared, api_key, Vec::new())
+        .with_shutdown(shutdown_tx)
+        .with_fs_roots(fs_roots);
     let cors_layer = tower_http::cors::CorsLayer::permissive();
 
     let protected = gugu_server::api::routes()
@@ -524,6 +535,76 @@ mod fs_browse {
             resp.status(),
             StatusCode::BAD_REQUEST,
             "不存在的路径应返回 400"
+        );
+    }
+
+    fn app_with_root(root: &std::path::Path) -> axum::Router {
+        let config = AppConfig::default();
+        let shared = gugu_core::manager::start(&config, None);
+        build_router_with_roots(shared, None, None, vec![root.to_path_buf()])
+    }
+
+    /// URI 里只放正斜杠：Windows 的反斜杠不是合法 URI 字符。
+    fn uri_path(path: &std::path::Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
+
+    #[tokio::test]
+    async fn allows_a_directory_inside_the_root() {
+        let root = tempdir();
+        let inside = root.path().join("inside");
+        std::fs::create_dir_all(&inside).expect("创建子目录失败");
+
+        let resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/browse?path={}", uri_path(&inside)),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK, "白名单内的目录应放行");
+    }
+
+    #[tokio::test]
+    async fn rejects_a_directory_outside_the_root() {
+        let root = tempdir();
+        let outside = tempdir();
+
+        let resp = send_get(
+            app_with_root(root.path()),
+            &format!("/api/v1/fs/browse?path={}", uri_path(outside.path())),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "越界目录应返回 403");
+    }
+
+    #[tokio::test]
+    async fn defaults_to_the_first_root() {
+        let root = tempdir();
+
+        let resp = send_get(app_with_root(root.path()), "/api/v1/fs/browse?path=").await;
+
+        assert_eq!(resp.status(), StatusCode::OK, "缺省路径应落在第一个根目录");
+    }
+
+    #[tokio::test]
+    async fn sibling_with_a_shared_prefix_is_not_inside() {
+        let parent = tempdir();
+        let root = parent.path().join("data");
+        let sibling = parent.path().join("data-x");
+        std::fs::create_dir_all(&root).expect("创建根目录失败");
+        std::fs::create_dir_all(&sibling).expect("创建兄弟目录失败");
+
+        let resp = send_get(
+            app_with_root(&root),
+            &format!("/api/v1/fs/browse?path={}", uri_path(&sibling)),
+        )
+        .await;
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "按路径分量比较，data-x 不在 data 之下"
         );
     }
 }

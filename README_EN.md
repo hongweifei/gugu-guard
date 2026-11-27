@@ -282,10 +282,12 @@ gugu-guard/
 │   ├── core/       # Core lib: config, process management, logging, health checks, metrics & exit journal, socket probes
 │   ├── server/     # Web server: REST API, WebSocket, auth, static files
 │   └── cli/        # Command line tool
-├── web/            # WebUI (no build step, embedded into the binary)
+├── web/            # WebUI (no build step, ES modules embedded into the binary)
 │   ├── index.html
-│   ├── style.css
-│   └── js/         # core(state/utils) / render(list) / history(metrics) / logs(viewer) / audit(audit trail) / terminal(PTY panel) / nodes(node switch) / form(modals) / form-health(health & network) / form-fs(file browser) / app(wiring+boot)
+│   ├── css/        # tokens(design tokens) / layout(shell & views) / components(shared controls) / panels(panels & tables)
+│   └── js/         # core(state/API/live channel/formatting) · ui(primitives/overlay stack/dialog/drawer/toast)
+│                   # views(sidebar/topbar/stats/groups/process table) · panels(overview/logs/metrics/audit/terminal)
+│                   # forms(fields/dynamic rows/health/network/alerts/file browser/form body) · main(wiring & boot)
 ├── config.example.toml
 └── Cargo.toml      # Workspace root config
 ```

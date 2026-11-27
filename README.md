@@ -282,10 +282,12 @@ gugu-guard/
 │   ├── core/       # 核心库: 配置、进程管理、日志、健康检查、指标与退出历史、套接字探针
 │   ├── server/     # Web 服务: REST API、WebSocket、认证、静态文件
 │   └── cli/        # 命令行工具
-├── web/            # WebUI (无构建步骤，直接内嵌进二进制)
+├── web/            # WebUI (无构建步骤，ES 模块直接内嵌进二进制)
 │   ├── index.html
-│   ├── style.css
-│   └── js/         # core(状态/工具) / render(列表) / history(指标) / logs(日志) / audit(审计) / terminal(终端) / nodes(节点切换) / form(表单) / form-health(健康检查与网络) / form-fs(文件浏览) / app(接线与启动)
+│   ├── css/        # tokens(设计令牌) / layout(骨架与视图) / components(通用控件) / panels(面板与表格细节)
+│   └── js/         # core(状态/接口/实时通道/格式化) · ui(基件/浮层栈/对话框/抽屉/提示)
+│                   # views(侧栏/顶栏/统计/分组/进程表格) · panels(概览/日志/指标/审计/终端)
+│                   # forms(字段/动态行/健康检查/网络/告警/文件浏览/表单主体) · main(接线与启动)
 ├── config.example.toml
 └── Cargo.toml      # Workspace 根配置
 ```

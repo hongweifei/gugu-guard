@@ -1,0 +1,183 @@
+/* 设计令牌与基础重置：颜色、字号、圆角、动效，以及排版基线。
+   组件与布局只引用这里的变量，不直接写色值。 */
+
+:root {
+    /* 背景层次：sunken（代码块、输入框） < bg（页面） < raised（卡片、抽屉） < hover */
+    --bg-sunken: #080b11;
+    --bg: #0b0f16;
+    --bg-raised: #111722;
+    --bg-hover: #172033;
+    --bg-active: #1d283c;
+
+    --line: #1c2637;
+    --line-strong: #2a3a54;
+
+    --fg: #e6ecf6;
+    --fg-2: #9aa9c0;
+    --fg-3: #61708a;
+
+    --accent: #4c8dff;
+    --accent-hover: #6da2ff;
+    --accent-soft: rgba(76, 141, 255, .14);
+    --accent-line: rgba(76, 141, 255, .35);
+
+    --ok: #37c07a;
+    --ok-soft: rgba(55, 192, 122, .13);
+    --warn: #e0a33e;
+    --warn-soft: rgba(224, 163, 62, .13);
+    --bad: #f0655d;
+    --bad-soft: rgba(240, 101, 93, .13);
+    --info: #49b6e8;
+    --info-soft: rgba(73, 182, 232, .13);
+    --violet: #a78bfa;
+    --violet-soft: rgba(167, 139, 250, .13);
+    --idle: #7c8aa3;
+
+    --radius-sm: 7px;
+    --radius: 10px;
+    --radius-lg: 14px;
+
+    --font: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+    --sidebar-w: 236px;
+    --topbar-h: 68px;
+    --drawer-w: min(760px, 72vw);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
+    --shadow: 0 12px 40px rgba(0, 0, 0, .45);
+    --ease: cubic-bezier(.2, .7, .3, 1);
+    --speed: .16s;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 15px;
+    color-scheme: dark;
+}
+
+body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: .9rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+}
+
+button {
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+code,
+.mono {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+::selection {
+    background: rgba(76, 141, 255, .32);
+}
+
+/* 滚动条：细、暗，hover 才显眼，避免抢视觉 */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #3a4d6b;
+    background-clip: content-box;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+@keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-up {
+    from { opacity: 0; transform: translateY(14px) scale(.99); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .35; }
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+    }
+}

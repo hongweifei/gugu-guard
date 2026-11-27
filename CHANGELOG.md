@@ -123,6 +123,17 @@
 - **指标渲染** —— 原 `metrics.rs` 400 行拆成 `metrics/{mod,render,tests}`：`mod` 只保留快照容器、路由与处理器；`render` 按指标族拆成函数（CPU、健康、内存、连接、重启、状态、时长、聚合、带宽），拼装顺序与输出文本保持不变；渲染测试独立成 `tests`
 - **前端表单** —— 原 `web/js/form.js` 434 行拆成三个脚本：`form.js` 保留模态框、动态参数与环境变量行、命令预览、重名检查、编辑回填与提交；`form-health.js` 放健康检查与网络设置的收集/回填/重置；`form-fs.js` 放文件系统浏览器整体。`index.html` 按依赖顺序引入，共享全局作用域
 
+### WebUI 重构
+
+- **信息架构** —— 左侧导航（节点切换、进程 / 操作审计 / 终端、连接状态与版本）+ 主区进程表格 + 右侧进程抽屉。抽屉用三个标签承载概览、日志与指标，取代原先的日志浮层与指标浮层；审计与终端从面板提升为整页视图；表格列收敛为八列（进程、PID、运行时长、资源、端口与连接、上次退出、健康、操作）
+- **交互** —— 统计条前四项可点选筛选，与搜索词、分组芯片三重过滤取交集；分组芯片内联批量启停；行内「更多」菜单改为挂在 `body` 上的 fixed 定位浮层，不再被表格容器裁剪；按钮统一 loading 态；`/` 聚焦搜索框；Esc 只关闭浮层栈顶并归还焦点
+- **视觉** —— 深色控制台延续既有配色并令牌化，去掉 Google Fonts 改为系统字体栈 + `ui-monospace`，离线部署不再依赖外网；折叠搜索、stats、分组、抽屉、表单与终端的间距与断点（1180 / 1120 / 960 / 860 / 640）
+- **代码组织** —— 前端改为原生 ES 模块，依赖方向单向 core → ui → views / panels / forms → main：`core`（`api` / `state` / `live` / `format`）、`ui`（`dom` / `icons` / `toast` / `overlay` / `dialog` / `drawer`）、`views`（`sidebar` / `toolbar` / `stats` / `groups` / `processes`）、`panels`（`overview` / `logs` / `metrics` / `audit` / `terminal`）、`forms`（`fields` / `dynamic` / `health` / `network` / `alerts` / `fs` / `process`）。模块之间通过 `state` 订阅与 `main` 注入的回调通信，不再有全局函数与内联 `onclick`
+- **样式** —— 单一 `style.css` 拆成 `css/{tokens,layout,components,panels}.css`：令牌与重置、页面骨架、通用控件、面板与表格细节各自成文件，跨文件不重复定义选择器
+- **契约对齐** —— 概览的「最近退出」只展示 `ProcessInfo.recent_exits` 实际携带的三项（时间、退出码、是否自动拉起），存活时长与主动停止只在 `/processes/{name}/exits` 的五列统计里出现；表单不再读取 `ProcessInfo.max_restarts`
+- **表单** —— 底栏从滚动区移出，内容区独立滚动、按钮恒定可见；健康检查按类型显示 TCP / HTTP 字段，未启用时通用字段整体禁用并弱化；编辑提交以原配置为底稿，未在表单暴露的 `depends_on`、`max_memory_mb`、`max_log_size_mb` 原值带回
+- **文件浏览** —— 目录模式只列目录，文件模式目录用于导航、文件用于选中；对话框关闭时归还焦点
+
 ### 修复
 
 - `gugu add` 与 `POST /api/v1/processes/:name` 接受 `log_format: null`：CLI 未指定日志格式时发的就是 null，此前会被请求体校验拒绝（返回 400）

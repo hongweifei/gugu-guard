@@ -1,0 +1,517 @@
+/* 功能面板：进程概览、日志流、指标图表、审计表、终端。 */
+
+/* ── 概览 ─────────────────────────────────────────────── */
+.ov-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.ov-kpis {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.kpi {
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    min-width: 0;
+}
+
+.kpi-label {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--fg-3);
+    font-size: .7rem;
+}
+
+.kpi-value {
+    display: block;
+    font-family: var(--mono);
+    font-size: .85rem;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ov-section {
+    margin-bottom: 16px;
+}
+
+.ov-section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 7px;
+    color: var(--fg-2);
+    font-size: .78rem;
+    font-weight: 600;
+}
+
+.ov-command {
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    color: var(--info);
+    font-family: var(--mono);
+    font-size: .8rem;
+    line-height: 1.5;
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+
+.ov-empty {
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    color: var(--fg-3);
+    font-size: .8rem;
+}
+
+.mini-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .78rem;
+}
+
+.mini-table th {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-3);
+    font-size: .7rem;
+    font-weight: 500;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.mini-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(28, 38, 55, .7);
+    color: var(--fg-2);
+    font-family: var(--mono);
+    white-space: nowrap;
+}
+
+.mini-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.mini-table td.ok { color: var(--ok); }
+.mini-table td.bad { color: var(--bad); }
+.mini-table td.muted { color: var(--fg-3); }
+
+.ov-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 4px;
+}
+
+/* ── 日志 ─────────────────────────────────────────────── */
+.log-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.log-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.log-bar .control {
+    width: auto;
+}
+
+.log-count {
+    margin-left: auto;
+    color: var(--fg-3);
+    font-family: var(--mono);
+    font-size: .7rem;
+}
+
+.log-status {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 7px 14px;
+    background: var(--bg-sunken);
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-2);
+    font-size: .74rem;
+}
+
+.log-status.history {
+    color: var(--warn);
+}
+
+.log-status strong {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.log-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px 12px 10px;
+    font-family: var(--mono);
+    font-size: .78rem;
+    line-height: var(--log-line-h, 22px);
+    contain: strict;
+}
+
+.log-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: var(--log-line-h, 22px);
+    overflow: hidden;
+    white-space: nowrap;
+    border-radius: 3px;
+}
+
+.log-line:hover {
+    background: var(--bg-hover);
+}
+
+.log-line.highlight {
+    background: rgba(224, 163, 62, .12);
+}
+
+.log-ts {
+    flex: 0 0 auto;
+    min-width: 74px;
+    color: var(--fg-3);
+    font-size: .72rem;
+}
+
+.log-tag {
+    flex: 0 0 auto;
+    min-width: 27px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: .64rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.log-tag.out { color: var(--ok); background: var(--ok-soft); }
+.log-tag.err { color: var(--bad); background: var(--bad-soft); }
+
+.log-level {
+    flex: 0 0 auto;
+    min-width: 36px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: .64rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.log-level.trace,
+.log-level.debug { color: var(--fg-3); background: var(--bg-hover); }
+.log-level.info { color: var(--info); background: var(--info-soft); }
+.log-level.warn { color: var(--warn); background: var(--warn-soft); }
+.log-level.error { color: var(--bad); background: var(--bad-soft); }
+.log-level.fatal { color: #1a0706; background: var(--bad); }
+
+.log-msg {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+}
+
+.log-fields {
+    display: flex;
+    gap: 4px;
+    flex: 0 1 auto;
+    overflow: hidden;
+}
+
+.log-field {
+    max-width: 200px;
+    padding: 0 4px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--bg-sunken);
+    color: var(--fg-2);
+    font-size: .7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-field b {
+    color: var(--fg-3);
+    font-weight: 400;
+}
+
+/* ── 指标 ─────────────────────────────────────────────── */
+.metric-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.metric-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+}
+
+.metric-tile-label {
+    color: var(--fg-3);
+    font-size: .7rem;
+}
+
+.metric-tile-value {
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: .85rem;
+}
+
+.metric-block {
+    margin-bottom: 16px;
+}
+
+.metric-block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 7px;
+    font-size: .82rem;
+    font-weight: 600;
+}
+
+.metric-summary {
+    color: var(--fg-3);
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 400;
+}
+
+.chart-wrap svg {
+    display: block;
+    width: 100%;
+    height: 108px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+}
+
+.chart-scale {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 4px 0;
+    color: var(--fg-3);
+    font-family: var(--mono);
+    font-size: .68rem;
+}
+
+.chart-legend {
+    display: flex;
+    gap: 12px;
+    padding: 4px 2px 0;
+}
+
+.chart-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--fg-2);
+    font-size: .72rem;
+}
+
+.chart-legend i {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.chart-empty {
+    padding: 20px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--fg-3);
+    font-size: .8rem;
+    text-align: center;
+}
+
+.metric-note {
+    margin-top: 5px;
+    color: var(--fg-3);
+    font-size: .7rem;
+}
+
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .78rem;
+    font-family: var(--mono);
+}
+
+.history-table th {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-3);
+    font-size: .7rem;
+    font-weight: 500;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.history-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(28, 38, 55, .7);
+    color: var(--fg-2);
+    white-space: nowrap;
+}
+
+.history-table td.ok { color: var(--ok); }
+.history-table td.bad { color: var(--bad); }
+.history-table td.muted { color: var(--fg-3); }
+
+/* ── 审计 ─────────────────────────────────────────────── */
+.atable tbody tr {
+    border-bottom: 1px solid var(--line);
+}
+
+.atable tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.atable tbody tr.fail {
+    background: rgba(240, 101, 93, .06);
+}
+
+.atable td {
+    padding: 8px 12px;
+    color: var(--fg-2);
+    vertical-align: middle;
+}
+
+.at-time,
+.at-duration {
+    color: var(--fg-3);
+    font-family: var(--mono);
+    white-space: nowrap;
+}
+
+.at-action {
+    white-space: nowrap;
+}
+
+.at-action-label {
+    margin-right: 6px;
+    color: var(--fg);
+    font-weight: 550;
+}
+
+.at-action code {
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg-sunken);
+    color: var(--fg-3);
+    font-size: .68rem;
+}
+
+.at-target {
+    color: var(--fg);
+    font-family: var(--mono);
+}
+
+.at-client,
+.at-actor {
+    color: var(--fg-2);
+    font-size: .74rem;
+    white-space: nowrap;
+}
+
+.at-detail {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-3);
+    font-size: .74rem;
+}
+
+/* ── 终端提示 ─────────────────────────────────────────── */
+.term-hint-title {
+    margin-bottom: 8px;
+    color: var(--fg);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.term-hint p {
+    max-width: 680px;
+    margin-bottom: 8px;
+}
+
+.term-hint code {
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg-sunken);
+    color: var(--info);
+    font-size: .8rem;
+}
+
+/* ── 窄屏下表列收缩 ───────────────────────────────────── */
+@media (max-width: 1280px) {
+    .col-pid,
+    .td-pid {
+        display: none;
+    }
+}
+
+@media (max-width: 1120px) {
+    .col-exit,
+    .td-exit {
+        display: none;
+    }
+}
+
+@media (max-width: 860px) {
+    .col-usage,
+    .td-usage,
+    .col-health,
+    .td-health {
+        display: none;
+    }
+
+    .ov-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .atable .at-client,
+    .atable .at-actor,
+    .atable .at-duration,
+    .atable .at-detail {
+        display: none;
+    }
+}

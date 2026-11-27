@@ -136,6 +136,8 @@ impl State {
                 .collect(),
             // 从节点由人工维护，写回时原样保留，不能在增删进程时被抹掉。
             nodes: self.nodes.clone(),
+            // 未知键只在加载时用于告警，写回时不参与序列化。
+            unknown_keys: Vec::new(),
         };
         config.save(path)?;
         tracing::debug!("配置已保存到 {}", path.display());

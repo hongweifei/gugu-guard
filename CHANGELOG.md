@@ -53,6 +53,13 @@
 - **Windows 口径** —— CPU 按整机占比节流（`cpu_max = "10%"` 在 16 逻辑核机器上是整机 0.625%，启动日志打印实际占比），是限速而不是杀进程；内存越界时新的分配失败，进程通常自行报错退出；进程数只统计进程，不统计线程
 - **接口** —— 进程配置新增 `cpu_max` / `memory_max` / `pids_max`，守护进程配置新增 `cgroup_root`；POST/PUT 进程接口接受这三个字段，`gugu add` 增加 `--cpu-max` / `--memory-max` / `--pids-max`，WebUI 表单新增「资源硬限」区块。既不是 Linux 也不是 Windows 的平台配置硬限会在启动时明确失败，不静默忽略
 
+### 未知配置键告警
+
+- **键集合比对** —— 加载时把原始 TOML 与「按结构体序列化出的已知键集合」逐层比对（用 JSON 承载，`None` 字段会保留成 `null`，字段名清单才完整），得到只在文件里出现的键的完整路径，如 `processes.web.memory_maxx`
+- **拼写建议** —— 在同一层内按编辑距离找最接近的字段，距离足够近才给出建议：`memory_maxx（是否想写 memory_max）`，过远的匹配不猜
+- **告警而不阻断** —— 启动日志逐条 `WARN`；`gugu check` 以 `!` 列出并在结论里标注「N 个未知键被忽略」，退出码仍为 0；SIGHUP、`gugu reload` 与 `POST /api/v1/reload` 重载时同样告警
+- **不写回文件** —— `AppConfig.unknown_keys` 标了 `#[serde(skip)]`，`gugu add` 等写回操作不会把它带进配置
+
 ### 操作审计
 
 - **审计中间件** —— 只拦 POST / PUT / DELETE，按方法 + 路径映射成稳定动作码与中文名（`process.start` / `group.restart` / `config.reload` / `daemon.shutdown` 等），目标名从路径取出；未知写接口记为 `http.write`，新增端点不会静默漏记

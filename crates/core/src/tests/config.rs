@@ -356,6 +356,7 @@ mod save_and_load {
             },
             processes,
             nodes: Vec::new(),
+            unknown_keys: Vec::new(),
         };
 
         original.save(&path).unwrap();
@@ -779,5 +780,124 @@ url = "http://127.0.0.1:9092"
         ]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("重复"), "{problems:?}");
+    }
+}
+
+// ── 未知键告警 ─────────────────────────────────────────────
+
+mod unknown_keys {
+    use super::*;
+    use crate::tests::support::tempdir;
+
+    fn load(text: &str) -> AppConfig {
+        let dir = tempdir();
+        let path = dir.path().join("gugu.toml");
+        std::fs::write(&path, text).expect("写临时配置");
+        AppConfig::load(&path).expect("配置应能加载")
+    }
+
+    #[test]
+    fn reports_typos_with_path_and_hint() {
+        let config = load(
+            r#"
+[daemon.web]
+prot = 9091
+
+[processes.svc]
+command = "echo hi"
+memory_maxx = "512M"
+"#,
+        );
+        assert_eq!(config.unknown_keys.len(), 2, "{:?}", config.unknown_keys);
+        assert!(
+            config
+                .unknown_keys
+                .iter()
+                .any(|key| key == "daemon.web.prot（是否想写 port）"),
+            "{:?}",
+            config.unknown_keys
+        );
+        assert!(
+            config
+                .unknown_keys
+                .iter()
+                .any(|key| key == "processes.svc.memory_maxx（是否想写 memory_max）"),
+            "{:?}",
+            config.unknown_keys
+        );
+        // 拼错的键不会被当成已知字段，值也就不会生效
+        assert_eq!(config.daemon.web.port, None);
+    }
+
+    #[test]
+    fn reports_unknown_key_inside_node_array() {
+        let config = load(
+            r#"
+[[nodes]]
+name = "web1"
+url = "http://127.0.0.1:9091"
+urll = "拼错的地址"
+"#,
+        );
+        assert_eq!(
+            config.unknown_keys,
+            vec!["nodes[0].urll（是否想写 url）".to_string()]
+        );
+    }
+
+    #[test]
+    fn known_fields_and_nested_health_check_are_not_reported() {
+        let config = load(
+            r#"
+[daemon]
+node_name = "中心机"
+api_key = "k"
+
+[daemon.web]
+addr = "127.0.0.1"
+port = 19090
+
+[processes.svc]
+command = "echo hi"
+args = ["a"]
+env = { A = "1" }
+max_memory_mb = 128
+cpu_max = "50%"
+memory_max = "512M"
+pids_max = "64"
+log_format = "auto"
+encoding = "utf-8"
+listen_ports = [8080]
+
+[processes.svc.health_check]
+type = "http"
+url = "http://127.0.0.1:8080/health"
+interval_secs = 5
+
+[[nodes]]
+name = "web1"
+url = "http://127.0.0.1:9091"
+api_key = "edge"
+"#,
+        );
+        assert!(
+            config.unknown_keys.is_empty(),
+            "已知键不该被当成未知: {:?}",
+            config.unknown_keys
+        );
+    }
+
+    #[test]
+    fn save_does_not_write_the_bookkeeping_field() {
+        let config = load(
+            r#"
+[processes.svc]
+command = "echo hi"
+typo = 1
+"#,
+        );
+        assert_eq!(config.unknown_keys.len(), 1);
+        let text = toml::to_string_pretty(&config).expect("序列化");
+        assert!(!text.contains("unknown_keys"), "内部字段不该写回文件");
     }
 }

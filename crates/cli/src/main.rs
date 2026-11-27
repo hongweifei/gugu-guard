@@ -366,6 +366,7 @@ async fn run_daemon(config_path: &Path, cli_api_key: Option<String>) -> Result<(
                             continue;
                         }
                     };
+                    reload_config.warn_unknown_keys();
                     match shared.reload_config(&reload_config).await {
                         Ok(()) => tracing::info!("配置已重新加载"),
                         Err(e) => tracing::error!("重载配置失败: {e}"),

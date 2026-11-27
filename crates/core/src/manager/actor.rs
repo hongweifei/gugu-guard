@@ -377,5 +377,6 @@ async fn do_reload_from_file(state: &mut State) -> Result<()> {
         .clone()
         .ok_or_else(|| GuguError::ConfigError("未配置配置文件路径".into()))?;
     let config = AppConfig::load(&path)?;
+    config.warn_unknown_keys();
     do_reload(state, &config).await
 }

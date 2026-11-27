@@ -1,6 +1,6 @@
 //! `gugu check`：只校验配置文件，不启动、不修改任何东西。
 //!
-//! 覆盖：TOML 能否解析 → 每个进程字段是否合法 → 依赖是否存在环，
+//! 覆盖：TOML 能否解析 → 每个进程字段是否合法 → 依赖是否存在环 → 有无被忽略的未知键，
 //! 并打印相对路径的解析基准（绿色部署体检）。
 
 use anyhow::Result;
@@ -77,8 +77,20 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
         problems += 1;
     }
 
+    // 未知键不影响启动（守护进程只会告警），但常是拼写或层级写错，值得在体检里点出来。
+    for key in &config.unknown_keys {
+        println!("  ! 未知配置键 {key}：该项已被忽略");
+    }
+
     if problems == 0 {
-        println!("结果: 配置有效");
+        if config.unknown_keys.is_empty() {
+            println!("结果: 配置有效");
+        } else {
+            println!(
+                "结果: 配置有效（{} 个未知键被忽略）",
+                config.unknown_keys.len()
+            );
+        }
         Ok(())
     } else {
         anyhow::bail!("配置校验失败: {problems} 处问题")

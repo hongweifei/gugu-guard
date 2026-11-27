@@ -266,6 +266,7 @@ pub async fn run_core(config_path: &Path, cli_api_key: Option<String>) -> Result
         gugu_core::config::canonicalize_clean(config_path).display()
     );
     tracing::info!("进程 PID: {}", current_pid());
+    config.warn_unknown_keys();
 
     if api_key.is_some() {
         tracing::info!("API Key 认证已启用");

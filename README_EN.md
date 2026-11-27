@@ -292,6 +292,12 @@ gugu-guard/
 
 ## Configuration Reference
 
+When a config file has a key the schema does not know, the startup log and `gugu check` name its full
+path and suggest the closest field at the same level (for example `memory_maxx (did you mean
+memory_max?)`). Such keys never block startup, but they are ignored, so `gugu check` reports
+"N unknown keys ignored" in its verdict. `gugu reload` and `POST /api/v1/reload` log newly introduced
+unknown keys the same way.
+
 ### Daemon Configuration
 
 | Field | Type | Default | Description |

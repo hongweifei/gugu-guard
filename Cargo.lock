@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "gugu-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "gugu-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "encoding_rs",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "gugu-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",

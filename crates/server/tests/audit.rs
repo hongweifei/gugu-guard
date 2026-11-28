@@ -14,6 +14,9 @@ use gugu_server::state::AppState;
 use serde::Deserialize;
 use tower::ServiceExt;
 
+/// 与 `gugu-cli` 发出的 `user-agent` 同形，版本跟随 workspace，不写死字面量。
+const CLI_AGENT: &str = concat!("gugu-cli/", env!("CARGO_PKG_VERSION"));
+
 struct TempDir {
     path: std::path::PathBuf,
 }
@@ -76,7 +79,7 @@ fn write_request(method: &str, uri: &str) -> Request<Body> {
         .method(method)
         .uri(uri)
         .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 5678))))
-        .header("user-agent", "gugu-cli/0.1.0")
+        .header("user-agent", CLI_AGENT)
         .header("content-type", "application/json")
         .body(Body::from("{}"))
         .expect("构造请求失败")
@@ -127,7 +130,7 @@ async fn records_a_failed_start_with_client_and_detail() {
     assert_eq!(entry.status, 400);
     assert!(!entry.ok);
     assert_eq!(entry.client, "10.0.0.1:5678");
-    assert_eq!(entry.user_agent.as_deref(), Some("gugu-cli/0.1.0"));
+    assert_eq!(entry.user_agent.as_deref(), Some(CLI_AGENT));
     assert!(entry
         .detail
         .as_deref()
